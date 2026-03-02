@@ -15,3 +15,4 @@ charts/
 !README.md
 docs/*.md
 .txt
+*.txt
