@@ -1,0 +1,31 @@
+TRADING JOURNAL - QUICK SETUP
+==============================
+
+✅ COMPLETED:
+- Fixed trade logging error (better error handling)
+- Pushed to GitHub: https://github.com/brusnyak/lingonberry_journal
+- All credentials removed from git history
+- Documentation files excluded from repo
+
+📱 TELEGRAM MINI APP SETUP:
+
+Option 1: GitHub Pages (Recommended)
+1. Go to: https://github.com/brusnyak/lingonberry_journal/settings/pages
+2. Source: main branch, /webapp folder
+3. Save and wait 2 minutes
+4. Update .env: WEBAPP_URL=https://brusnyak.github.io/lingonberry_journal
+5. Restart bot: make bot
+6. Test: /mini command in Telegram
+
+Option 2: ngrok (Quick Test)
+1. make webapp
+2. ngrok http 5000
+3. Copy HTTPS URL to .env as WEBAPP_URL
+4. make bot
+
+🔧 COMMANDS:
+make bot          - Start Telegram bot
+make webapp       - Start web dashboard
+make ctrader-test - Test cTrader connection
+
+🔗 REPO: https://github.com/brusnyak/lingonberry_journal
