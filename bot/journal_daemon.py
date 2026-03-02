@@ -22,8 +22,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 WEBAPP_URL = "https://brusnyak.github.io/lingonberry_journal"
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-AUTHORIZED_USER_IDS = [int(uid.strip()) for uid in os.getenv("AUTHORIZED_USER_IDS", "").split(",") if uid.strip()]
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_JOURAL")  # Note: typo in env var name
+AUTHORIZED_USER_IDS = [int(os.getenv("TELEGRAM_JOURNAL_CHAT", "0"))]  # Use chat ID as authorized user
 
 
 def is_authorized(user_id: int) -> bool:
