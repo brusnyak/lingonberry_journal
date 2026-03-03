@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-cTrader Open API Client
-Handles communication with cTrader REST API
-Documentation: https://openapi.ctrader.com/
+High-level cTrader client.
+
+Uses cTrader Open API Protobuf for market/account data and /apps/token for token refresh.
 """
 import os
 import sys
@@ -10,24 +10,23 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import requests
-from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
+from requests.auth import HTTPBasicAuth
+
+try:
+    from infra.ctrader_protobuf_client import CTRADER_AVAILABLE, CTraderProtobufClient
+except ModuleNotFoundError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from infra.ctrader_protobuf_client import CTRADER_AVAILABLE, CTraderProtobufClient
 
 load_dotenv()
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# cTrader API configuration
-CTRADER_API_URL = "https://openapi.ctrader.com"
-CTRADER_CLIENT_ID = os.getenv("CTRADER_CLIENT_ID")
-CTRADER_CLIENT_SECRET = os.getenv("CTRADER_CLIENT_SECRET")
-CTRADER_ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
-CTRADER_REFRESH_TOKEN = os.getenv("CTRADER_REFRESH_TOKEN")
-CTRADER_ACCOUNT_ID = os.getenv("CTRADER_ACCOUNT_ID")
+CTRADER_OAUTH_URL = "https://openapi.ctrader.com/apps/token"
 
 
 class CTraderClient:
-    """cTrader Open API REST client"""
-    
+    """Facade used by the rest of the project."""
+
     def __init__(
         self,
         client_id: Optional[str] = None,
@@ -35,171 +34,138 @@ class CTraderClient:
         access_token: Optional[str] = None,
         refresh_token: Optional[str] = None,
         account_id: Optional[str] = None,
+        host_type: Optional[str] = None,
     ):
-        self.client_id = client_id or CTRADER_CLIENT_ID
-        self.client_secret = client_secret or CTRADER_CLIENT_SECRET
-        self.access_token = access_token or CTRADER_ACCESS_TOKEN
-        self.refresh_token = refresh_token or CTRADER_REFRESH_TOKEN
-        self.account_id = account_id or CTRADER_ACCOUNT_ID
-        self.api_url = CTRADER_API_URL
+        self.client_id = client_id or os.getenv("CTRADER_CLIENT_ID")
+        self.client_secret = client_secret or os.getenv("CTRADER_CLIENT_SECRET")
+        self.access_token = access_token or os.getenv("CTRADER_ACCESS_TOKEN")
+        self.refresh_token = refresh_token or os.getenv("CTRADER_REFRESH_TOKEN")
+        self.account_id = account_id or os.getenv("CTRADER_ACCOUNT_ID")
+        self.host_type = (host_type or os.getenv("CTRADER_HOST_TYPE", "demo")).lower()
+
         self.connected = False
-        self.session = requests.Session()
-    
+        self._protobuf: Optional[CTraderProtobufClient] = None
+
+    def _build_protobuf_client(self) -> CTraderProtobufClient:
+        return CTraderProtobufClient(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            access_token=self.access_token,
+            account_id=self.account_id,
+            host_type=self.host_type,
+        )
+
     def connect(self) -> bool:
-        """Validate credentials and test connection"""
-        if not all([self.client_id, self.client_secret, self.access_token]):
-            print("❌ Missing cTrader credentials (CLIENT_ID, CLIENT_SECRET, ACCESS_TOKEN)")
+        if not CTRADER_AVAILABLE:
+            # Protobuf SDK is required for account/data operations.
+            self._protobuf = self._build_protobuf_client()
+            self._protobuf._ensure_sdk()
             return False
-        
-        # Test connection by fetching accounts
-        try:
-            accounts = self.get_accounts()
-            if accounts:
-                self.connected = True
-                print(f"✅ Connected to cTrader API - Found {len(accounts)} account(s)")
-                return True
-            else:
-                print("⚠️ Connected but no accounts found")
+        if not all([self.client_id, self.client_secret]):
+            print("❌ Missing cTrader credentials (CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET)")
+            return False
+        if not self.access_token:
+            if not self.refresh_access_token():
+                print("❌ Missing/invalid access token and refresh failed")
                 return False
-        except Exception as e:
-            print(f"❌ Connection failed: {e}")
-            return False
-    
-    def disconnect(self) -> None:
-        """Close session"""
-        self.session.close()
-        self.connected = False
-    
-    def _get_headers(self) -> Dict[str, str]:
-        """Get request headers with auth"""
-        return {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json",
-        }
-    
-    def _request(self, method: str, endpoint: str, **kwargs) -> Dict:
-        """Make API request with error handling"""
-        url = f"{self.api_url}{endpoint}"
-        headers = self._get_headers()
-        
-        try:
-            response = self.session.request(method, url, headers=headers, **kwargs)
-            response.raise_for_status()
-            return response.json() if response.content else {}
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                print("⚠️ Access token expired, attempting refresh...")
-                if self.refresh_access_token():
-                    # Retry request with new token
-                    headers = self._get_headers()
-                    response = self.session.request(method, url, headers=headers, **kwargs)
-                    response.raise_for_status()
-                    return response.json() if response.content else {}
-            raise
-    
-    def refresh_access_token(self) -> bool:
-        """Refresh access token using refresh token"""
-        if not self.refresh_token:
-            print("❌ No refresh token available")
-            return False
-        
-        try:
-            response = requests.post(
-                f"{self.api_url}/oauth/token",
-                auth=HTTPBasicAuth(self.client_id, self.client_secret),
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.refresh_token,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            self.access_token = data["access_token"]
-            if "refresh_token" in data:
-                self.refresh_token = data["refresh_token"]
-            
-            print("✅ Access token refreshed")
-            print(f"⚠️ Update your .env file with new tokens:")
-            print(f"CTRADER_ACCESS_TOKEN={self.access_token}")
-            if "refresh_token" in data:
-                print(f"CTRADER_REFRESH_TOKEN={self.refresh_token}")
-            
+
+        self._protobuf = self._build_protobuf_client()
+        if self._protobuf.connect():
+            self.connected = True
+            self.account_id = str(self._protobuf.account_id) if self._protobuf.account_id else self.account_id
             return True
-        except Exception as e:
-            print(f"❌ Token refresh failed: {e}")
+
+        # One retry after refresh in case token expired.
+        if self.refresh_token and self.refresh_access_token():
+            self._protobuf = self._build_protobuf_client()
+            if self._protobuf.connect():
+                self.connected = True
+                self.account_id = str(self._protobuf.account_id) if self._protobuf.account_id else self.account_id
+                return True
+
+        self.connected = False
+        return False
+
+    def disconnect(self) -> None:
+        if self._protobuf:
+            self._protobuf.disconnect()
+        self.connected = False
+
+    def refresh_access_token(self) -> bool:
+        if not all([self.client_id, self.client_secret, self.refresh_token]):
             return False
-    
+
+        auth = HTTPBasicAuth(self.client_id, self.client_secret)
+        params = {"grant_type": "refresh_token", "refresh_token": self.refresh_token}
+
+        try:
+            # Official docs show query params; many clients also accept form body.
+            response = requests.get(CTRADER_OAUTH_URL, auth=auth, params=params, timeout=15)
+            if response.status_code >= 400:
+                response = requests.post(CTRADER_OAUTH_URL, auth=auth, data=params, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            print(f"❌ Token refresh failed: {exc}")
+            return False
+
+        self.access_token = payload.get("accessToken") or payload.get("access_token")
+        self.refresh_token = payload.get("refreshToken") or payload.get("refresh_token") or self.refresh_token
+        if not self.access_token:
+            print(f"❌ Token refresh response did not include access token: {payload}")
+            return False
+
+        self._update_env_tokens(self.access_token, self.refresh_token)
+        print("✅ Refreshed cTrader access token")
+        return True
+
+    def _update_env_tokens(self, access_token: str, refresh_token: str) -> None:
+        env_path = ".env"
+        if not os.path.exists(env_path):
+            return
+
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        found_access = False
+        found_refresh = False
+        output: List[str] = []
+        for line in lines:
+            if line.startswith("CTRADER_ACCESS_TOKEN="):
+                output.append(f"CTRADER_ACCESS_TOKEN={access_token}\n")
+                found_access = True
+            elif line.startswith("CTRADER_REFRESH_TOKEN="):
+                output.append(f"CTRADER_REFRESH_TOKEN={refresh_token}\n")
+                found_refresh = True
+            else:
+                output.append(line)
+
+        if not found_access:
+            output.append(f"CTRADER_ACCESS_TOKEN={access_token}\n")
+        if not found_refresh:
+            output.append(f"CTRADER_REFRESH_TOKEN={refresh_token}\n")
+
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(output)
+
     def get_accounts(self) -> List[Dict]:
-        """Get all trading accounts"""
-        data = self._request("GET", "/v1/accounts")
-        return data.get("data", [])
-    
+        if not self.connected and not self.connect():
+            return []
+        return self._protobuf.get_accounts() if self._protobuf else []
+
     def get_account_info(self, account_id: Optional[str] = None) -> Optional[Dict]:
-        """Get specific account information"""
-        acc_id = account_id or self.account_id
-        if not acc_id:
-            print("❌ No account ID provided")
-            return None
-        
-        data = self._request("GET", f"/v2/accounts/{acc_id}")
-        return data.get("data")
-    
-    def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict]:
-        """Get open positions for account"""
-        acc_id = account_id or self.account_id
-        if not acc_id:
-            return []
-        
-        data = self._request("GET", f"/v2/accounts/{acc_id}/positions")
-        return data.get("data", [])
-    
-    def get_closed_positions(
-        self,
-        account_id: Optional[str] = None,
-        from_ts: Optional[datetime] = None,
-        to_ts: Optional[datetime] = None,
-        limit: int = 100,
-    ) -> List[Dict]:
-        """Get closed positions (historical deals)"""
-        acc_id = account_id or self.account_id
-        if not acc_id:
-            return []
-        
-        params = {"limit": limit}
-        
-        if from_ts:
-            params["from"] = int(from_ts.timestamp() * 1000)
-        if to_ts:
-            params["to"] = int(to_ts.timestamp() * 1000)
-        
-        data = self._request("GET", f"/v2/accounts/{acc_id}/deals", params=params)
-        return data.get("data", [])
-    
-    def get_historical_trades(
-        self,
-        account_id: Optional[str] = None,
-        from_timestamp: Optional[int] = None,
-        to_timestamp: Optional[int] = None,
-        limit: int = 100,
-    ) -> List[Dict]:
-        """Get historical trades (alias for closed positions)"""
-        acc_id = account_id or self.account_id
-        
-        from_ts = datetime.fromtimestamp(from_timestamp / 1000, tz=timezone.utc) if from_timestamp else None
-        to_ts = datetime.fromtimestamp(to_timestamp / 1000, tz=timezone.utc) if to_timestamp else None
-        
-        return self.get_closed_positions(acc_id, from_ts, to_ts, limit)
-    
+        accounts = self.get_accounts()
+        target_id = int(account_id or self.account_id or 0)
+        for account in accounts:
+            if int(account.get("ctidTraderAccountId", 0)) == target_id:
+                return account
+        return accounts[0] if accounts else None
+
     def get_symbols(self, account_id: Optional[str] = None) -> List[Dict]:
-        """Get available trading symbols"""
-        acc_id = account_id or self.account_id
-        if not acc_id:
+        if not self.connected and not self.connect():
             return []
-        
-        data = self._request("GET", f"/v2/accounts/{acc_id}/symbols")
-        return data.get("data", [])
-    
+        return self._protobuf.get_symbols(account_id=account_id) if self._protobuf else []
+
     def get_trendbars(
         self,
         symbol: str,
@@ -209,75 +175,86 @@ class CTraderClient:
         count: int = 1000,
         account_id: Optional[str] = None,
     ) -> List[Dict]:
-        """
-        Get historical candlestick data (trendbars)
-        
-        Timeframes: M1, M5, M15, M30, H1, H4, D1, W1, MN1
-        """
-        acc_id = account_id or self.account_id
-        if not acc_id:
+        if not self.connected and not self.connect():
             return []
-        
-        params = {
-            "symbolName": symbol,
-            "period": timeframe,
-            "count": count,
-        }
-        
-        if from_ts:
-            params["from"] = int(from_ts.timestamp() * 1000)
-        if to_ts:
-            params["to"] = int(to_ts.timestamp() * 1000)
-        
-        data = self._request("GET", f"/v2/accounts/{acc_id}/trendbars", params=params)
-        return data.get("data", [])
+        return (
+            self._protobuf.get_trendbars(
+                symbol=symbol,
+                timeframe=timeframe,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                count=count,
+                account_id=account_id,
+            )
+            if self._protobuf
+            else []
+        )
+
+    def get_live_quote(self, symbol: str, account_id: Optional[str] = None) -> Optional[Dict]:
+        if not self.connected and not self.connect():
+            return None
+        return self._protobuf.get_live_quote(symbol=symbol, account_id=account_id) if self._protobuf else None
+
+    def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict]:
+        # Trading/positions endpoints can be added here later via additional ProtoOA messages.
+        _ = account_id
+        return []
+
+    def get_closed_positions(
+        self,
+        account_id: Optional[str] = None,
+        from_ts: Optional[datetime] = None,
+        to_ts: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        # Historical deal import is not wired yet in this adapter.
+        _ = (account_id, from_ts, to_ts, limit)
+        return []
+
+    def get_historical_trades(
+        self,
+        account_id: Optional[str] = None,
+        from_timestamp: Optional[int] = None,
+        to_timestamp: Optional[int] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        from_ts = datetime.fromtimestamp(from_timestamp / 1000, tz=timezone.utc) if from_timestamp else None
+        to_ts = datetime.fromtimestamp(to_timestamp / 1000, tz=timezone.utc) if to_timestamp else None
+        return self.get_closed_positions(account_id=account_id, from_ts=from_ts, to_ts=to_ts, limit=limit)
 
 
 def create_client() -> CTraderClient:
-    """Create and connect cTrader client"""
     client = CTraderClient()
     client.connect()
     return client
 
 
-def test_connection():
-    """Test cTrader API connection"""
-    print("🔌 Testing cTrader API connection...\n")
-    
+def test_connection() -> bool:
+    print("🔌 Testing cTrader Open API connection...\n")
     client = CTraderClient()
-    
     if not client.connect():
-        print("\n❌ Connection test failed")
+        print("❌ Connection failed")
         return False
-    
-    print("\n📊 Fetching account info...")
-    accounts = client.get_accounts()
-    for acc in accounts:
-        print(f"  Account: {acc.get('login')} - {acc.get('brokerName')}")
-        print(f"  Balance: {acc.get('balance')} {acc.get('currency')}")
-        print(f"  Account ID: {acc.get('ctidTraderAccountId')}")
-    
-    if client.account_id:
-        print(f"\n📈 Fetching open positions for account {client.account_id}...")
-        positions = client.get_open_positions()
-        print(f"  Found {len(positions)} open position(s)")
-        
-        print(f"\n📜 Fetching recent closed trades...")
-        trades = client.get_closed_positions(limit=10)
-        print(f"  Found {len(trades)} recent trade(s)")
-        
-        if trades:
-            print("\n  Latest trade:")
-            trade = trades[0]
-            print(f"    Symbol: {trade.get('symbolName')}")
-            print(f"    Volume: {trade.get('volume')}")
-            print(f"    Entry: {trade.get('entryPrice')}")
-            print(f"    Close: {trade.get('closePrice')}")
-            print(f"    P&L: {trade.get('grossProfit')}")
-    
-    client.disconnect()
-    print("\n✅ Connection test completed")
-    return True
+
+    try:
+        accounts = client.get_accounts()
+        print(f"✅ Connected. Accounts available: {len(accounts)}")
+        if accounts:
+            first = accounts[0]
+            print(f"   Account ID: {first.get('ctidTraderAccountId')}")
+            print(f"   Broker: {first.get('brokerName')}")
+
+        symbols = client.get_symbols()
+        print(f"✅ Symbols loaded: {len(symbols)}")
+
+        quote = client.get_live_quote("EURUSD")
+        if quote:
+            print(f"✅ EURUSD live quote bid/ask: {quote.get('bid')} / {quote.get('ask')}")
+        else:
+            print("⚠️ Live quote not received in time window")
+        return True
+    finally:
+        client.disconnect()
 
 
 if __name__ == "__main__":

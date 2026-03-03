@@ -215,6 +215,11 @@ def _get_cache_path(cache_key: str) -> Path:
     return CACHE_DIR / f"{cache_key}.parquet"
 
 
+def _get_cache_csv_path(cache_key: str) -> Path:
+    """Get CSV fallback cache path when parquet engine is unavailable."""
+    return CACHE_DIR / f"{cache_key}.csv"
+
+
 def _is_cache_valid(cache_path: Path, ttl_seconds: int) -> bool:
     """Check if cache is still valid"""
     if not cache_path.exists():
@@ -225,6 +230,42 @@ def _is_cache_valid(cache_path: Path, ttl_seconds: int) -> bool:
     
     cache_age = datetime.now().timestamp() - cache_path.stat().st_mtime
     return cache_age < ttl_seconds
+
+
+def _read_cached_frame(cache_key: str, ttl_seconds: int) -> Optional[pd.DataFrame]:
+    parquet_path = _get_cache_path(cache_key)
+    csv_path = _get_cache_csv_path(cache_key)
+
+    if _is_cache_valid(parquet_path, ttl_seconds):
+        try:
+            return pd.read_parquet(parquet_path)
+        except Exception as e:
+            print(f"Cache parquet read error: {e}")
+
+    if _is_cache_valid(csv_path, ttl_seconds):
+        try:
+            df = pd.read_csv(csv_path)
+            if "ts" in df.columns:
+                df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+            return df
+        except Exception as e:
+            print(f"Cache CSV read error: {e}")
+
+    return None
+
+
+def _write_cached_frame(cache_key: str, df: pd.DataFrame) -> None:
+    parquet_path = _get_cache_path(cache_key)
+    csv_path = _get_cache_csv_path(cache_key)
+    try:
+        df.to_parquet(parquet_path, index=False)
+        return
+    except Exception:
+        pass
+    try:
+        df.to_csv(csv_path, index=False)
+    except Exception as e:
+        print(f"Cache write error: {e}")
 
 
 def load_ohlcv_with_cache(
@@ -250,24 +291,16 @@ def load_ohlcv_with_cache(
         DataFrame with columns: ts, open, high, low, close, volume
     """
     cache_key = _get_cache_key(symbol, asset_type, timeframe, start, end)
-    cache_path = _get_cache_path(cache_key)
-    
-    # Check cache
-    if _is_cache_valid(cache_path, ttl_seconds):
-        try:
-            return pd.read_parquet(cache_path)
-        except Exception as e:
-            print(f"Cache read error: {e}")
+    cached = _read_cached_frame(cache_key, ttl_seconds)
+    if cached is not None:
+        return cached
     
     # Fetch fresh data
     df = _fetch_ohlcv(symbol, asset_type, timeframe, start, end)
     
     # Save to cache
     if not df.empty and ttl_seconds > 0:
-        try:
-            df.to_parquet(cache_path, index=False)
-        except Exception as e:
-            print(f"Cache write error: {e}")
+        _write_cached_frame(cache_key, df)
     
     return df
 
@@ -280,8 +313,14 @@ def _fetch_ohlcv(
     end: datetime,
 ) -> pd.DataFrame:
     """Fetch OHLCV data from data source with fallback chain."""
-    # Priority: local csv cache -> yfinance
-    # Note: cTrader REST API disabled (uses WebSocket protocol)
+    # Priority:
+    # 1) cTrader (forex only, when credentials + SDK are available)
+    # 2) local csv
+    # 3) yfinance fallback
+    if asset_type.lower() == "forex":
+        ctr = _fetch_ohlcv_ctrader(symbol=symbol, timeframe=timeframe, start=start, end=end)
+        if not ctr.empty:
+            return ctr
     local = _fetch_ohlcv_local_csv(symbol=symbol, timeframe=timeframe, start=start, end=end)
     if not local.empty:
         return local

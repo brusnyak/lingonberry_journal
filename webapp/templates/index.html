@@ -37,12 +37,13 @@
       const payload = {{ payload_json|safe }};
       const root = document.getElementById("dashboardRoot");
 
-      function pct(v) { return `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`; }
+      function pct(v) { return `${v >= 0 ? "+" : ""}${Number(v || 0).toFixed(2)}%`; }
+      function num(v, digits = 2) { return Number(v || 0).toFixed(digits); }
       function usd(v) {
-        const val = Number(v);
+        const val = Number(v || 0);
         return `${val >= 0 ? "+" : "-"}$${Math.abs(val).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
       }
-
+      function hours(v) { return `${num(v, 2)}h`; }
       function kpiCard(label, value, subtext = "", css = "") {
         return `
           <div class="kpi ${css}">
@@ -53,134 +54,161 @@
         `;
       }
 
-      const s = payload.stats;
-      const ana = payload.analytics;
+      const s = payload.stats || {};
+      const ana = payload.analytics || {};
+      const dir = ana.by_direction || { long: {}, short: {} };
+      const wl = ana.wins_losses || { winning: {}, losing: {} };
+      const rr = ana.risk_reward || { by_direction: { long: {}, short: {} } };
+      const time = ana.time_highlights || {};
 
       root.innerHTML = `
         <section class="panel glass">
-            <div class="panel-title">📉 Core Performance Metrics</div>
-            <div class="kpi-grid">
-                ${kpiCard("Net Profit", usd(s.balance - s.initial_balance), pct(s.growth_pct), s.growth_pct >= 0 ? "pos" : "neg")}
-                ${kpiCard("Win Rate", `${s.win_rate.toFixed(1)}%`, `${s.wins}W - ${s.losses}L`)}
-                ${kpiCard("Profit Factor", s.profit_factor.toFixed(2), "Gross Profit / Gross Loss", s.profit_factor >= 1.5 ? "pos" : "")}
-                ${kpiCard("Sharpe Ratio", s.sharpe_ratio.toFixed(2), "Risk-Adjusted Return")}
-                ${kpiCard("Max Drawdown", `${s.max_drawdown_pct.toFixed(2)}%`, "From Peak Equity", "neg")}
-                ${kpiCard("Avg RR", `1:${s.avg_rr.toFixed(2)}`, "Per Trade")}
-            </div>
+          <div class="panel-title">📉 Core Performance Metrics</div>
+          <div class="kpi-grid">
+            ${kpiCard("Net Profit", usd((s.balance || 0) - (s.initial_balance || 0)), pct(s.growth_pct), (s.growth_pct || 0) >= 0 ? "pos" : "neg")}
+            ${kpiCard("Win Rate", `${num(s.win_rate, 1)}%`, `${s.wins || 0}W - ${s.losses || 0}L`)}
+            ${kpiCard("Profit Factor", num(s.profit_factor), "Gross Profit / Gross Loss", (s.profit_factor || 0) >= 1.5 ? "pos" : "")}
+            ${kpiCard("Sharpe Ratio", num(s.sharpe_ratio), "Risk-Adjusted Return")}
+            ${kpiCard("Max Drawdown", `${num(s.max_drawdown_pct)}%`, "From Peak Equity", "neg")}
+            ${kpiCard("Avg RR", `1:${num(s.avg_rr)}`, "Per Trade")}
+          </div>
         </section>
 
         <section class="split-7030">
-            <div class="panel glass">
-                <div class="panel-title">📈 Balance & Equity Analytics</div>
-                <div style="height: 350px;">
-                    <canvas id="equityChart"></canvas>
-                </div>
+          <div class="panel glass">
+            <div class="panel-title">📈 Balance & Equity Analytics</div>
+            <div style="height: 350px;"><canvas id="equityChart"></canvas></div>
+          </div>
+          <div class="panel glass">
+            <div class="panel-title">🧬 Strategy DNA</div>
+            <div class="dna-container">
+              <canvas id="dnaChart"></canvas>
+              <div class="dna-info">
+                <div class="dna-score">${num(ana.dna_score, 1)}</div>
+                <div class="dna-tier">${ana.tier || "N/A"}</div>
+              </div>
             </div>
-            <div class="panel glass">
-                <div class="panel-title">🧬 Strategy DNA</div>
-                <div class="dna-container">
-                    <canvas id="dnaChart"></canvas>
-                    <div class="dna-info">
-                        <div class="dna-score">${ana.dna_score.toFixed(1)}</div>
-                        <div class="dna-tier">${ana.tier}</div>
-                    </div>
-                </div>
-                <p class="muted" style="font-size: 0.85rem; margin-top: 20px; text-align: center;">
-                    ${ana.insights}
-                </p>
-            </div>
+            <p class="muted" style="font-size: 0.85rem; margin-top: 20px; text-align: center;">${ana.insights || "Not enough trades for insights yet."}</p>
+          </div>
         </section>
 
         <section class="two-col">
-            <div class="panel glass">
-                <div class="panel-title">🔀 Trade Direction Analysis</div>
-                <div class="direction-grid">
-                    <div class="dir-box long">
-                        <div class="dir-header">🟢 Long <span class="muted">${ana.by_direction.long.count} trades</span></div>
-                        <div class="dir-row"><span>Win Rate</span> <b>20.00%</b></div>
-                        <div class="dir-row"><span>P/L</span> <b class="neg-txt">-$535.61</b></div>
-                        <div class="dir-row"><span>Average</span> <b class="neg-txt">-$107.12</b></div>
-                    </div>
-                    <div class="dir-box short">
-                        <div class="dir-header">🔴 Short <span class="muted">${ana.by_direction.short.count} trades</span></div>
-                        <div class="dir-row"><span>Win Rate</span> <b>40.00%</b></div>
-                        <div class="dir-row"><span>P/L</span> <b class="pos-txt">+$2,176.95</b></div>
-                        <div class="dir-row"><span>Average</span> <b class="pos-txt">+$435.39</b></div>
-                    </div>
-                </div>
+          <div class="panel glass">
+            <div class="panel-title">🔀 Trade Direction Analysis</div>
+            <div class="direction-grid">
+              <div class="dir-box long">
+                <div class="dir-header">🟢 Long <span class="muted">${dir.long.count || 0} trades</span></div>
+                <div class="dir-row"><span>Win Rate</span> <b>${num(dir.long.win_rate, 2)}%</b></div>
+                <div class="dir-row"><span>P/L</span> <b class="${(dir.long.total_pnl || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(dir.long.total_pnl)}</b></div>
+                <div class="dir-row"><span>Average</span> <b class="${(dir.long.avg_pnl || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(dir.long.avg_pnl)}</b></div>
+              </div>
+              <div class="dir-box short">
+                <div class="dir-header">🔴 Short <span class="muted">${dir.short.count || 0} trades</span></div>
+                <div class="dir-row"><span>Win Rate</span> <b>${num(dir.short.win_rate, 2)}%</b></div>
+                <div class="dir-row"><span>P/L</span> <b class="${(dir.short.total_pnl || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(dir.short.total_pnl)}</b></div>
+                <div class="dir-row"><span>Average</span> <b class="${(dir.short.avg_pnl || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(dir.short.avg_pnl)}</b></div>
+              </div>
             </div>
-            <div class="panel glass">
-                <div class="panel-title">🎲 Monte Carlo Simulation</div>
-                <div style="height: 250px;">
-                    <canvas id="monteCarloChart"></canvas>
-                </div>
-                <div class="muted" style="font-size: 0.75rem; margin-top: 10px;">
-                    Projected future profit distribution based on ${s.total_trades} trades.
-                    Probability of positive outcome: <b>${payload.monte_carlo.stats.prob_positive.toFixed(1)}%</b>
-                </div>
+          </div>
+          <div class="panel glass">
+            <div class="panel-title">🎲 Monte Carlo Simulation</div>
+            <div style="height: 250px;"><canvas id="monteCarloChart"></canvas></div>
+            <div class="muted" style="font-size: 0.75rem; margin-top: 10px;">
+              Projected future profit distribution based on ${s.total_trades || 0} trades.
+              Probability of positive outcome: <b>${num(payload.monte_carlo?.stats?.prob_positive, 1)}%</b>
             </div>
+          </div>
         </section>
 
         <section class="two-col">
-            <div class="panel glass">
-                <div class="panel-title">📅 Profit by Day</div>
-                <canvas id="weekdayChart" height="150"></canvas>
+          <div class="panel glass">
+            <div class="panel-title">🏆 Wins vs Losses</div>
+            <div class="direction-grid">
+              <div class="dir-box long">
+                <div class="dir-header">🟢 Winning Trades <span class="muted">${wl.winning.count || 0}</span></div>
+                <div class="dir-row"><span>Best Win</span><b class="pos-txt">${usd(wl.winning.best_win)}</b></div>
+                <div class="dir-row"><span>Average Win</span><b>${usd(wl.winning.avg_win)}</b></div>
+                <div class="dir-row"><span>Avg Duration</span><b>${hours(wl.winning.avg_duration_hours)}</b></div>
+                <div class="dir-row"><span>Max Consecutive</span><b>${num(wl.winning.max_consecutive, 0)}</b></div>
+              </div>
+              <div class="dir-box short">
+                <div class="dir-header">🔴 Losing Trades <span class="muted">${wl.losing.count || 0}</span></div>
+                <div class="dir-row"><span>Worst Loss</span><b class="neg-txt">${usd(wl.losing.worst_loss)}</b></div>
+                <div class="dir-row"><span>Average Loss</span><b>${usd(wl.losing.avg_loss)}</b></div>
+                <div class="dir-row"><span>Avg Duration</span><b>${hours(wl.losing.avg_duration_hours)}</b></div>
+                <div class="dir-row"><span>Max Consecutive</span><b>${num(wl.losing.max_consecutive, 0)}</b></div>
+              </div>
             </div>
-            <div class="panel glass">
-                <div class="panel-title">⏰ Profit by Hour</div>
-                <canvas id="hourChart" height="150"></canvas>
+          </div>
+          <div class="panel glass">
+            <div class="panel-title">⚖️ Risk-Reward Analysis</div>
+            <div class="kpi-grid" style="grid-template-columns: repeat(3, 1fr);">
+              ${kpiCard("Avg RR Ratio", num(rr.avg_rr_ratio), "")}
+              ${kpiCard("Max RR Ratio", num(rr.max_rr_ratio), "")}
+              ${kpiCard("RR Relative Win/Loss", num(rr.win_loss_ratio_relative_rr), "")}
+              ${kpiCard("Expected RR (ER)", num(rr.expected_rr), "", (rr.expected_rr || 0) >= 0 ? "pos" : "neg")}
+              ${kpiCard("Avg Risk/Trade", usd(rr.avg_risk_trade), "")}
+              ${kpiCard("Avg Reward/Trade", usd(rr.avg_reward_trade), "")}
             </div>
+          </div>
+        </section>
+
+        <section class="two-col">
+          <div class="panel glass">
+            <div class="panel-title">📅 Profit by Day ${time.best_day ? `<small class="muted">Best: ${time.best_day.label} (${usd(time.best_day.pnl_usd)})</small>` : ""}</div>
+            <canvas id="weekdayChart" height="150"></canvas>
+          </div>
+          <div class="panel glass">
+            <div class="panel-title">⏰ Profit by Hour ${time.best_hour ? `<small class="muted">Best: ${time.best_hour.label} (${usd(time.best_hour.pnl_usd)})</small>` : ""}</div>
+            <canvas id="hourChart" height="150"></canvas>
+          </div>
         </section>
 
         <section class="panel glass">
-            <div class="panel-title">📑 Trade-by-Trade Table</div>
-            <table class="grid-table">
-                <thead>
-                    <tr>
-                        <th>Time</th>
-                        <th>Symbol</th>
-                        <th>Type</th>
-                        <th>Entry</th>
-                        <th>Exit</th>
-                        <th>PnL</th>
-                        <th>Status</th>
-                        <th>Replay</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${payload.trades.map(t => `
-                        <tr>
-                            <td>${t.ts_open.slice(5, 16).replace('T', ' ')}</td>
-                            <td><b>${t.symbol}</b></td>
-                            <td class="${String(t.direction).toUpperCase() === 'LONG' ? 'pos-txt' : 'neg-txt'}">${String(t.direction).toUpperCase()}</td>
-                            <td>${t.entry}</td>
-                            <td>${t.exit_price || '-'}</td>
-                            <td class="${t.pnl_usd >= 0 ? 'pos-txt' : 'neg-txt'}">${usd(t.pnl_usd)}</td>
-                            <td><span class="badge ${t.outcome}">${t.outcome}</span></td>
-                            <td><button class="btn icon-btn" onclick="openPlayback(${t.id})">▶️</button></td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
+          <div class="panel-title">📑 Trade-by-Trade Table</div>
+          <table class="grid-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Symbol</th>
+                <th>Type</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>PnL</th>
+                <th>Status</th>
+                <th>Replay</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${payload.trades.map(t => `
+                <tr>
+                  <td>${(t.ts_open || "").slice(5, 16).replace("T", " ")}</td>
+                  <td><b>${t.symbol}</b></td>
+                  <td class="${String(t.direction).toUpperCase() === "LONG" ? "pos-txt" : "neg-txt"}">${String(t.direction).toUpperCase()}</td>
+                  <td>${t.entry}</td>
+                  <td>${t.exit_price || "-"}</td>
+                  <td class="${(t.pnl_usd || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(t.pnl_usd)}</td>
+                  <td><span class="badge ${t.outcome}">${t.outcome}</span></td>
+                  <td><button class="btn icon-btn" onclick="openPlayback(${t.id})">▶️</button></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
         </section>
       `;
 
-      // --- Charts Implementation ---
-      
-      // Equity Chart
-      const eqCtx = document.getElementById('equityChart').getContext('2d');
+      const eqCtx = document.getElementById("equityChart").getContext("2d");
       const eqGradient = eqCtx.createLinearGradient(0, 0, 0, 400);
-      eqGradient.addColorStop(0, 'rgba(16, 185, 129, 0.2)');
-      eqGradient.addColorStop(1, 'rgba(16, 185, 129, 0)');
-      
+      eqGradient.addColorStop(0, "rgba(16, 185, 129, 0.2)");
+      eqGradient.addColorStop(1, "rgba(16, 185, 129, 0)");
       new Chart(eqCtx, {
-        type: 'line',
+        type: "line",
         data: {
-          labels: payload.equity.map(p => p.ts ? p.ts.slice(5, 10) : 'Start'),
+          labels: payload.equity.map(p => p.ts ? p.ts.slice(5, 10) : "Start"),
           datasets: [{
-            label: 'Balance',
+            label: "Balance",
             data: payload.equity.map(p => p.balance),
-            borderColor: '#10b981',
+            borderColor: "#10b981",
             borderWidth: 2,
             fill: true,
             backgroundColor: eqGradient,
@@ -189,77 +217,75 @@
           }]
         },
         options: {
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                x: { grid: { display: false }, ticks: { color: '#64748b' } },
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b' } }
-            }
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: "#64748b" } },
+            y: { grid: { color: "rgba(255,255,255,0.05)" }, ticks: { color: "#64748b" } }
+          }
         }
       });
 
-      // DNA Radar Chart
-      new Chart(document.getElementById('dnaChart'), {
-        type: 'radar',
+      new Chart(document.getElementById("dnaChart"), {
+        type: "radar",
         data: {
-          labels: ['Consistency', 'Reliability', 'Discipline', 'Profitability', 'Safety'],
+          labels: ["Consistency", "Reliability", "Discipline", "Profitability", "Safety"],
           datasets: [{
-            data: Object.values(ana.strategy_dna),
-            backgroundColor: 'rgba(99, 102, 241, 0.2)',
-            borderColor: '#6366f1',
+            data: Object.values(ana.strategy_dna || {}),
+            backgroundColor: "rgba(99, 102, 241, 0.2)",
+            borderColor: "#6366f1",
             borderWidth: 2,
-            pointBackgroundColor: '#6366f1'
+            pointBackgroundColor: "#6366f1"
           }]
         },
         options: {
-            plugins: { legend: { display: false } },
-            scales: {
-                r: {
-                    angleLines: { color: 'rgba(255,255,255,0.1)' },
-                    grid: { color: 'rgba(255,255,255,0.1)' },
-                    pointLabels: { color: '#9ca3af', font: { size: 10 } },
-                    ticks: { display: false },
-                    suggestedMin: 0,
-                    suggestedMax: 10
-                }
+          plugins: { legend: { display: false } },
+          scales: {
+            r: {
+              angleLines: { color: "rgba(255,255,255,0.1)" },
+              grid: { color: "rgba(255,255,255,0.1)" },
+              pointLabels: { color: "#9ca3af", font: { size: 10 } },
+              ticks: { display: false },
+              suggestedMin: 0,
+              suggestedMax: 10
             }
+          }
         }
       });
 
-      // Monte Carlo Simulation Chart
-      new Chart(document.getElementById('monteCarloChart'), {
-        type: 'line',
+      const sims = payload.monte_carlo?.simulations || [[s.balance || 0]];
+      new Chart(document.getElementById("monteCarloChart"), {
+        type: "line",
         data: {
-          labels: payload.monte_carlo.simulations[0].map((_, i) => i),
-          datasets: payload.monte_carlo.simulations.slice(0, 20).map(sim => ({
+          labels: sims[0].map((_, i) => i),
+          datasets: sims.slice(0, 20).map(sim => ({
             data: sim,
-            borderColor: 'rgba(99, 102, 241, 0.1)',
+            borderColor: "rgba(99, 102, 241, 0.1)",
             borderWidth: 1,
             fill: false,
             pointRadius: 0
           }))
         },
         options: {
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                x: { display: false },
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b' } }
-            }
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { display: false },
+            y: { grid: { color: "rgba(255,255,255,0.05)" }, ticks: { color: "#64748b" } }
+          }
         }
       });
 
-      // Weekday / Hour Charts
       function renderBarChart(id, labels, dataMap) {
-        const ctx = document.getElementById(id).getContext('2d');
-        const vals = labels.map(l => (dataMap[l]?.pnl_usd || 0));
+        const ctx = document.getElementById(id).getContext("2d");
+        const vals = labels.map(label => (dataMap[label]?.pnl_usd || 0));
         new Chart(ctx, {
-          type: 'bar',
+          type: "bar",
           data: {
-            labels: labels,
+            labels,
             datasets: [{
               data: vals,
-              backgroundColor: vals.map(v => v >= 0 ? '#10b981' : '#ef4444'),
+              backgroundColor: vals.map(v => v >= 0 ? "#10b981" : "#ef4444"),
               borderRadius: 4
             }]
           },
@@ -267,40 +293,36 @@
             maintainAspectRatio: false,
             plugins: { legend: { display: false } },
             scales: {
-              x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } },
+              x: { ticks: { color: "#64748b", font: { size: 10 } }, grid: { display: false } },
               y: { display: false }
             }
           }
         });
       }
 
-      renderBarChart('weekdayChart', ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"], ana.by_weekday);
-      renderBarChart('hourChart', Array.from({length: 24}, (_, i) => String(i).padStart(2, '0') + ':00'), ana.by_hour);
+      renderBarChart("weekdayChart", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], ana.by_weekday || {});
+      renderBarChart("hourChart", Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`), ana.by_hour || {});
 
-      // Playback Logic
       window.openPlayback = async (tradeId) => {
-          try {
-              const res = await fetch(`/api/trades/${tradeId}/playback`);
-              if (!res.ok) throw new Error("Playback failed");
-              const data = await res.json();
-              if (data.candles && data.candles.length > 0) {
-                  alert(`📽️ Trade Replay for ${data.trade.symbol} started!\nLoaded ${data.candles.length} candles from cTrader.\n\n[Interactive Chart Coming Soon]`);
-              } else {
-                  alert(`⚠️ No candle data cached for trade #${tradeId}.`);
-              }
-          } catch (err) {
-              alert("❌ Failed to fetch playback data: " + err.message);
+        try {
+          const res = await fetch(`/api/trades/${tradeId}/playback`);
+          if (!res.ok) throw new Error("Playback failed");
+          const data = await res.json();
+          if (data.candles && data.candles.length > 0) {
+            alert(`📽️ Trade Replay for ${data.trade.symbol} started!\nLoaded ${data.candles.length} candles from cTrader.\n\n[Interactive Chart Coming Soon]`);
+          } else {
+            alert(`⚠️ No candle data cached for trade #${tradeId}.`);
           }
+        } catch (err) {
+          alert("❌ Failed to fetch playback data: " + err.message);
+        }
       };
 
-      // Theme toggle support
       document.getElementById("themeToggle").onclick = () => {
         const rootHtml = document.documentElement;
-        const current = rootHtml.getAttribute('data-theme');
-        const next = current === 'dark' ? 'light' : 'dark';
-        rootHtml.setAttribute('data-theme', next);
+        const current = rootHtml.getAttribute("data-theme");
+        rootHtml.setAttribute("data-theme", current === "dark" ? "light" : "dark");
       };
-
     </script>
   </body>
 </html>

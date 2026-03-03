@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Fetch real EURUSD data from cTrader Open API
-Uses official ctrader-open-api library
+Fetch real EURUSD data from cTrader Open API.
+Supports OpenApiPy/OpenAPI package variants.
 """
 import os
 import sys
@@ -12,10 +12,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Import cTrader Open API
-from ctrader_open_api import Client, Protobuf, TcpProtocol, Auth
-from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import *
-from ctrader_open_api.messages.OpenApiMessages_pb2 import *
+try:
+    from OpenApiPy import Client, Protobuf, TcpProtocol, EndPoints
+    from OpenApiPy.messages.OpenApiCommonMessages_pb2 import *
+    from OpenApiPy.messages.OpenApiMessages_pb2 import *
+except ImportError:
+    from OpenAPI.client import Client, Protobuf, TcpProtocol, EndPoints
+    from OpenAPI.messages.OpenApiCommonMessages_pb2 import *
+    from OpenAPI.messages.OpenApiMessages_pb2 import *
 from twisted.internet import reactor
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -27,8 +31,8 @@ ACCESS_TOKEN = os.getenv("CTRADER_ACCESS_TOKEN")
 ACCOUNT_ID = os.getenv("CTRADER_ACCOUNT_ID")
 
 # cTrader API endpoints
-HOST = "demo.ctraderapi.com"  # Demo server
-PORT = 5035  # TCP port
+HOST = EndPoints.PROTOBUF_DEMO_HOST
+PORT = EndPoints.PROTOBUF_PORT
 
 class CTraderDataFetcher:
     """Fetch market data from cTrader"""

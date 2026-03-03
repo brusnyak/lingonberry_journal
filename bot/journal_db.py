@@ -5,6 +5,7 @@ Handles all database interactions for the trading journal
 """
 import os
 import sqlite3
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -546,12 +547,13 @@ def get_stats(
     to_ts: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calculate trading statistics"""
+    account = get_account(account_id) if account_id else get_accounts()[0] if get_accounts() else None
+    initial_balance = float(account["initial_balance"]) if account else 0.0
+
     trades = get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     closed_trades = [t for t in trades if t["outcome"] != "OPEN"]
     
     if not closed_trades:
-        account = get_account(account_id) if account_id else get_accounts()[0] if get_accounts() else None
-        initial_balance = account["initial_balance"] if account else 0
         return {
             "total_trades": 0,
             "win_rate": 0,
@@ -582,20 +584,26 @@ def get_stats(
     avg_loss = total_losses / len(losses) if losses else 0
     profit_factor = total_wins / total_losses if total_losses > 0 else 0
     
-    # Calculate max drawdown
-    balance = 0
-    peak = 0
+    # Calculate max drawdown on equity (starting from initial balance)
+    equity = initial_balance
+    peak = initial_balance
     max_dd = 0
     for t in sorted(closed_trades, key=lambda x: x.get("ts_close", "")):
-        balance += t.get("pnl_usd", 0)
-        if balance > peak:
-            peak = balance
-        dd = ((peak - balance) / peak * 100) if peak > 0 else 0
+        equity += float(t.get("pnl_usd", 0) or 0)
+        peak = max(peak, equity)
+        dd = ((peak - equity) / peak * 100) if peak > 0 else 0
         if dd > max_dd:
             max_dd = dd
-    
-    account = get_account(account_id) if account_id else get_accounts()[0] if get_accounts() else None
-    initial_balance = account["initial_balance"] if account else 0
+
+    # Simple sample Sharpe approximation from trade returns
+    returns = [float(t.get("pnl_pct") or 0.0) / 100.0 for t in closed_trades]
+    sharpe_ratio = 0.0
+    if len(returns) > 1:
+        mean_ret = sum(returns) / len(returns)
+        variance = sum((r - mean_ret) ** 2 for r in returns) / (len(returns) - 1)
+        std_dev = math.sqrt(variance)
+        if std_dev > 0:
+            sharpe_ratio = (mean_ret / std_dev) * math.sqrt(len(returns))
     
     return {
         "total_trades": len(closed_trades),
@@ -605,7 +613,7 @@ def get_stats(
         "avg_loss_usd": avg_loss,
         "profit_factor": profit_factor,
         "max_drawdown_pct": max_dd,
-        "sharpe_ratio": 0,  # Placeholder
+        "sharpe_ratio": sharpe_ratio,
         "avg_rr": avg_win / avg_loss if avg_loss > 0 else 0,
         "initial_balance": initial_balance,
         "balance": initial_balance + total_pnl,
@@ -625,51 +633,156 @@ def get_analytics_breakdown(
     trades = get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     closed_trades = [t for t in trades if t["outcome"] != "OPEN"]
     
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _duration_hours(trade: Dict[str, Any]) -> float:
+        opened = _parse_ts(trade.get("ts_open"))
+        closed = _parse_ts(trade.get("ts_close"))
+        if not opened or not closed:
+            return 0.0
+        duration = (closed - opened).total_seconds() / 3600.0
+        return max(0.0, duration)
+
+    def _trade_rr(trade: Dict[str, Any]) -> tuple[Optional[float], Optional[float], Optional[float]]:
+        entry = _safe_float(trade.get("entry_price", trade.get("entry")), 0.0)
+        sl = _safe_float(trade.get("sl_price", trade.get("sl")), 0.0)
+        exit_price = _safe_float(trade.get("exit_price"), 0.0)
+        direction = str(trade.get("direction", "")).upper()
+        size = _safe_float(trade.get("position_size"), 0.0)
+
+        if entry <= 0 or sl <= 0 or exit_price <= 0:
+            return None, None, None
+
+        if direction == "LONG":
+            risk_pct = ((entry - sl) / entry) * 100.0
+            reward_pct = ((exit_price - entry) / entry) * 100.0
+        else:
+            risk_pct = ((sl - entry) / entry) * 100.0
+            reward_pct = ((entry - exit_price) / entry) * 100.0
+
+        if risk_pct <= 0:
+            return None, None, None
+
+        rr = abs(reward_pct / risk_pct)
+        risk_usd = size * abs(risk_pct) / 100.0
+        reward_usd = size * abs(reward_pct) / 100.0
+        return rr, risk_usd, reward_usd
+
+    def _streak_lengths(trades_seq: List[Dict[str, Any]], is_win: bool) -> List[int]:
+        streaks: List[int] = []
+        current = 0
+        for trade in trades_seq:
+            pnl = _safe_float(trade.get("pnl_usd"), 0.0)
+            match = pnl > 0 if is_win else pnl < 0
+            if match:
+                current += 1
+                continue
+            if current > 0:
+                streaks.append(current)
+                current = 0
+        if current > 0:
+            streaks.append(current)
+        return streaks
+
+    def _avg(values: List[float]) -> float:
+        return (sum(values) / len(values)) if values else 0.0
+
     long_trades = [t for t in closed_trades if str(t.get("direction", "")).upper() == "LONG"]
     short_trades = [t for t in closed_trades if str(t.get("direction", "")).upper() == "SHORT"]
     
     def calc_direction_stats(direction_trades):
         if not direction_trades:
-            return {"count": 0, "win_rate": 0, "total_pnl": 0, "avg_pnl": 0}
+            return {"count": 0, "win_rate": 0, "total_pnl": 0, "avg_pnl": 0, "avg_rr": 0, "max_rr": 0}
         
-        wins = [t for t in direction_trades if (t.get("pnl_usd") or 0) > 0]
-        total_pnl = sum(t.get("pnl_usd", 0) for t in direction_trades)
+        wins = [t for t in direction_trades if _safe_float(t.get("pnl_usd"), 0.0) > 0]
+        total_pnl = sum(_safe_float(t.get("pnl_usd"), 0.0) for t in direction_trades)
+        direction_rr = []
+        for trade in direction_trades:
+            rr, _, _ = _trade_rr(trade)
+            if rr is not None:
+                direction_rr.append(rr)
         
         return {
             "count": len(direction_trades),
             "win_rate": (len(wins) / len(direction_trades)) * 100,
             "total_pnl": total_pnl,
             "avg_pnl": total_pnl / len(direction_trades),
+            "avg_rr": _avg(direction_rr),
+            "max_rr": max(direction_rr) if direction_rr else 0.0,
         }
     
     by_weekday = {day: {"pnl_usd": 0.0, "count": 0} for day in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]}
     by_hour = {f"{hour:02d}:00": {"pnl_usd": 0.0, "count": 0} for hour in range(24)}
+    rr_values: List[float] = []
+    risk_values: List[float] = []
+    reward_values: List[float] = []
+    durations_win: List[float] = []
+    durations_loss: List[float] = []
+
     for trade in closed_trades:
-        ts = trade.get("ts_open")
-        if not ts:
-            continue
-        try:
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        except ValueError:
+        dt = _parse_ts(trade.get("ts_open"))
+        if not dt:
             continue
         day = dt.strftime("%a")
         hour = f"{dt.hour:02d}:00"
-        pnl = float(trade.get("pnl_usd") or 0.0)
+        pnl = _safe_float(trade.get("pnl_usd"), 0.0)
         if day in by_weekday:
             by_weekday[day]["pnl_usd"] += pnl
             by_weekday[day]["count"] += 1
         if hour in by_hour:
             by_hour[hour]["pnl_usd"] += pnl
             by_hour[hour]["count"] += 1
+        rr, risk_usd, reward_usd = _trade_rr(trade)
+        if rr is not None:
+            rr_values.append(rr)
+        if risk_usd is not None:
+            risk_values.append(risk_usd)
+        if reward_usd is not None and pnl > 0:
+            reward_values.append(reward_usd)
+        duration = _duration_hours(trade)
+        if pnl > 0:
+            durations_win.append(duration)
+        elif pnl < 0:
+            durations_loss.append(duration)
 
     long_stats = calc_direction_stats(long_trades)
     short_stats = calc_direction_stats(short_trades)
-    wins = [t for t in closed_trades if (t.get("pnl_usd") or 0) > 0]
-    consistency = 10.0 - min(abs(by_weekday[d]["pnl_usd"]) for d in by_weekday) / 100.0 if closed_trades else 0.0
+    wins = [t for t in closed_trades if _safe_float(t.get("pnl_usd"), 0.0) > 0]
+    losses = [t for t in closed_trades if _safe_float(t.get("pnl_usd"), 0.0) < 0]
+
+    closed_by_time = sorted(closed_trades, key=lambda t: t.get("ts_close") or t.get("ts_open") or "")
+    win_streaks = _streak_lengths(closed_by_time, is_win=True)
+    loss_streaks = _streak_lengths(closed_by_time, is_win=False)
+
+    win_pnls = [_safe_float(t.get("pnl_usd"), 0.0) for t in wins]
+    loss_pnls = [_safe_float(t.get("pnl_usd"), 0.0) for t in losses]
+
+    weekday_values = [by_weekday[d]["pnl_usd"] for d in by_weekday if by_weekday[d]["count"] > 0]
+    if len(weekday_values) > 1:
+        weekday_mean = _avg(weekday_values)
+        weekday_std = math.sqrt(sum((v - weekday_mean) ** 2 for v in weekday_values) / (len(weekday_values) - 1))
+    else:
+        weekday_std = 0.0
+
+    consistency = max(0.0, min(10.0, 10.0 - (weekday_std / 200.0)))
     reliability = min(10.0, (len(closed_trades) / 5.0))
     discipline = min(10.0, 4.0 + (len(wins) / max(len(closed_trades), 1) * 6.0))
-    profitability = min(10.0, max(0.0, (sum(t.get("pnl_usd", 0) for t in closed_trades) / 200.0) + 5.0))
-    safety = min(10.0, max(0.0, 10.0 - (abs(min(0.0, sum(t.get("pnl_usd", 0) for t in closed_trades))) / 300.0)))
+    profitability = min(10.0, max(0.0, (sum(_safe_float(t.get("pnl_usd"), 0.0) for t in closed_trades) / 200.0) + 5.0))
+    safety = max(0.0, 10.0 - ((max(loss_streaks) if loss_streaks else 0) * 1.2))
     strategy_dna = {
         "Consistency": round(consistency, 2),
         "Reliability": round(reliability, 2),
@@ -687,16 +800,70 @@ def get_analytics_breakdown(
     else:
         tier = "BEGINNER"
 
+    win_rate_ratio = len(wins) / len(closed_trades) if closed_trades else 0.0
+    loss_rate_ratio = len(losses) / len(closed_trades) if closed_trades else 0.0
+    avg_rr_ratio = _avg(rr_values)
+    win_loss_ratio = (len(wins) / len(losses)) if losses else 0.0
+    rr_relative = (win_loss_ratio / avg_rr_ratio) if avg_rr_ratio > 0 else 0.0
+    expected_rr = (win_rate_ratio * avg_rr_ratio) - (loss_rate_ratio * 1.0)
+
+    weekday_active = {k: v for k, v in by_weekday.items() if v["count"] > 0}
+    hour_active = {k: v for k, v in by_hour.items() if v["count"] > 0}
+    best_day = max(weekday_active.items(), key=lambda item: item[1]["pnl_usd"]) if weekday_active else None
+    worst_day = min(weekday_active.items(), key=lambda item: item[1]["pnl_usd"]) if weekday_active else None
+    best_hour = max(hour_active.items(), key=lambda item: item[1]["pnl_usd"]) if hour_active else None
+    worst_hour = min(hour_active.items(), key=lambda item: item[1]["pnl_usd"]) if hour_active else None
+
     return {
         "long": long_stats,
         "short": short_stats,
         "by_direction": {"long": long_stats, "short": short_stats},
         "by_weekday": by_weekday,
         "by_hour": by_hour,
+        "time_highlights": {
+            "best_day": {"label": best_day[0], **best_day[1]} if best_day else None,
+            "worst_day": {"label": worst_day[0], **worst_day[1]} if worst_day else None,
+            "best_hour": {"label": best_hour[0], **best_hour[1]} if best_hour else None,
+            "worst_hour": {"label": worst_hour[0], **worst_hour[1]} if worst_hour else None,
+        },
+        "wins_losses": {
+            "winning": {
+                "count": len(wins),
+                "best_win": max(win_pnls) if win_pnls else 0.0,
+                "avg_win": _avg(win_pnls),
+                "avg_duration_hours": _avg(durations_win),
+                "max_consecutive": max(win_streaks) if win_streaks else 0,
+                "avg_consecutive": _avg([float(s) for s in win_streaks]),
+            },
+            "losing": {
+                "count": len(losses),
+                "worst_loss": min(loss_pnls) if loss_pnls else 0.0,
+                "avg_loss": _avg(loss_pnls),
+                "avg_duration_hours": _avg(durations_loss),
+                "max_consecutive": max(loss_streaks) if loss_streaks else 0,
+                "avg_consecutive": _avg([float(s) for s in loss_streaks]),
+            },
+        },
+        "risk_reward": {
+            "avg_rr_ratio": avg_rr_ratio,
+            "max_rr_ratio": max(rr_values) if rr_values else 0.0,
+            "win_loss_ratio_relative_rr": rr_relative,
+            "expected_rr": expected_rr,
+            "avg_risk_trade": _avg(risk_values),
+            "avg_reward_trade": _avg(reward_values),
+            "by_direction": {
+                "long": {"avg_rr": long_stats["avg_rr"], "max_rr": long_stats["max_rr"]},
+                "short": {"avg_rr": short_stats["avg_rr"], "max_rr": short_stats["max_rr"]},
+            },
+        },
         "strategy_dna": strategy_dna,
         "dna_score": dna_score,
         "tier": tier,
-        "insights": "Keep journaling setup quality and invalidators to strengthen model signals.",
+        "insights": (
+            "Strong positive expectancy profile."
+            if expected_rr > 0
+            else "Expectancy is negative. Focus on invalidation quality and risk consistency."
+        ),
     }
 
 

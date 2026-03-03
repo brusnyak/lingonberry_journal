@@ -213,6 +213,10 @@ body {
   letter-spacing: -0.01em;
 }
 
+.muted {
+  color: var(--muted);
+}
+
 .pos b,
 .pos-txt {
   color: var(--green);
