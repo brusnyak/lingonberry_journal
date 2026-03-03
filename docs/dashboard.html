@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Dashboard</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--tg-theme-bg-color, #1a1a1a);
+            color: var(--tg-theme-text-color, #ffffff);
+            padding: 15px;
+            padding-bottom: 80px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+
+        h2 {
+            font-size: 18px;
+            margin: 15px 0 10px;
+        }
+
+        .card {
+            background: var(--tg-theme-secondary-bg-color, #2a2a2a);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 12px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat-box {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--tg-theme-hint-color, #aaa);
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .positive {
+            color: #10b981;
+        }
+
+        .negative {
+            color: #ef4444;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 200px;
+            margin: 15px 0;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--tg-theme-hint-color, #aaa);
+        }
+
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid #ef4444;
+            padding: 15px;
+            border-radius: 8px;
+            color: #ef4444;
+        }
+
+        .btn {
+            background: var(--tg-theme-button-color, #8774e1);
+            color: var(--tg-theme-button-text-color, #fff);
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .trade-item {
+            padding: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .trade-item:last-child {
+            border-bottom: none;
+        }
+
+        .trade-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+
+        .trade-symbol {
+            font-weight: 600;
+        }
+
+        .trade-details {
+            font-size: 12px;
+            color: var(--tg-theme-hint-color, #aaa);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>📊 Trading Dashboard</h1>
+        <div id="app">
+            <div class="loading">Loading your trading data...</div>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        // Your Flask backend URL - update this when deployed
+        const API_BASE = 'http://localhost:5000/api';
+
+        async function loadDashboard() {
+            try {
+                const res = await fetch(`${API_BASE}/dashboard`);
+                if (!res.ok) throw new Error('Backend not available');
+
+                const data = await res.json();
+                renderDashboard(data);
+            } catch (err) {
+                console.error('Error loading dashboard:', err);
+                document.getElementById('app').innerHTML = `
+                    <div class="error">
+                        <h2>⚠️ Backend Not Available</h2>
+                        <p>Make sure your Flask server is running:</p>
+                        <code>make webapp</code>
+                        <p style="margin-top: 10px; font-size: 12px;">
+                            Error: ${err.message}
+                        </p>
+                    </div>
+                    <div class="card">
+                        <h2>Quick Commands</h2>
+                        <p><code>/journal</code> - Log a new trade</p>
+                        <p><code>/stats</code> - View statistics</p>
+                        <p><code>/open</code> - See open positions</p>
+                    </div>
+                `;
+            }
+        }
+
+        function renderDashboard(data) {
+            const stats = data.stats;
+            const trades = data.trades.slice(0, 5);
+
+            document.getElementById('app').innerHTML = `
+                <div class="card">
+                    <h2>Performance</h2>
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-label">Total Trades</div>
+                            <div class="stat-value">${stats.total_trades}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Win Rate</div>
+                            <div class="stat-value">${stats.win_rate.toFixed(1)}%</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Net P&L</div>
+                            <div class="stat-value ${stats.total_pnl_usd >= 0 ? 'positive' : 'negative'}">
+                                ${stats.total_pnl_usd >= 0 ? '+' : ''}$${stats.total_pnl_usd.toFixed(2)}
+                            </div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Profit Factor</div>
+                            <div class="stat-value">${stats.profit_factor.toFixed(2)}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Equity Curve</h2>
+                    <div class="chart-container">
+                        <canvas id="equityChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Recent Trades</h2>
+                    <div id="tradesList"></div>
+                </div>
+
+                <div class="card">
+                    <button class="btn" onclick="tg.close()">Close</button>
+                </div>
+            `;
+
+            // Render equity chart
+            renderEquityChart(data.equity);
+
+            // Render trades list
+            renderTrades(trades);
+        }
+
+        function renderEquityChart(equity) {
+            const ctx = document.getElementById('equityChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: equity.map(p => p.ts ? p.ts.slice(5, 10) : 'Start'),
+                    datasets: [{
+                        label: 'Balance',
+                        data: equity.map(p => p.balance),
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#888', maxTicksLimit: 6 }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255,255,255,0.1)' },
+                            ticks: { color: '#888' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderTrades(trades) {
+            const html = trades.map(t => `
+                <div class="trade-item">
+                    <div class="trade-header">
+                        <span class="trade-symbol">${t.symbol} ${t.direction.toUpperCase()}</span>
+                        <span class="${t.pnl_usd >= 0 ? 'positive' : 'negative'}">
+                            ${t.pnl_usd >= 0 ? '+' : ''}$${t.pnl_usd.toFixed(2)}
+                        </span>
+                    </div>
+                    <div class="trade-details">
+                        ${t.ts_open.slice(0, 16).replace('T', ' ')} • ${t.outcome}
+                    </div>
+                </div>
+            `).join('');
+
+            document.getElementById('tradesList').innerHTML = html || '<p style="color: #888;">No trades yet</p>';
+        }
+
+        loadDashboard();
+    </script>
+</body>
+
+</html>
