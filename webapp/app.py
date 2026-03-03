@@ -64,6 +64,11 @@ def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts:
     # Advanced Directional Analytics
     direction_stats = journal_db.get_analytics_breakdown(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     
+    monte_carlo = journal_db.get_monte_carlo_stats(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+    results = monte_carlo.get("results") or {}
+    monte_carlo["simulations"] = results.get("simulations") or [[stats["balance"] for _ in range(10)]]
+    monte_carlo["stats"] = results.get("stats") or {"prob_positive": 0.0}
+
     return {
         "stats": stats,
         "equity": equity,
@@ -71,7 +76,7 @@ def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts:
         "trades": sorted(trades, key=lambda x: x["ts_open"], reverse=True),
         "calendar": calendar,
         "analytics": direction_stats,
-        "monte_carlo": journal_db.get_monte_carlo_stats(account_id=account_id, from_ts=from_ts, to_ts=to_ts),
+        "monte_carlo": monte_carlo,
         "distributions": {
             "session": by_session,
             "symbol_pnl": by_symbol,
@@ -120,6 +125,23 @@ def weekly_page():
         week_trades_json=json.dumps(week_trades),
         review_json=json.dumps(review),
         now=datetime.now().strftime("%d %b %Y"),
+    )
+
+
+@app.route("/reports")
+def reports_page():
+    journal_db.init_db()
+    calendar = _dashboard_payload(
+        account_id=_parse_account_id(request.args.get("account_id")),
+        from_ts=request.args.get("from"),
+        to_ts=request.args.get("to"),
+    )["calendar"]
+    now = datetime.now()
+    return render_template(
+        "reports.html",
+        calendar_json=json.dumps(calendar),
+        month_label=now.strftime("%B %Y"),
+        now=now.strftime("%d %b %Y"),
     )
 
 

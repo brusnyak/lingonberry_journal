@@ -184,7 +184,7 @@
             <tr>
               <td>${t.id}</td>
               <td><b>${t.symbol}</b></td>
-              <td>${t.direction === "long" ? "🟢 Long" : "🔴 Short"}</td>
+              <td>${String(t.direction).toUpperCase() === "LONG" ? "🟢 Long" : "🔴 Short"}</td>
               <td>${t.entry}</td>
               <td>${t.exit_price || "—"}</td>
               <td class="${pnlClass}">${t.pnl_pct != null ? (t.pnl_pct >= 0 ? "+" : "") + t.pnl_pct.toFixed(2) + "%" : "Open"}</td>
@@ -220,8 +220,8 @@
         });
 
         // Buy vs Sell
-        const longs = closed.filter(t => t.direction === "long").length;
-        const shorts = closed.filter(t => t.direction === "short").length;
+        const longs = closed.filter(t => String(t.direction).toUpperCase() === "LONG").length;
+        const shorts = closed.filter(t => String(t.direction).toUpperCase() === "SHORT").length;
         new Chart(document.getElementById("chartDir"), {
           type: "doughnut",
           data: { labels: ["Long", "Short"], datasets: [{ data: [longs, shorts], backgroundColor: ["rgba(76,175,80,0.7)", "rgba(244,67,54,0.7)"], borderWidth: 0 }] },

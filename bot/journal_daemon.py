@@ -1,340 +1,424 @@
 #!/usr/bin/env python3
-"""
-Trading Journal Telegram Bot
-Handles /journal and /mini commands with WebApp integration
-"""
+"""Trading Journal Telegram Bot."""
 import logging
 import os
 import sys
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-# Load environment variables
 load_dotenv()
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from bot import journal_db
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+from bot import journal_db
+from bot.session_detector import detect_session
+
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-WEBAPP_URL = "https://brusnyak.github.io/lingonberry_journal"
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_JOURAL")  # Note: typo in env var name
-AUTHORIZED_USER_IDS = [int(os.getenv("TELEGRAM_JOURNAL_CHAT", "0"))]  # Use chat ID as authorized user
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://brusnyak.github.io/lingonberry_journal")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_JOURNAL") or os.getenv("TELEGRAM_JOURAL")
+AUTH_ID = int(os.getenv("TELEGRAM_JOURNAL_CHAT", "0") or "0")
+
+JOURNAL_STEPS = [
+    "symbol",
+    "direction",
+    "entry_price",
+    "sl_price",
+    "tp_price",
+    "entry_time",
+    "notes",
+    "mood",
+    "market_condition",
+    "lot_size",
+]
 
 
-def is_authorized(user_id: int) -> bool:
-    """Check if user is authorized to use the bot"""
-    if not AUTHORIZED_USER_IDS:
+def is_authorized(update: Update) -> bool:
+    if AUTH_ID <= 0:
         return True
-    return user_id in AUTHORIZED_USER_IDS
+    user_id = update.effective_user.id if update.effective_user else 0
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    return AUTH_ID in (user_id, chat_id)
+
+
+def _normalize_direction(value: str) -> Optional[str]:
+    text = value.strip().lower()
+    if text in {"long", "buy", "l"}:
+        return "LONG"
+    if text in {"short", "sell", "s"}:
+        return "SHORT"
+    return None
+
+
+def _parse_float(value: str) -> Optional[float]:
+    try:
+        return float(value.strip().replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _current_account() -> Optional[Dict[str, Any]]:
+    accounts = journal_db.get_accounts()
+    return accounts[0] if accounts else None
+
+
+def _journal_prompt(step: str, data: Dict[str, Any]) -> str:
+    if step == "symbol":
+        return "💱 Asset symbol? (e.g. EURUSD, GBPJPY, BTCUSDT)"
+    if step == "direction":
+        return "🧭 Direction? (long/short)"
+    if step == "entry_price":
+        return "💰 Entry price?"
+    if step == "sl_price":
+        return "🛑 Stop Loss price?"
+    if step == "tp_price":
+        return "🎯 Take Profit price?"
+    if step == "entry_time":
+        return "⏰ Entry time? (`now` or `HH:MM` UTC)"
+    if step == "notes":
+        rr = None
+        if data.get("entry_price") and data.get("sl_price") and data.get("tp_price"):
+            risk = abs(data["entry_price"] - data["sl_price"])
+            reward = abs(data["tp_price"] - data["entry_price"])
+            rr = round(reward / risk, 2) if risk > 0 else None
+        rr_line = f"📐 RR Ratio: 1:{rr}\n\n" if rr else ""
+        return rr_line + "📝 Setup notes/tags? (`skip` to omit)"
+    if step == "mood":
+        return "🧠 Mental state before entry? (`skip` to omit)"
+    if step == "market_condition":
+        return "🌦 Market condition? (`trending/ranging/volatile` or `skip`)"
+    if step == "lot_size":
+        return "📦 Lot size used? (`skip` to use 1.0)"
+    return ""
+
+
+async def _start_journal_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["journal"] = {"step_idx": 0, "data": {"asset_type": "forex"}}
+    await update.message.reply_text("📝 New trade journal started.\n\n" + _journal_prompt("symbol", {}))
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start command"""
-    user = update.effective_user
-    if not is_authorized(user.id):
+    if not is_authorized(update):
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
-    
-    welcome_text = (
-        f"👋 Welcome {user.first_name}!\n\n"
-        "🎯 Trading Journal Bot\n\n"
+
+    account = _current_account()
+    balance = "N/A"
+    if account:
+        stats = journal_db.get_stats(account_id=account["id"])
+        balance = f"{account['currency']} {stats['balance']:.2f}"
+
+    await update.message.reply_text(
+        "👋 Welcome back!\n\n"
+        f"💼 {account['name'] if account else 'No account'} | Balance: {balance}\n\n"
         "Commands:\n"
-        "/journal - View full journal dashboard\n"
-        "/mini - Quick access to mini app\n"
-        "/stats - View trading statistics\n"
-        "/open - Show open positions\n"
-        "/help - Show this help message"
+        "/journal — Log a new trade\n"
+        "/open — View open trades\n"
+        "/close — Close a trade\n"
+        "/stats — View performance stats\n"
+        "/report — Open Mini App dashboard\n"
+        "/cancel — Cancel current journal flow"
     )
-    await update.message.reply_text(welcome_text)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /help command"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
+    if not is_authorized(update):
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
-    
-    help_text = (
-        "📚 *Trading Journal Bot Help*\n\n"
-        "*Commands:*\n"
-        "/start - Start the bot\n"
-        "/journal - Open full journal dashboard\n"
-        "/mini - Quick access mini app (button)\n"
-        "/stats - View your trading statistics\n"
-        "/open - Show open positions\n"
-        "/closed - Show recent closed trades\n"
-        "/weekly - Weekly performance review\n"
-        "/help - Show this help message\n\n"
-        "*Features:*\n"
-        "• Real-time trade tracking\n"
-        "• Performance analytics\n"
-        "• Risk management monitoring\n"
-        "• Weekly reviews\n"
-        "• Monte Carlo simulations\n"
+    await update.message.reply_text(
+        "Commands:\n"
+        "/journal, /open, /close, /stats, /report, /weekly, /cancel"
     )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
 
 
 async def journal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /journal command - opens full webapp"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
+    if not is_authorized(update):
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
-    
-    keyboard = [
-        [InlineKeyboardButton("📊 Open Journal", web_app=WebAppInfo(url=WEBAPP_URL))]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "📊 *Trading Journal Dashboard*\n\n"
-        "Click the button below to open your full trading journal:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
+    await _start_journal_flow(update, context)
+
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop("journal", None)
+    await update.message.reply_text("🛑 Journal flow cancelled.")
+
+
+async def _finalize_trade(update: Update, context: ContextTypes.DEFAULT_TYPE, data: Dict[str, Any]) -> None:
+    account = _current_account()
+    if not account:
+        await update.message.reply_text("❌ No account found. Create one from the dashboard first.")
+        return
+
+    ts_open = data["ts_open"]
+    session = detect_session(ts_open)
+    notes = data.get("notes")
+    if data.get("mood"):
+        notes = (notes + " | " if notes else "") + f"mood:{data['mood']}"
+    if data.get("market_condition"):
+        notes = (notes + " | " if notes else "") + f"market:{data['market_condition']}"
+
+    trade_id = journal_db.create_trade(
+        account_id=account["id"],
+        symbol=data["symbol"],
+        direction=data["direction"],
+        entry_price=data["entry_price"],
+        position_size=data.get("lot_size", 1.0),
+        ts_open=ts_open,
+        asset_type="forex",
+        sl_price=data["sl_price"],
+        tp_price=data["tp_price"],
+        session=session,
+        notes=notes,
+        provider="manual_bot",
     )
+
+    trade = journal_db.get_trade(trade_id)
+    chart_paths = []
+    if trade:
+        try:
+            from bot.chart_generator import generate_trade_charts
+
+            chart_paths = generate_trade_charts(
+                trade, output_dir="data/reports", context_weeks=1, timeframe=trade.get("timeframe")
+            )
+            if chart_paths:
+                journal_db.set_trade_chart_paths(trade_id, chart_paths)
+        except Exception as exc:
+            logger.warning("Chart generation skipped: %s", exc)
+
+    rr = 0.0
+    risk = abs(data["entry_price"] - data["sl_price"])
+    reward = abs(data["tp_price"] - data["entry_price"])
+    if risk > 0:
+        rr = reward / risk
+
+    summary = (
+        f"✅ Trade #{trade_id} logged!\n\n"
+        f"{data['symbol']} — {data['direction']}\n"
+        f"Entry: {data['entry_price']} | SL: {data['sl_price']} | TP: {data['tp_price']}\n"
+        f"RR: 1:{rr:.2f}\n"
+        f"Lot: {data.get('lot_size', 1.0)}"
+    )
+
+    if chart_paths:
+        summary += f"\n📊 Charts generated: {len(chart_paths)}"
+        summary += "\n" + "\n".join([f"• {os.path.basename(path)}" for path in chart_paths[:3]])
+
+    await update.message.reply_text(summary)
+
+
+async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    flow = context.user_data.get("journal")
+    if not flow:
+        return
+
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text.strip()
+    step_idx = flow.get("step_idx", 0)
+    data = flow.get("data", {})
+
+    if step_idx >= len(JOURNAL_STEPS):
+        context.user_data.pop("journal", None)
+        return
+
+    step = JOURNAL_STEPS[step_idx]
+
+    if step == "symbol":
+        data[step] = text.upper().replace(" ", "")
+    elif step == "direction":
+        direction = _normalize_direction(text)
+        if not direction:
+            await update.message.reply_text("Type `long` or `short`.")
+            return
+        data[step] = direction
+    elif step in {"entry_price", "sl_price", "tp_price", "lot_size"}:
+        if text.lower() == "skip" and step == "lot_size":
+            data[step] = 1.0
+        else:
+            number = _parse_float(text)
+            if number is None:
+                await update.message.reply_text("Please send a valid number.")
+                return
+            data[step] = number
+    elif step == "entry_time":
+        now = datetime.now(timezone.utc)
+        if text.lower() == "now":
+            data["ts_open"] = now.isoformat()
+        else:
+            try:
+                hh, mm = text.split(":")
+                dt = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+                data["ts_open"] = dt.isoformat()
+            except Exception:
+                await update.message.reply_text("Use `now` or `HH:MM`.")
+                return
+    else:
+        data[step] = None if text.lower() == "skip" else text
+
+    flow["step_idx"] = step_idx + 1
+    flow["data"] = data
+
+    if flow["step_idx"] >= len(JOURNAL_STEPS):
+        context.user_data.pop("journal", None)
+        await update.message.reply_text("⏳ Generating charts & saving trade...")
+        try:
+            await _finalize_trade(update, context, data)
+        except Exception as exc:
+            logger.exception("Failed to save trade")
+            await update.message.reply_text(f"❌ Failed to save trade: {exc}")
+        return
+
+    next_step = JOURNAL_STEPS[flow["step_idx"]]
+    await update.message.reply_text(_journal_prompt(next_step, data))
+
+
+def _webapp_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Open Journal Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))]
+    ])
+
+
+async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ You are not authorized to use this bot.")
+        return
+    await update.message.reply_text("Open your dashboard:", reply_markup=_webapp_keyboard())
 
 
 async def mini_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /mini command - shows BUTTON with WebApp (NOT a link)"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
+    if not is_authorized(update):
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
-    
-    # Create a keyboard button with WebApp
-    keyboard = [
-        [{"text": "📱 Open Mini App", "web_app": {"url": WEBAPP_URL}}]
-    ]
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=False
-    )
-    
+    keyboard = [[{"text": "📱 Open Mini App", "web_app": {"url": WEBAPP_URL}}]]
     await update.message.reply_text(
-        "📱 *Mini Trading Journal*\n\n"
-        "Tap the button below to access your mini journal app:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
+        "Tap to open mini app:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=False),
     )
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /stats command - show trading statistics"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
+    if not is_authorized(update):
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
-    
     try:
         journal_db.init_db()
-        accounts = journal_db.get_accounts()
-        
-        if not accounts:
-            await update.message.reply_text("No trading accounts found. Please create an account first.")
+        account = _current_account()
+        if not account:
+            await update.message.reply_text("No trading accounts found. Create one in dashboard.")
             return
-        
-        account = accounts[0]
         stats = journal_db.get_stats(account_id=account["id"])
-        
-        stats_text = (
-            f"📊 *Trading Statistics*\n\n"
-            f"*Account:* {account['name']}\n"
-            f"*Currency:* {account['currency']}\n\n"
-            f"*Performance:*\n"
-            f"• Total Trades: {stats['total_trades']}\n"
-            f"• Win Rate: {stats['win_rate']:.1f}%\n"
-            f"• Total P&L: {stats['total_pnl_usd']:.2f} {account['currency']}\n"
-            f"• Average Win: {stats['avg_win_usd']:.2f} {account['currency']}\n"
-            f"• Average Loss: {stats['avg_loss_usd']:.2f} {account['currency']}\n"
-            f"• Profit Factor: {stats['profit_factor']:.2f}\n\n"
-            f"*Risk Metrics:*\n"
-            f"• Max Drawdown: {stats['max_drawdown_pct']:.2f}%\n"
-            f"• Sharpe Ratio: {stats.get('sharpe_ratio', 0):.2f}\n"
-            f"• Risk/Reward: {stats.get('avg_rr', 0):.2f}\n"
+        await update.message.reply_text(
+            "📊 Trading Statistics\n\n"
+            f"Account: {account['name']}\n"
+            f"Total Trades: {stats['total_trades']}\n"
+            f"Win Rate: {stats['win_rate']:.1f}%\n"
+            f"Balance: {stats['balance']:.2f} {account['currency']}\n"
+            f"Total P&L: {stats['total_pnl_usd']:.2f} {account['currency']}\n"
+            f"Profit Factor: {stats['profit_factor']:.2f}\n"
+            f"Max DD: {stats['max_drawdown_pct']:.2f}%"
         )
-        
-        await update.message.reply_text(stats_text, parse_mode="Markdown")
-        
-    except Exception as e:
-        logger.error(f"Error fetching stats: {e}")
-        await update.message.reply_text(f"❌ Error fetching statistics: {str(e)}")
+    except Exception as exc:
+        logger.exception("Error fetching stats")
+        await update.message.reply_text(f"❌ Error fetching statistics: {exc}")
 
 
 async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /open command - show open positions"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
+    if not is_authorized(update):
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
-    
+
     try:
-        journal_db.init_db()
-        open_trades = journal_db.get_open_trades()
-        
+        open_trades = journal_db.get_open_trades(account_id=_current_account()["id"] if _current_account() else None)
         if not open_trades:
             await update.message.reply_text("📭 No open positions.")
             return
-        
-        response = "📈 *Open Positions:*\n\n"
-        
+
+        response = "📈 Open Positions:\n\n"
         for trade in open_trades:
-            direction_emoji = "🟢" if trade["direction"] == "LONG" else "🔴"
-            pnl = trade.get("unrealized_pnl_usd", 0)
-            pnl_emoji = "💰" if pnl >= 0 else "📉"
-            
+            direction = str(trade.get("direction", "")).upper()
+            direction_emoji = "🟢" if direction == "LONG" else "🔴"
             response += (
-                f"{direction_emoji} *{trade['symbol']}* {trade['direction']}\n"
-                f"  Entry: {trade['entry_price']:.5f}\n"
-                f"  Size: {trade['position_size']}\n"
-                f"  SL: {trade.get('sl_price', 'N/A')}\n"
-                f"  TP: {trade.get('tp_price', 'N/A')}\n"
-                f"  {pnl_emoji} P&L: {pnl:.2f}\n"
-                f"  Opened: {trade['ts_open'][:16]}\n\n"
+                f"{direction_emoji} {trade['symbol']} {direction}\n"
+                f"  Entry: {trade.get('entry_price')}\n"
+                f"  Size: {trade.get('position_size') or '-'}\n"
+                f"  SL: {trade.get('sl_price') or '-'}\n"
+                f"  TP: {trade.get('tp_price') or '-'}\n"
+                f"  Opened: {str(trade.get('ts_open', ''))[:16]}\n\n"
             )
-        
-        await update.message.reply_text(response, parse_mode="Markdown")
-        
-    except Exception as e:
-        logger.error(f"Error fetching open trades: {e}")
-        await update.message.reply_text(f"❌ Error fetching open positions: {str(e)}")
+        await update.message.reply_text(response)
+    except Exception as exc:
+        logger.exception("Error fetching open trades")
+        await update.message.reply_text(f"❌ Error fetching open positions: {exc}")
 
 
-async def closed_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /closed command - show recent closed trades"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
+async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
-    
-    try:
-        journal_db.init_db()
-        all_trades = journal_db.get_all_trades()
-        closed_trades = [t for t in all_trades if t["outcome"] != "OPEN"]
-        closed_trades = sorted(closed_trades, key=lambda x: x.get("ts_close", ""), reverse=True)[:10]
-        
-        if not closed_trades:
-            await update.message.reply_text("📭 No closed trades found.")
-            return
-        
-        response = "📊 *Recent Closed Trades:*\n\n"
-        
-        for trade in closed_trades:
-            pnl = trade.get("pnl_usd", 0)
-            pnl_emoji = "✅" if pnl >= 0 else "❌"
-            direction_emoji = "🟢" if trade["direction"] == "LONG" else "🔴"
-            
-            response += (
-                f"{pnl_emoji} {direction_emoji} *{trade['symbol']}*\n"
-                f"  P&L: {pnl:.2f} ({trade.get('pnl_pct', 0):.2f}%)\n"
-                f"  Outcome: {trade['outcome']}\n"
-                f"  Closed: {trade.get('ts_close', 'N/A')[:16]}\n\n"
-            )
-        
-        await update.message.reply_text(response, parse_mode="Markdown")
-        
-    except Exception as e:
-        logger.error(f"Error fetching closed trades: {e}")
-        await update.message.reply_text(f"❌ Error fetching closed trades: {str(e)}")
+    await update.message.reply_text("Use API/manual close from dashboard for now: POST /api/trades/{id}/close")
 
 
 async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /weekly command - show weekly review"""
-    user_id = update.effective_user.id
-    if not is_authorized(user_id):
+    if not is_authorized(update):
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
-    
+
     try:
-        journal_db.init_db()
-        accounts = journal_db.get_accounts()
-        
-        if not accounts:
+        account = _current_account()
+        if not account:
             await update.message.reply_text("No trading accounts found.")
             return
-        
-        account_id = accounts[0]["id"]
+
         now = datetime.now(timezone.utc)
-        week_start = (now - datetime.timedelta(days=now.weekday())).date().isoformat()
-        
-        review = journal_db.get_weekly_review(account_id=account_id, week_start=week_start)
-        stats = journal_db.get_stats(account_id=account_id, from_ts=week_start)
-        
+        week_start = (now - timedelta(days=now.weekday())).date().isoformat()
+        review = journal_db.get_weekly_review(account_id=account["id"], week_start=week_start)
+        stats = journal_db.get_stats(account_id=account["id"], from_ts=week_start)
+
         response = (
-            f"📅 *Weekly Review*\n"
-            f"Week of {week_start}\n\n"
-            f"*Performance:*\n"
-            f"• Trades: {stats['total_trades']}\n"
-            f"• Win Rate: {stats['win_rate']:.1f}%\n"
-            f"• P&L: {stats['total_pnl_usd']:.2f}\n\n"
+            f"📅 Weekly Review\nWeek of {week_start}\n\n"
+            f"Trades: {stats['total_trades']}\n"
+            f"Win Rate: {stats['win_rate']:.1f}%\n"
+            f"P&L: {stats['total_pnl_usd']:.2f}\n\n"
         )
-        
         if review.get("summary"):
-            response += f"*Summary:*\n{review['summary']}\n\n"
-        
-        if review.get("key_wins"):
-            response += f"*Key Wins:*\n{review['key_wins']}\n\n"
-        
-        if review.get("key_mistakes"):
-            response += f"*Key Mistakes:*\n{review['key_mistakes']}\n\n"
-        
-        if review.get("next_week_focus"):
-            response += f"*Next Week Focus:*\n{review['next_week_focus']}\n"
-        
-        await update.message.reply_text(response, parse_mode="Markdown")
-        
-    except Exception as e:
-        logger.error(f"Error fetching weekly review: {e}")
-        await update.message.reply_text(f"❌ Error fetching weekly review: {str(e)}")
+            response += f"Summary:\n{review['summary']}\n"
+        await update.message.reply_text(response)
+    except Exception as exc:
+        logger.exception("Error fetching weekly review")
+        await update.message.reply_text(f"❌ Error fetching weekly review: {exc}")
 
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle errors"""
-    logger.error(f"Update {update} caused error {context.error}")
-    
-    if update and update.effective_message:
-        await update.effective_message.reply_text(
-            "❌ An error occurred while processing your request. Please try again later."
-        )
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Update %s caused error %s", update, context.error)
 
 
 def main() -> None:
-    """Start the bot"""
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN environment variable not set")
+        logger.error("TELEGRAM_JOURNAL (or TELEGRAM_JOURAL) environment variable not set")
         sys.exit(1)
-    
-    # Initialize database
+
     journal_db.init_db()
-    
-    # Create application
+
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("journal", journal_command))
+    application.add_handler(CommandHandler("cancel", cancel_command))
+    application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("mini", mini_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("open", open_command))
-    application.add_handler(CommandHandler("closed", closed_command))
+    application.add_handler(CommandHandler("close", close_command))
     application.add_handler(CommandHandler("weekly", weekly_command))
-    
-    # Register error handler
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     application.add_error_handler(error_handler)
-    
-    # Start the bot
+
     logger.info("Starting Trading Journal Bot...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

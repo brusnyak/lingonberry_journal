@@ -3,7 +3,7 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help venv install env-check run-web run-bot run-all test sltp-check export-ml import-csv deploy-prep ctrader-sync ctrader-test git-init deploy setup-mini-app bot webapp clean
+.PHONY: help venv install env-check run-web run-bot run-all stop-all status test sltp-check export-ml import-csv deploy-prep ctrader-sync ctrader-test ctrader-fetch ctrader-viz git-init deploy setup-mini-app bot webapp clean
 
 help:
 	@echo "Targets:"
@@ -12,13 +12,17 @@ help:
 	@echo "  make env-check      - verify .env exists"
 	@echo "  make bot            - start Telegram bot"
 	@echo "  make webapp         - start Flask web app"
-	@echo "  make run-all        - start web + bot via scripts/manage.sh"
+	@echo "  make run-all        - start all services (bot, webapp, ctrader, sltp)"
+	@echo "  make stop-all       - stop all running services"
+	@echo "  make status         - check status of all services"
 	@echo "  make test           - run test suite"
 	@echo "  make sltp-check     - trigger SL/TP poll endpoint"
 	@echo "  make export-ml      - trigger ML export endpoint"
 	@echo "  make import-csv     - import sample trades CSV"
 	@echo "  make ctrader-test   - test cTrader API connection"
-	@echo "  make ctrader-sync   - sync trades from cTrader"
+	@echo "  make ctrader-fetch  - fetch trades and save to CSV/Parquet"
+	@echo "  make ctrader-viz    - visualize trades on charts"
+	@echo "  make ctrader-sync   - sync trades from cTrader to database"
 	@echo "  make git-init       - initialize git repository"
 	@echo "  make deploy         - deploy to GitHub"
 	@echo "  make setup-mini-app - setup Telegram Mini App"
@@ -42,7 +46,13 @@ run-bot: env-check
 	$(PY) bot/journal_daemon.py
 
 run-all: env-check
-	bash scripts/manage.sh start-all
+	bash scripts/manage.sh start all
+
+stop-all:
+	bash scripts/manage.sh stop all
+
+status:
+	bash scripts/manage.sh status
 
 test:
 	$(PY) -m pytest -q
@@ -58,6 +68,12 @@ import-csv:
 
 ctrader-test: env-check
 	$(PY) infra/ctrader_client.py
+
+ctrader-fetch: env-check
+	$(PY) scripts/test_ctrader.py
+
+ctrader-viz: env-check
+	$(PY) scripts/visualize_trades.py
 
 ctrader-sync: env-check
 	$(PY) jobs/ctrader_sync.py

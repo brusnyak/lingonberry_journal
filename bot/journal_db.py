@@ -18,6 +18,38 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    cursor = conn.cursor()
+    cursor.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in cursor.fetchall()}
+
+
+def _normalize_trade_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a trade row with both legacy and v2 field aliases."""
+    trade = dict(row)
+
+    entry_price = trade.get("entry_price", trade.get("entry"))
+    sl_price = trade.get("sl_price", trade.get("sl"))
+    tp_price = trade.get("tp_price", trade.get("tp"))
+    position_size = trade.get("position_size")
+    if position_size is None:
+        position_size = trade.get("lot_size", trade.get("risk_amount", 0))
+
+    trade["entry_price"] = entry_price
+    trade["sl_price"] = sl_price
+    trade["tp_price"] = tp_price
+    trade["position_size"] = position_size
+
+    trade["entry"] = trade.get("entry", entry_price)
+    trade["sl"] = trade.get("sl", sl_price)
+    trade["tp"] = trade.get("tp", tp_price)
+
+    trade["external_id"] = trade.get("external_id", trade.get("external_trade_id"))
+    trade["provider"] = trade.get("provider", trade.get("source"))
+    trade["account_id"] = trade.get("account_id", 1)
+    return trade
+
+
 def init_db() -> None:
     """Initialize database schema"""
     conn = get_connection()
@@ -280,20 +312,37 @@ def create_trade(
     """Create a new trade"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO trades (
-            account_id, symbol, asset_type, direction, entry_price,
-            position_size, sl_price, tp_price, ts_open, session,
-            timeframe, strategy, notes, external_id, provider
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            account_id, symbol, asset_type, direction, entry_price,
-            position_size, sl_price, tp_price, ts_open, session,
-            timeframe, strategy, notes, external_id, provider
-        ),
-    )
+    trade_columns = _table_columns(conn, "trades")
+    row = {
+        "account_id": account_id,
+        "symbol": symbol,
+        "asset_type": asset_type,
+        "direction": direction,
+        "entry_price": entry_price,
+        "entry": entry_price,
+        "position_size": position_size,
+        "lot_size": position_size,
+        "sl_price": sl_price if sl_price is not None else entry_price,
+        "sl": sl_price if sl_price is not None else entry_price,
+        "tp_price": tp_price if tp_price is not None else entry_price,
+        "tp": tp_price if tp_price is not None else entry_price,
+        "ts_open": ts_open,
+        "session": session,
+        "timeframe": timeframe,
+        "strategy": strategy,
+        "notes": notes,
+        "external_id": external_id,
+        "external_trade_id": external_id,
+        "provider": provider,
+        "source": provider or "manual_bot",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    insert_cols = [col for col in row.keys() if col in trade_columns and row[col] is not None]
+    placeholders = ", ".join(["?"] * len(insert_cols))
+    sql = f"INSERT INTO trades ({', '.join(insert_cols)}) VALUES ({placeholders})"
+    cursor.execute(sql, [row[col] for col in insert_cols])
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -307,7 +356,7 @@ def get_trade(trade_id: int) -> Optional[Dict[str, Any]]:
     cursor.execute("SELECT * FROM trades WHERE id = ?", (trade_id,))
     row = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _normalize_trade_row(dict(row)) if row else None
 
 
 def get_all_trades(
@@ -337,7 +386,7 @@ def get_all_trades(
     query += " ORDER BY ts_open DESC"
     
     cursor.execute(query, params)
-    trades = [dict(row) for row in cursor.fetchall()]
+    trades = [_normalize_trade_row(dict(row)) for row in cursor.fetchall()]
     conn.close()
     return trades
 
@@ -357,7 +406,7 @@ def get_open_trades(account_id: Optional[int] = None) -> List[Dict[str, Any]]:
     query += " ORDER BY ts_open DESC"
     
     cursor.execute(query, params)
-    trades = [dict(row) for row in cursor.fetchall()]
+    trades = [_normalize_trade_row(dict(row)) for row in cursor.fetchall()]
     conn.close()
     return trades
 
@@ -370,6 +419,8 @@ def close_trade(
     provider: str,
     payload: Dict[str, Any],
     ts_close: Optional[str] = None,
+    pnl_usd_override: Optional[float] = None,
+    pnl_pct_override: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """Close a trade and calculate P&L"""
     if ts_close is None:
@@ -380,38 +431,59 @@ def close_trade(
         return None
     
     # Calculate P&L
-    entry_price = trade["entry_price"]
-    position_size = trade["position_size"]
-    direction = trade["direction"]
+    entry_price = float(trade["entry_price"])
+    position_size = float(trade.get("position_size") or 1)
+    direction = str(trade.get("direction", "")).upper()
     
     if direction == "LONG":
         pnl_pct = ((exit_price - entry_price) / entry_price) * 100
     else:  # SHORT
         pnl_pct = ((entry_price - exit_price) / entry_price) * 100
-    
+
     pnl_usd = (pnl_pct / 100) * position_size
+    if pnl_usd_override is not None:
+        pnl_usd = float(pnl_usd_override)
+    if pnl_pct_override is not None:
+        pnl_pct = float(pnl_pct_override)
     
     conn = get_connection()
     cursor = conn.cursor()
     
+    trade_columns = _table_columns(conn, "trades")
+    updates = {
+        "exit_price": exit_price,
+        "pnl_usd": pnl_usd,
+        "pnl_pct": pnl_pct,
+        "outcome": outcome,
+        "ts_close": ts_close,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    set_pairs = [f"{col} = ?" for col in updates.keys() if col in trade_columns]
+    params = [updates[col] for col in updates.keys() if col in trade_columns]
+    params.append(trade_id)
     cursor.execute(
-        """
-        UPDATE trades
-        SET exit_price = ?, pnl_usd = ?, pnl_pct = ?, outcome = ?,
-            ts_close = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (exit_price, pnl_usd, pnl_pct, outcome, ts_close, trade_id),
+        f"UPDATE trades SET {', '.join(set_pairs)} WHERE id = ?",
+        params,
     )
     
     # Log event
     import json
+    event_columns = _table_columns(conn, "trade_events")
+    event_row = {
+        "trade_id": trade_id,
+        "event_type": event_type,
+        "event_ts": ts_close,
+        "ts": ts_close,
+        "price": exit_price,
+        "provider": provider,
+        "payload": json.dumps(payload),
+        "payload_json": json.dumps(payload),
+    }
+    insert_cols = [col for col in event_row.keys() if col in event_columns]
+    placeholders = ", ".join(["?"] * len(insert_cols))
     cursor.execute(
-        """
-        INSERT INTO trade_events (trade_id, event_type, event_ts, provider, payload)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (trade_id, event_type, ts_close, provider, json.dumps(payload)),
+        f"INSERT INTO trade_events ({', '.join(insert_cols)}) VALUES ({placeholders})",
+        [event_row[col] for col in insert_cols],
     )
     
     conn.commit()
@@ -424,14 +496,21 @@ def update_trade_sl_tp(trade_id: int, sl_price: Optional[float], tp_price: Optio
     """Update trade SL/TP levels"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        UPDATE trades
-        SET sl_price = ?, tp_price = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (sl_price, tp_price, trade_id),
-    )
+    trade_columns = _table_columns(conn, "trades")
+    updates = {}
+    if "sl_price" in trade_columns:
+        updates["sl_price"] = sl_price
+    if "tp_price" in trade_columns:
+        updates["tp_price"] = tp_price
+    if "sl" in trade_columns:
+        updates["sl"] = sl_price
+    if "tp" in trade_columns:
+        updates["tp"] = tp_price
+    if "updated_at" in trade_columns:
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    set_pairs = [f"{col} = ?" for col in updates.keys()]
+    params = list(updates.values()) + [trade_id]
+    cursor.execute(f"UPDATE trades SET {', '.join(set_pairs)} WHERE id = ?", params)
     conn.commit()
     conn.close()
 
@@ -440,13 +519,24 @@ def get_trade_events(trade_id: int) -> List[Dict[str, Any]]:
     """Get all events for a trade"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM trade_events WHERE trade_id = ? ORDER BY event_ts DESC",
-        (trade_id,)
-    )
+    columns = _table_columns(conn, "trade_events")
+    order_col = "event_ts" if "event_ts" in columns else "ts"
+    cursor.execute(f"SELECT * FROM trade_events WHERE trade_id = ? ORDER BY {order_col} DESC", (trade_id,))
     events = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return events
+
+
+def set_trade_chart_paths(trade_id: int, chart_paths: List[str]) -> None:
+    """Persist generated chart paths on trade row when schema supports it."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    trade_columns = _table_columns(conn, "trades")
+    if "chart_path" in trade_columns:
+        value = ",".join(chart_paths[:3])
+        cursor.execute("UPDATE trades SET chart_path = ? WHERE id = ?", (value, trade_id))
+        conn.commit()
+    conn.close()
 
 
 # Statistics operations
@@ -473,6 +563,11 @@ def get_stats(
             "sharpe_ratio": 0,
             "avg_rr": 0,
             "initial_balance": initial_balance,
+            "balance": initial_balance,
+            "growth_pct": 0,
+            "wins": 0,
+            "losses": 0,
+            "expectancy": 0,
         }
     
     wins = [t for t in closed_trades if (t.get("pnl_usd") or 0) > 0]
@@ -513,6 +608,11 @@ def get_stats(
         "sharpe_ratio": 0,  # Placeholder
         "avg_rr": avg_win / avg_loss if avg_loss > 0 else 0,
         "initial_balance": initial_balance,
+        "balance": initial_balance + total_pnl,
+        "growth_pct": (total_pnl / initial_balance * 100) if initial_balance > 0 else 0,
+        "wins": len(wins),
+        "losses": len(losses),
+        "expectancy": (total_pnl / len(closed_trades)) if closed_trades else 0,
     }
 
 
@@ -525,8 +625,8 @@ def get_analytics_breakdown(
     trades = get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     closed_trades = [t for t in trades if t["outcome"] != "OPEN"]
     
-    long_trades = [t for t in closed_trades if t["direction"] == "LONG"]
-    short_trades = [t for t in closed_trades if t["direction"] == "SHORT"]
+    long_trades = [t for t in closed_trades if str(t.get("direction", "")).upper() == "LONG"]
+    short_trades = [t for t in closed_trades if str(t.get("direction", "")).upper() == "SHORT"]
     
     def calc_direction_stats(direction_trades):
         if not direction_trades:
@@ -542,9 +642,61 @@ def get_analytics_breakdown(
             "avg_pnl": total_pnl / len(direction_trades),
         }
     
+    by_weekday = {day: {"pnl_usd": 0.0, "count": 0} for day in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]}
+    by_hour = {f"{hour:02d}:00": {"pnl_usd": 0.0, "count": 0} for hour in range(24)}
+    for trade in closed_trades:
+        ts = trade.get("ts_open")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        day = dt.strftime("%a")
+        hour = f"{dt.hour:02d}:00"
+        pnl = float(trade.get("pnl_usd") or 0.0)
+        if day in by_weekday:
+            by_weekday[day]["pnl_usd"] += pnl
+            by_weekday[day]["count"] += 1
+        if hour in by_hour:
+            by_hour[hour]["pnl_usd"] += pnl
+            by_hour[hour]["count"] += 1
+
+    long_stats = calc_direction_stats(long_trades)
+    short_stats = calc_direction_stats(short_trades)
+    wins = [t for t in closed_trades if (t.get("pnl_usd") or 0) > 0]
+    consistency = 10.0 - min(abs(by_weekday[d]["pnl_usd"]) for d in by_weekday) / 100.0 if closed_trades else 0.0
+    reliability = min(10.0, (len(closed_trades) / 5.0))
+    discipline = min(10.0, 4.0 + (len(wins) / max(len(closed_trades), 1) * 6.0))
+    profitability = min(10.0, max(0.0, (sum(t.get("pnl_usd", 0) for t in closed_trades) / 200.0) + 5.0))
+    safety = min(10.0, max(0.0, 10.0 - (abs(min(0.0, sum(t.get("pnl_usd", 0) for t in closed_trades))) / 300.0)))
+    strategy_dna = {
+        "Consistency": round(consistency, 2),
+        "Reliability": round(reliability, 2),
+        "Discipline": round(discipline, 2),
+        "Profitability": round(profitability, 2),
+        "Safety": round(safety, 2),
+    }
+    dna_score = round(sum(strategy_dna.values()) / len(strategy_dna), 2)
+    if dna_score >= 8:
+        tier = "PROFESSIONAL"
+    elif dna_score >= 6:
+        tier = "ADVANCED"
+    elif dna_score >= 4:
+        tier = "DEVELOPING"
+    else:
+        tier = "BEGINNER"
+
     return {
-        "long": calc_direction_stats(long_trades),
-        "short": calc_direction_stats(short_trades),
+        "long": long_stats,
+        "short": short_stats,
+        "by_direction": {"long": long_stats, "short": short_stats},
+        "by_weekday": by_weekday,
+        "by_hour": by_hour,
+        "strategy_dna": strategy_dna,
+        "dna_score": dna_score,
+        "tier": tier,
+        "insights": "Keep journaling setup quality and invalidators to strengthen model signals.",
     }
 
 
@@ -856,13 +1008,16 @@ def find_trade_by_external_id(external_id: str, provider: str) -> Optional[Dict[
     """Find a trade by external ID and provider"""
     conn = get_connection()
     cursor = conn.cursor()
+    trade_columns = _table_columns(conn, "trades")
+    ext_col = "external_id" if "external_id" in trade_columns else "external_trade_id"
+    provider_col = "provider" if "provider" in trade_columns else "source"
     cursor.execute(
-        "SELECT * FROM trades WHERE external_id = ? AND provider = ?",
+        f"SELECT * FROM trades WHERE {ext_col} = ? AND {provider_col} = ?",
         (external_id, provider)
     )
     row = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _normalize_trade_row(dict(row)) if row else None
 
 
 def find_open_trade_by_symbol(account_id: int, symbol: str) -> Optional[Dict[str, Any]]:
@@ -879,4 +1034,4 @@ def find_open_trade_by_symbol(account_id: int, symbol: str) -> Optional[Dict[str
     )
     row = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _normalize_trade_row(dict(row)) if row else None

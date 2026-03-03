@@ -40,7 +40,7 @@ cp .env.example .env
 # - TELEGRAM_JOURAL (bot token from @BotFather)
 # - TELEGRAM_JOURNAL_CHAT (your chat ID)
 # - WEBAPP_URL (public URL for mini app)
-# - CTRADER_* credentials (optional)
+# - CTRADER_* credentials (optional - see QUICKSTART_CTRADER.md)
 ```
 
 ### 3. Run
@@ -55,6 +55,36 @@ make webapp
 # Run tests
 make test
 ```
+
+## cTrader Integration (NEW!)
+
+Automatically fetch trades and generate charts from your cTrader account.
+
+**Quick Start:**
+```bash
+# 1. Get API credentials (5 min) - see QUICKSTART_CTRADER.md
+# 2. Add to .env
+# 3. Test connection
+make ctrader-test
+
+# 4. Fetch trades to CSV/Parquet
+make ctrader-fetch
+
+# 5. Generate 3-timeframe charts
+make ctrader-viz
+```
+
+**What you get:**
+- ✅ Historical trades exported to CSV/Parquet
+- ✅ Multi-timeframe charts (4H, 30M, 5M)
+- ✅ Long/Short position markers
+- ✅ Entry, Exit, SL, TP visualization
+- ✅ Automatic data caching
+
+**Documentation:**
+- [Quick Start Guide](QUICKSTART_CTRADER.md) - 5-minute setup
+- [Detailed Testing Guide](docs/CTRADER_TESTING.md) - Complete reference
+- [Implementation Summary](CTRADER_INTEGRATION_SUMMARY.md) - Technical details
 
 ## Telegram Bot Commands
 

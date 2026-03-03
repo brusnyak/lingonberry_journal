@@ -152,7 +152,7 @@
                         <tr>
                             <td>${t.ts_open.slice(5, 16).replace('T', ' ')}</td>
                             <td><b>${t.symbol}</b></td>
-                            <td class="${t.direction === 'long' ? 'pos-txt' : 'neg-txt'}">${t.direction.toUpperCase()}</td>
+                            <td class="${String(t.direction).toUpperCase() === 'LONG' ? 'pos-txt' : 'neg-txt'}">${String(t.direction).toUpperCase()}</td>
                             <td>${t.entry}</td>
                             <td>${t.exit_price || '-'}</td>
                             <td class="${t.pnl_usd >= 0 ? 'pos-txt' : 'neg-txt'}">${usd(t.pnl_usd)}</td>

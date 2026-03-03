@@ -14,6 +14,22 @@ from bot.session_detector import detect_session
 from infra.ctrader_client import create_client
 
 
+def _pick(source: Dict, *keys, default=None):
+    for key in keys:
+        if key in source and source[key] is not None:
+            return source[key]
+    return default
+
+
+def _ms_to_iso(value) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value) / 1000.0, tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
 def import_ctrader_trades(
     account_id: int,
     from_ts: Optional[datetime] = None,
@@ -44,18 +60,25 @@ def import_ctrader_trades(
                     continue
                 
                 # Map cTrader position to journal trade
-                direction = "LONG" if pos.get("tradeSide") == "BUY" else "SHORT"
-                entry_price = pos.get("entryPrice", 0)
-                exit_price = pos.get("closePrice", 0)
-                volume = pos.get("volume", 0)
-                
-                ts_open = datetime.fromtimestamp(pos.get("openTimestamp", 0) / 1000, tz=timezone.utc).isoformat()
-                ts_close = datetime.fromtimestamp(pos.get("closeTimestamp", 0) / 1000, tz=timezone.utc).isoformat()
+                side = str(_pick(pos, "tradeSide", "side", default="")).upper()
+                direction = "LONG" if side in {"BUY", "LONG"} else "SHORT"
+                entry_price = float(_pick(pos, "entryPrice", "openPrice", default=0) or 0)
+                exit_price = float(_pick(pos, "closePrice", "exitPrice", default=0) or 0)
+                volume = float(_pick(pos, "volume", "quantity", "lotSize", default=0) or 0)
+
+                ts_open = _ms_to_iso(_pick(pos, "openTimestamp", "openTime", "openTimestampMs")) or datetime.now(timezone.utc).isoformat()
+                ts_close = _ms_to_iso(_pick(pos, "closeTimestamp", "closeTime", "closeTimestampMs")) or datetime.now(timezone.utc).isoformat()
                 
                 session = detect_session(ts_open)
                 
                 # Calculate P&L
-                pnl_usd = pos.get("grossProfit", 0) + pos.get("commission", 0) + pos.get("swap", 0)
+                pnl_usd = float(_pick(pos, "grossProfit", default=0) or 0) + float(_pick(pos, "commission", default=0) or 0) + float(_pick(pos, "swap", default=0) or 0)
+                pnl_pct = None
+                if entry_price:
+                    if direction == "LONG":
+                        pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                    else:
+                        pnl_pct = ((entry_price - exit_price) / entry_price) * 100
                 
                 # Create trade
                 trade_id = journal_db.create_trade(
@@ -80,6 +103,8 @@ def import_ctrader_trades(
                     provider="ctrader",
                     payload=pos,
                     ts_close=ts_close,
+                    pnl_usd_override=pnl_usd,
+                    pnl_pct_override=pnl_pct,
                 )
                 
                 imported += 1
@@ -122,10 +147,11 @@ def sync_open_positions(account_id: int) -> Dict[str, int]:
                         synced += 1
                 else:
                     # Create new open trade
-                    direction = "LONG" if pos.get("tradeSide") == "BUY" else "SHORT"
-                    entry_price = pos.get("entryPrice", 0)
-                    volume = pos.get("volume", 0)
-                    ts_open = datetime.fromtimestamp(pos.get("openTimestamp", 0) / 1000, tz=timezone.utc).isoformat()
+                    side = str(_pick(pos, "tradeSide", "side", default="")).upper()
+                    direction = "LONG" if side in {"BUY", "LONG"} else "SHORT"
+                    entry_price = float(_pick(pos, "entryPrice", "openPrice", default=0) or 0)
+                    volume = float(_pick(pos, "volume", "quantity", "lotSize", default=0) or 0)
+                    ts_open = _ms_to_iso(_pick(pos, "openTimestamp", "openTime", "openTimestampMs")) or datetime.now(timezone.utc).isoformat()
                     session = detect_session(ts_open)
                     
                     journal_db.create_trade(
@@ -136,8 +162,8 @@ def sync_open_positions(account_id: int) -> Dict[str, int]:
                         position_size=volume,
                         ts_open=ts_open,
                         asset_type="forex",
-                        sl_price=pos.get("stopLoss"),
-                        tp_price=pos.get("takeProfit"),
+                        sl_price=_pick(pos, "stopLoss", "sl", "stopLossPrice"),
+                        tp_price=_pick(pos, "takeProfit", "tp", "takeProfitPrice"),
                         session=session,
                         external_id=external_id,
                         provider="ctrader",

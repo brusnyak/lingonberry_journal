@@ -13,6 +13,4 @@ charts/
 # Documentation (keep only README)
 *.md
 !README.md
-docs/*.md
-.txt
-*.txt
+!docs/*.md

@@ -4,7 +4,6 @@ Market Data Fetching
 Fetches OHLCV data from various sources with caching
 """
 import hashlib
-import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -12,11 +11,14 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import pandas as pd
+import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from infra.ctrader_client import CTraderClient
 
 CACHE_DIR = Path("data/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+LOCAL_MARKET_DIR = Path("data/market_data")
 
 
 def get_timeframe_for_asset(asset_type: str) -> str:
@@ -28,6 +30,178 @@ def get_timeframe_for_asset(asset_type: str) -> str:
         "commodity": "H4",
     }
     return timeframe_map.get(asset_type, "H1")
+
+
+def _to_yf_symbol(symbol: str, asset_type: str) -> str:
+    s = (symbol or "").upper().strip()
+    if asset_type == "forex":
+        # Remove any existing suffix
+        s = s.replace("=X", "").replace("/", "")
+        if len(s) == 6:
+            # Format as BASE/QUOTE for yfinance
+            return f"{s[:3]}{s[3:]}=X"
+    return s
+
+
+def _to_yf_interval(timeframe: str) -> str:
+    mapping = {
+        "M1": "1m",
+        "M5": "5m",
+        "M15": "15m",
+        "M30": "30m",
+        "H1": "60m",
+        "H4": "1h",
+        "D": "1d",
+        "W": "1wk",
+    }
+    return mapping.get(timeframe.upper(), "15m")
+
+
+def _fetch_ohlcv_yfinance(
+    symbol: str,
+    asset_type: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+) -> pd.DataFrame:
+    try:
+        yf_symbol = _to_yf_symbol(symbol, asset_type)
+        interval = _to_yf_interval(timeframe)
+        data = yf.download(
+            yf_symbol,
+            start=start,
+            end=end,
+            interval=interval,
+            auto_adjust=False,
+            progress=False,
+        )
+        if data is None or data.empty:
+            return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+
+        data = data.rename(columns=str.lower).reset_index()
+        ts_col = "Datetime" if "Datetime" in data.columns else "Date"
+        data["ts"] = pd.to_datetime(data[ts_col], utc=True, errors="coerce")
+        out = data[["ts", "open", "high", "low", "close", "volume"]].dropna(subset=["ts"]).copy()
+        return out.sort_values("ts").reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+
+
+def _fetch_ohlcv_ctrader(
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+) -> pd.DataFrame:
+    tf = timeframe.upper()
+    tf_map = {
+        "M1": "M1",
+        "M5": "M5",
+        "M15": "M15",
+        "M30": "M30",
+        "H1": "H1",
+        "H4": "H4",
+        "D": "D1",
+    }
+    period = tf_map.get(tf, "M15")
+    try:
+        client = CTraderClient()
+        if not client.connect():
+            return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+        bars = client.get_trendbars(symbol=symbol, timeframe=period, from_ts=start, to_ts=end, count=2000)
+        client.disconnect()
+        if not bars:
+            return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+        df = pd.DataFrame(bars)
+        # cTrader payload keys can differ by endpoint/account; normalize defensively.
+        ts_col = "timestamp" if "timestamp" in df.columns else "time"
+        df["ts"] = pd.to_datetime(df[ts_col], unit="ms", utc=True, errors="coerce")
+        col_map = {
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+            "openPrice": "open",
+            "highPrice": "high",
+            "lowPrice": "low",
+            "closePrice": "close",
+        }
+        for src, dst in col_map.items():
+            if src in df.columns and dst not in df.columns:
+                df[dst] = df[src]
+        if "volume" not in df.columns:
+            df["volume"] = 0.0
+        out = df[["ts", "open", "high", "low", "close", "volume"]].dropna(subset=["ts"])
+        return out.sort_values("ts").reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+
+
+def _resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    tf = timeframe.upper()
+    if tf in {"M5", "5M"}:
+        return df
+    rule_map = {
+        "M1": "1min",
+        "M15": "15min",
+        "M30": "30min",
+        "H1": "1H",
+        "H4": "4H",
+        "D": "1D",
+        "D1": "1D",
+    }
+    rule = rule_map.get(tf)
+    if not rule:
+        return df
+
+    frame = df.copy()
+    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, errors="coerce")
+    frame = frame.dropna(subset=["ts"]).set_index("ts").sort_index()
+    resampled = frame.resample(rule).agg(
+        {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        }
+    )
+    resampled = resampled.dropna(subset=["open", "high", "low", "close"]).reset_index()
+    return resampled[["ts", "open", "high", "low", "close", "volume"]]
+
+
+def _fetch_ohlcv_local_csv(
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+) -> pd.DataFrame:
+    # Try to find cached file for this timeframe
+    tf_lower = timeframe.lower()
+    path = LOCAL_MARKET_DIR / f"{symbol.upper()}_{tf_lower}.csv"
+    
+    # Fallback to 5m data if specific timeframe not found
+    if not path.exists():
+        path = LOCAL_MARKET_DIR / f"{symbol.upper()}_5m.csv"
+    
+    if not path.exists():
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+    try:
+        df = pd.read_csv(path)
+        ts_col = "ts" if "ts" in df.columns else "time" if "time" in df.columns else None
+        if not ts_col:
+            return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+        df["ts"] = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+        cols = ["open", "high", "low", "close", "volume"]
+        for col in cols:
+            if col not in df.columns:
+                return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+        base = df[["ts", "open", "high", "low", "close", "volume"]].dropna(subset=["ts"]).sort_values("ts")
+        filtered = base[(base["ts"] >= start) & (base["ts"] <= end)]
+        return _resample_ohlcv(filtered, timeframe)
+    except Exception:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
 
 def _get_cache_key(symbol: str, asset_type: str, timeframe: str, start: datetime, end: datetime) -> str:
@@ -105,12 +279,13 @@ def _fetch_ohlcv(
     start: datetime,
     end: datetime,
 ) -> pd.DataFrame:
-    """Fetch OHLCV data from data source"""
-    # Placeholder - implement actual data fetching
-    # This would integrate with your data provider (e.g., yfinance, ccxt, etc.)
-    
-    # For now, return empty DataFrame with correct schema
-    return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+    """Fetch OHLCV data from data source with fallback chain."""
+    # Priority: local csv cache -> yfinance
+    # Note: cTrader REST API disabled (uses WebSocket protocol)
+    local = _fetch_ohlcv_local_csv(symbol=symbol, timeframe=timeframe, start=start, end=end)
+    if not local.empty:
+        return local
+    return _fetch_ohlcv_yfinance(symbol=symbol, asset_type=asset_type, timeframe=timeframe, start=start, end=end)
 
 
 def replay_window(ts_open: str, context_weeks: int = 1) -> Dict[str, datetime]:
