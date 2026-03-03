@@ -3,7 +3,7 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help venv install env-check run-web run-bot run-all stop-all status test sltp-check export-ml import-csv deploy-prep ctrader-sync ctrader-test ctrader-fetch ctrader-viz git-init deploy setup-mini-app bot webapp clean
+.PHONY: help venv install env-check run-web run-bot run-all stop-all status test sltp-check export-ml import-csv deploy-prep ctrader-sync ctrader-test ctrader-fetch ctrader-viz git-init deploy setup-mini-app bot webapp clean daily-reminder setup-daily-reminder
 
 help:
 	@echo "Targets:"
@@ -23,6 +23,8 @@ help:
 	@echo "  make ctrader-fetch  - fetch trades and save to CSV/Parquet"
 	@echo "  make ctrader-viz    - visualize trades on charts"
 	@echo "  make ctrader-sync   - sync trades from cTrader to database"
+	@echo "  make daily-reminder - test daily reminder (send now)"
+	@echo "  make setup-daily-reminder - install cron job for daily reminders"
 	@echo "  make git-init       - initialize git repository"
 	@echo "  make deploy         - deploy to GitHub"
 	@echo "  make setup-mini-app - setup Telegram Mini App"
@@ -77,6 +79,12 @@ ctrader-viz: env-check
 
 ctrader-sync: env-check
 	$(PY) jobs/ctrader_sync.py
+
+daily-reminder: env-check
+	$(PY) jobs/daily_reminder.py
+
+setup-daily-reminder: env-check
+	@bash scripts/setup_daily_reminder.sh
 
 deploy-prep: env-check
 	$(PY) -m py_compile bot/journal_db.py infra/market_data.py infra/pine_bridge.py jobs/sltp_poller.py core/exporter.py webapp/app.py bot/journal_daemon.py infra/ctrader_client.py jobs/ctrader_sync.py

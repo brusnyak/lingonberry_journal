@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update, WebAppInfo
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -402,6 +402,44 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"❌ Error fetching weekly review: {exc}")
 
 
+async def daily_reminder_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle daily reminder Yes/No button responses"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_authorized(update):
+        await query.edit_message_text("⛔ You are not authorized to use this bot.")
+        return
+    
+    callback_data = query.data
+    
+    if callback_data == "daily_reminder:yes":
+        await query.edit_message_text(
+            "✅ Great! Let's log your trades.\n\n"
+            "Use /journal to start logging a trade, or /open to see open positions."
+        )
+    elif callback_data == "daily_reminder:no":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Review Market", callback_data="daily_reminder:review")],
+            [InlineKeyboardButton("👋 See You Tomorrow", callback_data="daily_reminder:goodbye")]
+        ])
+        await query.edit_message_text(
+            "No trades today - that's okay!\n\n"
+            "What would you like to do?",
+            reply_markup=keyboard
+        )
+    elif callback_data == "daily_reminder:review":
+        await query.edit_message_text(
+            "📈 Market Review\n\n"
+            "Use /stats to see your performance, or /weekly for weekly review.\n"
+            "You can also open the dashboard with /report"
+        )
+    elif callback_data == "daily_reminder:goodbye":
+        await query.edit_message_text(
+            "👋 See you tomorrow! Trade safe."
+        )
+
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Update %s caused error %s", update, context.error)
 
@@ -424,6 +462,7 @@ def main() -> None:
     application.add_handler(CommandHandler("open", open_command))
     application.add_handler(CommandHandler("close", close_command))
     application.add_handler(CommandHandler("weekly", weekly_command))
+    application.add_handler(CallbackQueryHandler(daily_reminder_callback, pattern="^daily_reminder:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     application.add_error_handler(error_handler)
 
