@@ -58,24 +58,16 @@ def create_tradingview_chart(
     df = df.sort_values('datetime').reset_index(drop=True)
     
     # Create figure
-    if show_volume:
-        fig, (ax1, ax2) = plt.subplots(
-            2, 1, 
-            figsize=figsize,
-            gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.05},
-            facecolor=TV_COLORS['background']
-        )
-    else:
-        fig, ax1 = plt.subplots(figsize=figsize, facecolor=TV_COLORS['background'])
-        ax2 = None
+    fig, ax1 = plt.subplots(figsize=figsize, facecolor=TV_COLORS['background'])
     
     # Style main axis
     ax1.set_facecolor(TV_COLORS['background'])
     ax1.spines['top'].set_color(TV_COLORS['border'])
     ax1.spines['bottom'].set_color(TV_COLORS['border'])
-    ax1.spines['left'].set_color(TV_COLORS['border'])
+    ax1.spines['left'].set_visible(False)  # Hide left spine
     ax1.spines['right'].set_color(TV_COLORS['border'])
     ax1.tick_params(colors=TV_COLORS['text'], which='both')
+    ax1.tick_params(axis='y', left=False, right=True, labelright=True, labelleft=False)  # Price on right
     ax1.grid(True, color=TV_COLORS['grid'], linestyle='-', linewidth=0.5, alpha=0.3)
     
     # Plot candlesticks
@@ -110,21 +102,89 @@ def create_tradingview_chart(
         ax1.add_patch(rect)
     
     # Add trade markers if provided
-    if entry_price is not None:
+    if entry_price is not None and direction is not None:
+        # Calculate position box dimensions
         entry_idx = 0
+        exit_idx = len(df) - 1
+        
+        # Draw position box (shaded area showing the trade)
+        if direction.lower() == 'long':
+            # Long: shade from entry to TP (green) and entry to SL (red)
+            if tp_price is not None:
+                # Profit zone (entry to TP)
+                for i in range(len(df)):
+                    rect = Rectangle(
+                        (i - width/2, entry_price),
+                        width,
+                        tp_price - entry_price,
+                        facecolor=TV_COLORS['green'],
+                        edgecolor='none',
+                        alpha=0.08,
+                        zorder=1
+                    )
+                    ax1.add_patch(rect)
+            
+            if sl_price is not None:
+                # Risk zone (SL to entry)
+                for i in range(len(df)):
+                    rect = Rectangle(
+                        (i - width/2, sl_price),
+                        width,
+                        entry_price - sl_price,
+                        facecolor=TV_COLORS['red'],
+                        edgecolor='none',
+                        alpha=0.08,
+                        zorder=1
+                    )
+                    ax1.add_patch(rect)
+        else:  # short
+            # Short: shade from entry to TP (green) and entry to SL (red)
+            if tp_price is not None:
+                # Profit zone (TP to entry)
+                for i in range(len(df)):
+                    rect = Rectangle(
+                        (i - width/2, tp_price),
+                        width,
+                        entry_price - tp_price,
+                        facecolor=TV_COLORS['green'],
+                        edgecolor='none',
+                        alpha=0.08,
+                        zorder=1
+                    )
+                    ax1.add_patch(rect)
+            
+            if sl_price is not None:
+                # Risk zone (entry to SL)
+                for i in range(len(df)):
+                    rect = Rectangle(
+                        (i - width/2, entry_price),
+                        width,
+                        sl_price - entry_price,
+                        facecolor=TV_COLORS['red'],
+                        edgecolor='none',
+                        alpha=0.08,
+                        zorder=1
+                    )
+                    ax1.add_patch(rect)
+        
+        # Draw horizontal lines
         ax1.axhline(entry_price, color='#2962ff', linestyle='--', linewidth=1.5, alpha=0.7, label='Entry')
-        ax1.plot(entry_idx, entry_price, 'o', color='#2962ff', markersize=8, zorder=5)
+        
+        if sl_price is not None:
+            ax1.axhline(sl_price, color=TV_COLORS['red'], linestyle=':', linewidth=1, alpha=0.6, label='SL')
+        
+        if tp_price is not None:
+            ax1.axhline(tp_price, color=TV_COLORS['green'], linestyle=':', linewidth=1, alpha=0.6, label='TP')
+        
+        # Entry marker
+        marker = '^' if direction.lower() == 'long' else 'v'
+        marker_color = TV_COLORS['green'] if direction.lower() == 'long' else TV_COLORS['red']
+        ax1.plot(entry_idx, entry_price, marker, color=marker_color, markersize=10, zorder=5, label=f'{direction.upper()} Entry')
     
     if exit_price is not None:
         exit_idx = len(df) - 1
         ax1.axhline(exit_price, color='#ff6d00', linestyle='--', linewidth=1.5, alpha=0.7, label='Exit')
         ax1.plot(exit_idx, exit_price, 'o', color='#ff6d00', markersize=8, zorder=5)
-    
-    if sl_price is not None:
-        ax1.axhline(sl_price, color=TV_COLORS['red'], linestyle=':', linewidth=1, alpha=0.6, label='SL')
-    
-    if tp_price is not None:
-        ax1.axhline(tp_price, color=TV_COLORS['green'], linestyle=':', linewidth=1, alpha=0.6, label='TP')
     
     # Title and labels
     ax1.set_title(title, color=TV_COLORS['text'], fontsize=14, fontweight='bold', pad=20)
@@ -158,31 +218,6 @@ def create_tradingview_chart(
             fontsize=9
         )
         legend.get_frame().set_alpha(0.9)
-    
-    # Volume subplot
-    if show_volume and ax2 is not None:
-        ax2.set_facecolor(TV_COLORS['background'])
-        ax2.spines['top'].set_color(TV_COLORS['border'])
-        ax2.spines['bottom'].set_color(TV_COLORS['border'])
-        ax2.spines['left'].set_color(TV_COLORS['border'])
-        ax2.spines['right'].set_color(TV_COLORS['border'])
-        ax2.tick_params(colors=TV_COLORS['text'], which='both')
-        ax2.grid(True, color=TV_COLORS['grid'], linestyle='-', linewidth=0.5, alpha=0.3)
-        
-        # Plot volume bars
-        for idx, row in df.iterrows():
-            color = TV_COLORS['volume_green'] if row['close'] >= row['open'] else TV_COLORS['volume_red']
-            ax2.bar(idx, row['volume'], color=color, width=0.8, edgecolor='none')
-        
-        ax2.set_ylabel('Volume', color=TV_COLORS['text'], fontsize=11)
-        ax2.set_xlim(-1, len(df))
-        
-        # Format x-axis (same as main chart)
-        ax2.set_xticks(time_positions)
-        ax2.set_xticklabels(time_labels, color=TV_COLORS['text_secondary'], fontsize=9)
-        
-        # Format y-axis for volume (use K, M notation)
-        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x/1000:.0f}K' if x >= 1000 else f'{x:.0f}'))
     
     plt.tight_layout()
     

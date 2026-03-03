@@ -89,66 +89,39 @@ def _plot_trade_overlay(ax, trade: Dict, ts_open: datetime, ts_close: datetime) 
 
 
 def _render_chart(df: pd.DataFrame, trade: Dict, timeframe: str, output_path: str) -> bool:
+    """Render TradingView-style chart with position boxes"""
     if df.empty:
         return False
-    ts_open = _to_utc_dt(trade.get("ts_open"))
-    ts_close = _to_utc_dt(trade.get("ts_close")) if trade.get("ts_close") else datetime.now(timezone.utc)
+    
+    from bot.tradingview_chart import create_tradingview_chart, save_chart
+    
+    # Prepare data
+    df_chart = df.copy()
+    df_chart = df_chart.rename(columns={'ts': 'datetime'})
+    
+    # Get trade details
     direction = str(trade.get("direction", "")).upper()
-
-    fig, ax = plt.subplots(figsize=(16, 8), facecolor="#0b1220")
-    ax.set_facecolor("#0f172a")
-    candle_width = _candle_width_days(df)
-
-    for _, row in df.iterrows():
-        bullish = row["close"] >= row["open"]
-        color = "#22c55e" if bullish else "#ef4444"
-        ax.plot([row["ts"], row["ts"]], [row["low"], row["high"]], color=color, linewidth=0.8, alpha=0.85, zorder=1)
-        body_bottom = min(row["open"], row["close"])
-        body_height = max(abs(row["close"] - row["open"]), 1e-8)
-        ax.add_patch(
-            Rectangle(
-                (mdates.date2num(row["ts"]) - candle_width / 2.0, body_bottom),
-                candle_width,
-                body_height,
-                facecolor=color,
-                edgecolor=color,
-                linewidth=0.5,
-                alpha=0.95,
-                zorder=2,
-            )
-        )
-
-    _plot_trade_overlay(ax, trade, ts_open=ts_open, ts_close=ts_close)
-    ax.set_title(
-        f"{trade.get('symbol', 'UNKNOWN')} - {direction} - {timeframe}",
-        fontsize=14,
-        color="#e2e8f0",
-        fontweight="bold",
+    entry_price = float(trade.get("entry_price") or trade.get("entry") or 0)
+    sl_price = trade.get("sl_price") or trade.get("sl")
+    tp_price = trade.get("tp_price") or trade.get("tp")
+    exit_price = trade.get("exit_price")
+    symbol = trade.get("symbol", "UNKNOWN")
+    
+    # Create chart
+    fig = create_tradingview_chart(
+        df=df_chart,
+        title=f'{symbol} - {direction} - {timeframe}',
+        show_volume=False,
+        figsize=(16, 9),
+        entry_price=entry_price,
+        exit_price=exit_price,
+        sl_price=float(sl_price) if sl_price else None,
+        tp_price=float(tp_price) if tp_price else None,
+        direction=direction.lower()
     )
-    ax.set_xlabel("Time", color="#94a3b8")
-    ax.set_ylabel("Price", color="#94a3b8")
-    ax.grid(True, alpha=0.18, color="#334155")
-    ax.tick_params(colors="#94a3b8", labelsize=9)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
-
-    handles, labels = ax.get_legend_handles_labels()
-    dedup = {}
-    for h, l in zip(handles, labels):
-        dedup[l] = h
-    if dedup:
-        ax.legend(
-            dedup.values(),
-            dedup.keys(),
-            loc="upper left",
-            frameon=True,
-            facecolor="#0b1220",
-            edgecolor="#334155",
-            labelcolor="#e2e8f0",
-        )
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor="#0b1220")
-    plt.close()
+    
+    # Save
+    save_chart(fig, output_path, dpi=150)
     return True
 
 

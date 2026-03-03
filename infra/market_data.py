@@ -320,11 +320,33 @@ def _fetch_ohlcv(
     if asset_type.lower() == "forex":
         ctr = _fetch_ohlcv_ctrader(symbol=symbol, timeframe=timeframe, start=start, end=end)
         if not ctr.empty:
+            # Save to market_data folder
+            _save_to_market_data(ctr, symbol, asset_type, timeframe)
             return ctr
     local = _fetch_ohlcv_local_csv(symbol=symbol, timeframe=timeframe, start=start, end=end)
     if not local.empty:
         return local
-    return _fetch_ohlcv_yfinance(symbol=symbol, asset_type=asset_type, timeframe=timeframe, start=start, end=end)
+    yf_data = _fetch_ohlcv_yfinance(symbol=symbol, asset_type=asset_type, timeframe=timeframe, start=start, end=end)
+    if not yf_data.empty:
+        _save_to_market_data(yf_data, symbol, asset_type, timeframe)
+    return yf_data
+
+
+def _save_to_market_data(df: pd.DataFrame, symbol: str, asset_type: str, timeframe: str) -> None:
+    """Save fetched data to market_data folder"""
+    if df.empty:
+        return
+    
+    try:
+        # Create directory structure: market_data/{asset_type}/{SYMBOL}/
+        output_dir = LOCAL_MARKET_DIR / asset_type.lower() / symbol.upper()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save as {timeframe}.csv
+        output_path = output_dir / f"{timeframe.lower()}.csv"
+        df.to_csv(output_path, index=False)
+    except Exception as e:
+        print(f"Warning: Could not save to market_data: {e}")
 
 
 def replay_window(ts_open: str, context_weeks: int = 1) -> Dict[str, datetime]:

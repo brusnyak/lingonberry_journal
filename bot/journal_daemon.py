@@ -206,9 +206,17 @@ async def _finalize_trade(update: Update, context: ContextTypes.DEFAULT_TYPE, da
 
     if chart_paths:
         summary += f"\n📊 Charts generated: {len(chart_paths)}"
-        summary += "\n" + "\n".join([f"• {os.path.basename(path)}" for path in chart_paths[:3]])
 
     await update.message.reply_text(summary)
+    
+    # Send chart images
+    if chart_paths:
+        for path in chart_paths[:3]:
+            try:
+                with open(path, 'rb') as photo:
+                    await update.message.reply_photo(photo=photo, caption=os.path.basename(path))
+            except Exception as e:
+                logger.warning(f"Failed to send chart {path}: {e}")
 
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
