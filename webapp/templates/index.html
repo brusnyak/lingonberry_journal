@@ -1,328 +1,150 @@
-<!doctype html>
-<html lang="en" data-theme="dark">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Trading Journal Pro — Premium</title>
-    <link rel="stylesheet" href="/static/css/style.css" />
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  </head>
-  <body>
-    <nav class="topbar glass">
-      <div class="brand">Journal Pro</div>
-      <div class="nav-links">
-        <a href="/" class="active">Performance Insights</a>
-        <a href="/weekly?account_id={{ selected_account_id }}">Weekly Review</a>
-      </div>
-      <div class="toolbar">
-        <button id="themeToggle" class="btn ghost">🌗</button>
-        <form method="get" class="inline-form">
-          <select name="account_id" onchange="this.form.submit()">
-            {% for a in accounts %}
-            <option value="{{ a.id }}" {{ 'selected' if a.id == selected_account_id else '' }}>
-              {{ a.name }} ({{ a.firm_name or 'prop' }})
-            </option>
-            {% endfor %}
-          </select>
-        </form>
-        <span class="date">{{ now }}</span>
-      </div>
-    </nav>
+<!DOCTYPE html>
+<html lang="en">
 
-    <main class="container" id="dashboardRoot">
-        <!-- Dashboard populated by JS -->
-    </main>
-
-    <script>
-      const payload = {{ payload_json|safe }};
-      const root = document.getElementById("dashboardRoot");
-
-      function pct(v) { return `${v >= 0 ? "+" : ""}${Number(v || 0).toFixed(2)}%`; }
-      function num(v, digits = 2) { return Number(v || 0).toFixed(digits); }
-      function usd(v) {
-        const val = Number(v || 0);
-        return `${val >= 0 ? "+" : "-"}$${Math.abs(val).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-      }
-      function hours(v) { return `${num(v, 2)}h`; }
-      function kpiCard(label, value, subtext = "", css = "") {
-        return `
-          <div class="kpi ${css}">
-            <span>${label}</span>
-            <b>${value}</b>
-            ${subtext ? `<small class="muted">${subtext}</small>` : ""}
-          </div>
-        `;
-      }
-
-      const s = payload.stats || {};
-      const ana = payload.analytics || {};
-      const dir = ana.by_direction || { long: {}, short: {} };
-      const wl = ana.wins_losses || { winning: {}, losing: {} };
-      const rr = ana.risk_reward || { by_direction: { long: {}, short: {} } };
-      const time = ana.time_highlights || {};
-
-      root.innerHTML = `
-        <section class="panel glass">
-          <div class="panel-title">📉 Core Performance Metrics</div>
-          <div class="kpi-grid">
-            ${kpiCard("Net Profit", usd((s.balance || 0) - (s.initial_balance || 0)), pct(s.growth_pct), (s.growth_pct || 0) >= 0 ? "pos" : "neg")}
-            ${kpiCard("Win Rate", `${num(s.win_rate, 1)}%`, `${s.wins || 0}W - ${s.losses || 0}L`)}
-            ${kpiCard("Profit Factor", num(s.profit_factor), "Gross Profit / Gross Loss", (s.profit_factor || 0) >= 1.5 ? "pos" : "")}
-            ${kpiCard("Sharpe Ratio", num(s.sharpe_ratio), "Risk-Adjusted Return")}
-            ${kpiCard("Max Drawdown", `${num(s.max_drawdown_pct)}%`, "From Peak Equity", "neg")}
-            ${kpiCard("Avg RR", `1:${num(s.avg_rr)}`, "Per Trade")}
-          </div>
-        </section>
-
-        <section class="split-7030">
-          <div class="panel glass">
-            <div class="panel-title">📈 Balance & Equity Analytics</div>
-            <div style="height: 350px;"><canvas id="equityChart"></canvas></div>
-          </div>
-          <div class="panel glass">
-            <div class="panel-title">🧬 Strategy DNA</div>
-            <div class="dna-container">
-              <canvas id="dnaChart"></canvas>
-              <div class="dna-info">
-                <div class="dna-score">${num(ana.dna_score, 1)}</div>
-                <div class="dna-tier">${ana.tier || "N/A"}</div>
-              </div>
-            </div>
-            <p class="muted" style="font-size: 0.85rem; margin-top: 20px; text-align: center;">${ana.insights || "Not enough trades for insights yet."}</p>
-          </div>
-        </section>
-
-        <section class="two-col">
-          <div class="panel glass">
-            <div class="panel-title">🔀 Trade Direction Analysis</div>
-            <div class="direction-grid">
-              <div class="dir-box long">
-                <div class="dir-header">🟢 Long <span class="muted">${dir.long.count || 0} trades</span></div>
-                <div class="dir-row"><span>Win Rate</span> <b>${num(dir.long.win_rate, 2)}%</b></div>
-                <div class="dir-row"><span>P/L</span> <b class="${(dir.long.total_pnl || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(dir.long.total_pnl)}</b></div>
-                <div class="dir-row"><span>Average</span> <b class="${(dir.long.avg_pnl || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(dir.long.avg_pnl)}</b></div>
-              </div>
-              <div class="dir-box short">
-                <div class="dir-header">🔴 Short <span class="muted">${dir.short.count || 0} trades</span></div>
-                <div class="dir-row"><span>Win Rate</span> <b>${num(dir.short.win_rate, 2)}%</b></div>
-                <div class="dir-row"><span>P/L</span> <b class="${(dir.short.total_pnl || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(dir.short.total_pnl)}</b></div>
-                <div class="dir-row"><span>Average</span> <b class="${(dir.short.avg_pnl || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(dir.short.avg_pnl)}</b></div>
-              </div>
-            </div>
-          </div>
-          <div class="panel glass">
-            <div class="panel-title">🎲 Monte Carlo Simulation</div>
-            <div style="height: 250px;"><canvas id="monteCarloChart"></canvas></div>
-            <div class="muted" style="font-size: 0.75rem; margin-top: 10px;">
-              Projected future profit distribution based on ${s.total_trades || 0} trades.
-              Probability of positive outcome: <b>${num(payload.monte_carlo?.stats?.prob_positive, 1)}%</b>
-            </div>
-          </div>
-        </section>
-
-        <section class="two-col">
-          <div class="panel glass">
-            <div class="panel-title">🏆 Wins vs Losses</div>
-            <div class="direction-grid">
-              <div class="dir-box long">
-                <div class="dir-header">🟢 Winning Trades <span class="muted">${wl.winning.count || 0}</span></div>
-                <div class="dir-row"><span>Best Win</span><b class="pos-txt">${usd(wl.winning.best_win)}</b></div>
-                <div class="dir-row"><span>Average Win</span><b>${usd(wl.winning.avg_win)}</b></div>
-                <div class="dir-row"><span>Avg Duration</span><b>${hours(wl.winning.avg_duration_hours)}</b></div>
-                <div class="dir-row"><span>Max Consecutive</span><b>${num(wl.winning.max_consecutive, 0)}</b></div>
-              </div>
-              <div class="dir-box short">
-                <div class="dir-header">🔴 Losing Trades <span class="muted">${wl.losing.count || 0}</span></div>
-                <div class="dir-row"><span>Worst Loss</span><b class="neg-txt">${usd(wl.losing.worst_loss)}</b></div>
-                <div class="dir-row"><span>Average Loss</span><b>${usd(wl.losing.avg_loss)}</b></div>
-                <div class="dir-row"><span>Avg Duration</span><b>${hours(wl.losing.avg_duration_hours)}</b></div>
-                <div class="dir-row"><span>Max Consecutive</span><b>${num(wl.losing.max_consecutive, 0)}</b></div>
-              </div>
-            </div>
-          </div>
-          <div class="panel glass">
-            <div class="panel-title">⚖️ Risk-Reward Analysis</div>
-            <div class="kpi-grid" style="grid-template-columns: repeat(3, 1fr);">
-              ${kpiCard("Avg RR Ratio", num(rr.avg_rr_ratio), "")}
-              ${kpiCard("Max RR Ratio", num(rr.max_rr_ratio), "")}
-              ${kpiCard("RR Relative Win/Loss", num(rr.win_loss_ratio_relative_rr), "")}
-              ${kpiCard("Expected RR (ER)", num(rr.expected_rr), "", (rr.expected_rr || 0) >= 0 ? "pos" : "neg")}
-              ${kpiCard("Avg Risk/Trade", usd(rr.avg_risk_trade), "")}
-              ${kpiCard("Avg Reward/Trade", usd(rr.avg_reward_trade), "")}
-            </div>
-          </div>
-        </section>
-
-        <section class="two-col">
-          <div class="panel glass">
-            <div class="panel-title">📅 Profit by Day ${time.best_day ? `<small class="muted">Best: ${time.best_day.label} (${usd(time.best_day.pnl_usd)})</small>` : ""}</div>
-            <canvas id="weekdayChart" height="150"></canvas>
-          </div>
-          <div class="panel glass">
-            <div class="panel-title">⏰ Profit by Hour ${time.best_hour ? `<small class="muted">Best: ${time.best_hour.label} (${usd(time.best_hour.pnl_usd)})</small>` : ""}</div>
-            <canvas id="hourChart" height="150"></canvas>
-          </div>
-        </section>
-
-        <section class="panel glass">
-          <div class="panel-title">📑 Trade-by-Trade Table</div>
-          <table class="grid-table">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Symbol</th>
-                <th>Type</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>PnL</th>
-                <th>Status</th>
-                <th>Replay</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${payload.trades.map(t => `
-                <tr>
-                  <td>${(t.ts_open || "").slice(5, 16).replace("T", " ")}</td>
-                  <td><b>${t.symbol}</b></td>
-                  <td class="${String(t.direction).toUpperCase() === "LONG" ? "pos-txt" : "neg-txt"}">${String(t.direction).toUpperCase()}</td>
-                  <td>${t.entry}</td>
-                  <td>${t.exit_price || "-"}</td>
-                  <td class="${(t.pnl_usd || 0) >= 0 ? "pos-txt" : "neg-txt"}">${usd(t.pnl_usd)}</td>
-                  <td><span class="badge ${t.outcome}">${t.outcome}</span></td>
-                  <td><button class="btn icon-btn" onclick="openPlayback(${t.id})">▶️</button></td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </section>
-      `;
-
-      const eqCtx = document.getElementById("equityChart").getContext("2d");
-      const eqGradient = eqCtx.createLinearGradient(0, 0, 0, 400);
-      eqGradient.addColorStop(0, "rgba(16, 185, 129, 0.2)");
-      eqGradient.addColorStop(1, "rgba(16, 185, 129, 0)");
-      new Chart(eqCtx, {
-        type: "line",
-        data: {
-          labels: payload.equity.map(p => p.ts ? p.ts.slice(5, 10) : "Start"),
-          datasets: [{
-            label: "Balance",
-            data: payload.equity.map(p => p.balance),
-            borderColor: "#10b981",
-            borderWidth: 2,
-            fill: true,
-            backgroundColor: eqGradient,
-            tension: 0.3,
-            pointRadius: 0
-          }]
-        },
-        options: {
-          maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { grid: { display: false }, ticks: { color: "#64748b" } },
-            y: { grid: { color: "rgba(255,255,255,0.05)" }, ticks: { color: "#64748b" } }
-          }
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lingonberry Journal</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-      });
 
-      new Chart(document.getElementById("dnaChart"), {
-        type: "radar",
-        data: {
-          labels: ["Consistency", "Reliability", "Discipline", "Profitability", "Safety"],
-          datasets: [{
-            data: Object.values(ana.strategy_dna || {}),
-            backgroundColor: "rgba(99, 102, 241, 0.2)",
-            borderColor: "#6366f1",
-            borderWidth: 2,
-            pointBackgroundColor: "#6366f1"
-          }]
-        },
-        options: {
-          plugins: { legend: { display: false } },
-          scales: {
-            r: {
-              angleLines: { color: "rgba(255,255,255,0.1)" },
-              grid: { color: "rgba(255,255,255,0.1)" },
-              pointLabels: { color: "#9ca3af", font: { size: 10 } },
-              ticks: { display: false },
-              suggestedMin: 0,
-              suggestedMax: 10
-            }
-          }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 100%);
+            color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
         }
-      });
 
-      const sims = payload.monte_carlo?.simulations || [[s.balance || 0]];
-      new Chart(document.getElementById("monteCarloChart"), {
-        type: "line",
-        data: {
-          labels: sims[0].map((_, i) => i),
-          datasets: sims.slice(0, 20).map(sim => ({
-            data: sim,
-            borderColor: "rgba(99, 102, 241, 0.1)",
-            borderWidth: 1,
-            fill: false,
-            pointRadius: 0
-          }))
-        },
-        options: {
-          maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { display: false },
-            y: { grid: { color: "rgba(255,255,255,0.05)" }, ticks: { color: "#64748b" } }
-          }
+        .container {
+            max-width: 600px;
+            text-align: center;
         }
-      });
 
-      function renderBarChart(id, labels, dataMap) {
-        const ctx = document.getElementById(id).getContext("2d");
-        const vals = labels.map(label => (dataMap[label]?.pnl_usd || 0));
-        new Chart(ctx, {
-          type: "bar",
-          data: {
-            labels,
-            datasets: [{
-              data: vals,
-              backgroundColor: vals.map(v => v >= 0 ? "#10b981" : "#ef4444"),
-              borderRadius: 4
-            }]
-          },
-          options: {
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-              x: { ticks: { color: "#64748b", font: { size: 10 } }, grid: { display: false } },
-              y: { display: false }
-            }
-          }
-        });
-      }
-
-      renderBarChart("weekdayChart", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], ana.by_weekday || {});
-      renderBarChart("hourChart", Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`), ana.by_hour || {});
-
-      window.openPlayback = async (tradeId) => {
-        try {
-          const res = await fetch(`/api/trades/${tradeId}/playback`);
-          if (!res.ok) throw new Error("Playback failed");
-          const data = await res.json();
-          if (data.candles && data.candles.length > 0) {
-            alert(`📽️ Trade Replay for ${data.trade.symbol} started!\nLoaded ${data.candles.length} candles from cTrader.\n\n[Interactive Chart Coming Soon]`);
-          } else {
-            alert(`⚠️ No candle data cached for trade #${tradeId}.`);
-          }
-        } catch (err) {
-          alert("❌ Failed to fetch playback data: " + err.message);
+        .logo {
+            font-size: 64px;
+            margin-bottom: 24px;
         }
-      };
 
-      document.getElementById("themeToggle").onclick = () => {
-        const rootHtml = document.documentElement;
-        const current = rootHtml.getAttribute("data-theme");
-        rootHtml.setAttribute("data-theme", current === "dark" ? "light" : "dark");
-      };
-    </script>
-  </body>
+        h1 {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, #ffffff 0%, #8b92a8 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            font-size: 18px;
+            color: #8b92a8;
+            margin-bottom: 48px;
+        }
+
+        .card {
+            background: rgba(20, 24, 36, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+
+        .btn {
+            display: inline-block;
+            background: #6366f1;
+            color: white;
+            padding: 16px 32px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            margin: 8px;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #4f46e5;
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .info {
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 32px;
+            text-align: left;
+        }
+
+        .info h3 {
+            font-size: 16px;
+            margin-bottom: 12px;
+            color: #6366f1;
+        }
+
+        .info p {
+            font-size: 14px;
+            color: #8b92a8;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+
+        code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="logo">🍒</div>
+        <h1>Lingonberry Journal</h1>
+        <p class="subtitle">Simple Trading Journal for Prop Firm Traders</p>
+
+        <div class="card">
+            <h2 style="margin-bottom: 24px; font-size: 24px;">Choose Your Interface</h2>
+            <a href="/mini" class="btn">📱 Mini App (Mobile)</a>
+            <a href="/analytics" class="btn btn-secondary">📊 Analytics</a>
+            <a href="/weekly" class="btn btn-secondary">📅 Weekly Review</a>
+        </div>
+
+        <div class="info">
+            <h3>🤖 Telegram Bot Commands</h3>
+            <p><code>/journal</code> - Log a new trade</p>
+            <p><code>/stats</code> - View statistics</p>
+            <p><code>/open</code> - See open positions</p>
+            <p><code>/weekly</code> - Weekly review</p>
+            <p><code>/mini</code> - Open Mini App</p>
+        </div>
+
+        <div class="info" style="margin-top: 16px;">
+            <h3>📊 API Endpoints</h3>
+            <p><code>GET /api/dashboard</code> - Dashboard data</p>
+            <p><code>GET /api/trades</code> - All trades</p>
+            <p><code>GET /api/analytics/monte-carlo</code> - Monte Carlo stats</p>
+            <p><code>GET /api/review/week</code> - Weekly review</p>
+        </div>
+    </div>
+</body>
+
 </html>

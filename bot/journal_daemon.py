@@ -19,7 +19,7 @@ from bot.session_detector import detect_session
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://brusnyak.github.io/lingonberry_journal/dashboard.html")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "http://localhost:5000/mini")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_JOURNAL") or os.getenv("TELEGRAM_JOURAL")
 AUTH_ID = int(os.getenv("TELEGRAM_JOURNAL_CHAT", "0") or "0")
 
@@ -297,12 +297,12 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
     
-    # Send direct link to avoid BotFather cache issues
-    mini_app_url = "https://brusnyak.github.io/lingonberry_journal/dashboard.html"
+    # For now, direct users to local webapp
     await update.message.reply_text(
-        f"📊 Open your trading dashboard:\n\n{mini_app_url}\n\n"
-        "Or use the button below:",
-        reply_markup=_webapp_keyboard()
+        "📊 Trading Dashboard\n\n"
+        "Open in your browser:\n"
+        "http://localhost:5000\n\n"
+        "Make sure webapp is running: `make webapp`"
     )
 
 

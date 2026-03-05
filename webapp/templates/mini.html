@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Lingonberry Journal</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --bg: #0a0e1a;
+        --panel: #141824;
+        --panel-light: #1a1f2e;
+        --border: rgba(255, 255, 255, 0.08);
+        --text: #ffffff;
+        --text-muted: #8b92a8;
+        --accent: #6366f1;
+        --green: #10b981;
+        --red: #ef4444;
+        --radius: 12px;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        padding: 0;
+        margin: 0;
+        overflow-x: hidden;
+      }
+
+      .container {
+        max-width: 100%;
+        padding: 16px;
+        padding-bottom: 80px;
+      }
+
+      .header {
+        margin-bottom: 24px;
+      }
+
+      .header h1 {
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 4px;
+      }
+
+      .header .subtitle {
+        color: var(--text-muted);
+        font-size: 14px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+
+      .card-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-muted);
+        margin-bottom: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+      }
+
+      .stat-box {
+        background: var(--panel-light);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .stat-label {
+        font-size: 11px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 6px;
+      }
+
+      .stat-value {
+        font-size: 24px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .stat-value.positive {
+        color: var(--green);
+      }
+
+      .stat-value.negative {
+        color: var(--red);
+      }
+
+      .chart-container {
+        position: relative;
+        height: 220px;
+        margin: 12px 0;
+      }
+
+      .trade-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .trade-item {
+        background: var(--panel-light);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .trade-info {
+        flex: 1;
+      }
+
+      .trade-symbol {
+        font-weight: 600;
+        font-size: 15px;
+        margin-bottom: 4px;
+      }
+
+      .trade-details {
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .trade-pnl {
+        font-size: 18px;
+        font-weight: 700;
+        text-align: right;
+      }
+
+      .stat-sublabel {
+        font-size: 10px;
+        color: var(--text-muted);
+        margin-top: 4px;
+      }
+
+      .trade-notes {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 4px;
+        font-style: italic;
+      }
+
+      .trade-pnl-container {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+      }
+
+      .trade-pnl-pct {
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .trade-item {
+        transition:
+          background-color 0.2s,
+          transform 0.1s;
+      }
+
+      .trade-item:hover {
+        background: var(--panel);
+      }
+
+      .trade-item:active {
+        transform: scale(0.98);
+      }
+
+      .loading {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--text-muted);
+      }
+
+      .loading-spinner {
+        width: 40px;
+        height: 40px;
+        border: 3px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 16px;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .error {
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid var(--red);
+        padding: 16px;
+        border-radius: var(--radius);
+        color: var(--red);
+        margin: 20px 0;
+      }
+
+      .error-title {
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+
+      .btn {
+        background: var(--accent);
+        color: white;
+        border: none;
+        padding: 14px;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        width: 100%;
+        margin-top: 12px;
+      }
+
+      .btn:active {
+        opacity: 0.8;
+      }
+
+      .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--text-muted);
+      }
+
+      .empty-state-icon {
+        font-size: 48px;
+        margin-bottom: 12px;
+      }
+
+      /* Bottom Navigation */
+      .bottom-nav {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: var(--panel);
+        border-top: 1px solid var(--border);
+        display: flex;
+        justify-content: space-around;
+        padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+        z-index: 100;
+      }
+
+      .nav-item {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 8px;
+        color: var(--text-muted);
+        text-decoration: none;
+        font-size: 11px;
+        font-weight: 600;
+        transition: color 0.2s;
+      }
+
+      .nav-item.active {
+        color: var(--accent);
+      }
+
+      .nav-icon {
+        font-size: 20px;
+      }
+
+      /* Page container with bottom padding for nav */
+      .page {
+        display: none;
+      }
+
+      .page.active {
+        display: block;
+      }
+
+      /* Refresh button */
+      .refresh-btn {
+        background: var(--panel-light);
+        border: 1px solid var(--border);
+        color: var(--text-muted);
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 12px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .refresh-btn:active {
+        opacity: 0.7;
+      }
+
+      /* Skeleton loading */
+      .skeleton {
+        background: linear-gradient(
+          90deg,
+          var(--panel-light) 25%,
+          var(--panel) 50%,
+          var(--panel-light) 75%
+        );
+        background-size: 200% 100%;
+        animation: skeleton-loading 1.5s ease-in-out infinite;
+        border-radius: 8px;
+      }
+
+      @keyframes skeleton-loading {
+        0% {
+          background-position: 200% 0;
+        }
+
+        100% {
+          background-position: -200% 0;
+        }
+      }
+
+      .skeleton-text {
+        height: 16px;
+        margin-bottom: 8px;
+      }
+
+      .skeleton-stat {
+        height: 80px;
+      }
+    </style>
+  </head>
+
+  <body class="theme-ftmo">
+    <!-- Dashboard Page -->
+    <div id="dashboardPage" class="page active">
+      <div class="container">
+        <div
+          class="header"
+          style="
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 16px;
+          "
+        >
+          <div>
+            <h1>📊 Dashboard</h1>
+            <div class="subtitle" id="lastUpdate">Loading...</div>
+          </div>
+          <div id="accountSelector"></div>
+        </div>
+        <div id="accountRulesDisplay"></div>
+        <div id="dashboardDateFilter"></div>
+        <div id="dashboardContent">
+          <div class="loading">
+            <div class="loading-spinner"></div>
+            <div>Loading your trading data...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Analytics Page -->
+    <div id="analyticsPage" class="page">
+      <div class="container">
+        <div class="header">
+          <h1>📈 Analytics</h1>
+          <div class="subtitle">Advanced performance insights</div>
+        </div>
+        <div id="analyticsContent">
+          <div class="card">
+            <div class="card-title">Coming Soon</div>
+            <p style="color: var(--text-muted)">
+              Advanced analytics including time-based heatmaps, risk-reward
+              distribution, and consistency metrics will be available here.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Weekly Page -->
+    <div id="weeklyPage" class="page">
+      <div class="container">
+        <div class="header">
+          <h1>📅 Weekly Review</h1>
+          <div class="subtitle">Redirecting to full page...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Navigation -->
+    <nav class="bottom-nav">
+      <a href="#dashboard" class="nav-item active" data-page="dashboard">
+        <div class="nav-icon">📊</div>
+        <div>Dashboard</div>
+      </a>
+      <a href="#analytics" class="nav-item" data-page="analytics">
+        <div class="nav-icon">📈</div>
+        <div>Analytics</div>
+      </a>
+      <a href="#weekly" class="nav-item" data-page="weekly">
+        <div class="nav-icon">📅</div>
+        <div>Weekly</div>
+      </a>
+    </nav>
+
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/filters.js"></script>
+    <script src="/static/js/trade-modal.js"></script>
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/account-manager.js"></script>
+    <script src="/static/js/account-rules.js"></script>
+    <script>
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.ready();
+        tg.expand();
+        // Only set colors if supported (v6.1+)
+        if (tg.setHeaderColor && tg.version >= "6.1") {
+          tg.setHeaderColor("#0a0e1a");
+        }
+        if (tg.setBackgroundColor && tg.version >= "6.1") {
+          tg.setBackgroundColor("#0a0e1a");
+        }
+      }
+
+      // Navigation
+      const pages = {
+        dashboard: document.getElementById("dashboardPage"),
+        analytics: document.getElementById("analyticsPage"),
+        weekly: document.getElementById("weeklyPage"),
+      };
+
+      const navItems = document.querySelectorAll(".nav-item");
+
+      function showPage(pageName) {
+        // Hide all pages
+        Object.values(pages).forEach((page) => page.classList.remove("active"));
+
+        // Show selected page
+        if (pages[pageName]) {
+          pages[pageName].classList.add("active");
+        }
+
+        // Update nav active state
+        navItems.forEach((item) => {
+          if (item.dataset.page === pageName) {
+            item.classList.add("active");
+          } else {
+            item.classList.remove("active");
+          }
+        });
+
+        // Load page content if needed
+        if (pageName === "dashboard" && !window.dashboardLoaded) {
+          loadDashboard();
+        } else if (pageName === "analytics" && !window.analyticsLoaded) {
+          loadAnalytics();
+        } else if (pageName === "weekly" && !window.weeklyLoaded) {
+          loadWeekly();
+        }
+      }
+
+      // Handle navigation clicks
+      navItems.forEach((item) => {
+        item.addEventListener("click", (e) => {
+          e.preventDefault();
+          const pageName = item.dataset.page;
+          showPage(pageName);
+          window.location.hash = pageName;
+        });
+      });
+
+      // Handle browser back/forward
+      window.addEventListener("hashchange", () => {
+        const hash = window.location.hash.slice(1) || "dashboard";
+        showPage(hash);
+      });
+
+      // Dashboard loading
+      let dashboardDateFilter;
+      let currentDashboardDateRange = {};
+      let accountRulesDisplay;
+
+      async function loadDashboard(
+        useCache = true,
+        dateRange = currentDashboardDateRange,
+      ) {
+        try {
+          currentDashboardDateRange = dateRange;
+
+          // Get current account ID
+          const accountId = accountManager?.getCurrentAccountId();
+          const params = { ...dateRange };
+          if (accountId) params.account_id = accountId;
+
+          // Try cache first
+          if (useCache && Object.keys(dateRange).length === 0) {
+            const cached = api.getCached("/dashboard");
+            if (cached) {
+              renderDashboard(cached);
+              document.getElementById("lastUpdate").textContent =
+                `Cached ${new Date().toLocaleTimeString()}`;
+              // Load fresh data in background
+              loadDashboard(false, dateRange);
+              return;
+            }
+          }
+
+          const data = await api.getDashboard(params);
+          renderDashboard(data);
+          window.dashboardLoaded = true;
+
+          document.getElementById("lastUpdate").textContent =
+            `Updated ${new Date().toLocaleTimeString()}`;
+
+          // Update account rules display
+          if (accountManager?.currentAccount && accountRulesDisplay) {
+            accountRulesDisplay.update(
+              accountManager.currentAccount,
+              data.stats,
+            );
+          }
+        } catch (err) {
+          console.error("Error loading dashboard:", err);
+
+          // Try to show cached data on error
+          const cached = api.getCached("/dashboard");
+          if (cached) {
+            renderDashboard(cached);
+            document.getElementById("lastUpdate").textContent =
+              `⚠️ Offline - showing cached data`;
+          } else {
+            renderError(err);
+          }
+        }
+      }
+
+      function renderError(err) {
+        document.getElementById("dashboardContent").innerHTML = `
+                <div class="error">
+                    <div class="error-title">⚠️ Unable to Load Data</div>
+                    <p>Make sure your Flask backend is running:</p>
+                    <code style="display: block; margin: 8px 0; padding: 8px; background: rgba(0,0,0,0.3); border-radius: 4px;">
+                        make webapp
+                    </code>
+                    <p style="margin-top: 12px; font-size: 12px;">
+                        Error: ${err.message}
+                    </p>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">Quick Commands</div>
+                    <div style="font-size: 14px; line-height: 1.8;">
+                        <div><code>/journal</code> - Log a new trade</div>
+                        <div><code>/stats</code> - View statistics</div>
+                        <div><code>/open</code> - See open positions</div>
+                    </div>
+                </div>
+            `;
+      }
+
+      function renderDashboard(data) {
+        const stats = data.stats || {};
+        const trades = (data.trades || []).slice(0, 20); // Show more trades
+        const equity = data.equity || [];
+        const analytics = data.analytics || {};
+        const distributions = data.distributions || {};
+        const openTrades = data.open_trades || [];
+
+        const netPnl = (stats.balance || 0) - (stats.initial_balance || 0);
+        const netPnlClass = netPnl >= 0 ? "positive" : "negative";
+
+        // Calculate additional metrics
+        const avgWin = stats.avg_win_usd || 0;
+        const avgLoss = stats.avg_loss_usd || 0;
+        const winRate = stats.win_rate || 0;
+        const profitFactor = stats.profit_factor || 0;
+        const sharpe = stats.sharpe_ratio || 0;
+        const maxDD = stats.max_drawdown_pct || 0;
+        const expectancy = stats.expectancy || 0;
+
+        // Directional stats (from analytics.by_direction)
+        const byDirection = analytics.by_direction || {};
+        const longStats = byDirection.long || {
+          count: 0,
+          total_pnl: 0,
+          win_rate: 0,
+        };
+        const shortStats = byDirection.short || {
+          count: 0,
+          total_pnl: 0,
+          win_rate: 0,
+        };
+
+        document.getElementById("dashboardContent").innerHTML = `
+                <!-- Account Summary -->
+                <div class="card">
+                    <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>💼 Account Performance</span>
+                        <button class="refresh-btn" onclick="loadDashboard(false, currentDashboardDateRange)">
+                            🔄 Refresh
+                        </button>
+                    </div>
+                    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr);">
+                        <div class="stat-box">
+                            <div class="stat-label">Balance</div>
+                            <div class="stat-value">${stats.balance?.toFixed(2) || "0.00"}</div>
+                            <div class="stat-sublabel">Initial: ${stats.initial_balance?.toFixed(2) || "0.00"}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Net P&L</div>
+                            <div class="stat-value ${netPnlClass}">
+                                ${netPnl >= 0 ? "+" : ""}${netPnl.toFixed(2)}
+                            </div>
+                            <div class="stat-sublabel ${netPnlClass}">
+                                ${stats.growth_pct >= 0 ? "+" : ""}${(stats.growth_pct || 0).toFixed(2)}%
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Key Metrics -->
+                <div class="card">
+                    <div class="card-title">📈 Key Metrics</div>
+                    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr);">
+                        <div class="stat-box">
+                            <div class="stat-label">Win Rate</div>
+                            <div class="stat-value">${winRate.toFixed(1)}%</div>
+                            <div class="stat-sublabel">${stats.wins || 0}W / ${stats.losses || 0}L</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Profit Factor</div>
+                            <div class="stat-value ${profitFactor >= 1.5 ? "positive" : profitFactor >= 1 ? "" : "negative"}">
+                                ${profitFactor.toFixed(2)}
+                            </div>
+                            <div class="stat-sublabel">${profitFactor >= 1.5 ? "Excellent" : profitFactor >= 1 ? "Good" : "Poor"}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Avg Win</div>
+                            <div class="stat-value positive">+${avgWin.toFixed(2)}</div>
+                            <div class="stat-sublabel">Per winning trade</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Avg Loss</div>
+                            <div class="stat-value negative">-${avgLoss.toFixed(2)}</div>
+                            <div class="stat-sublabel">Per losing trade</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Expectancy</div>
+                            <div class="stat-value ${expectancy >= 0 ? "positive" : "negative"}">
+                                ${expectancy >= 0 ? "+" : ""}${expectancy.toFixed(2)}
+                            </div>
+                            <div class="stat-sublabel">Per trade</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Max Drawdown</div>
+                            <div class="stat-value ${maxDD > 10 ? "negative" : ""}">
+                                ${maxDD.toFixed(2)}%
+                            </div>
+                            <div class="stat-sublabel">${maxDD > 10 ? "High risk" : "Controlled"}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Session Distribution -->
+                ${
+                  Object.keys(distributions.session || {}).length > 0
+                    ? `
+                <div class="card">
+                    <div class="card-title">🌍 Session Distribution</div>
+                    <div id="sessionStats"></div>
+                </div>
+                `
+                    : ""
+                }
+
+                <!-- Directional Breakdown -->
+                <div class="card">
+                    <div class="card-title">🎯 Directional Analysis</div>
+                    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr);">
+                        <div class="stat-box" style="border-left: 3px solid var(--green);">
+                            <div class="stat-label">� LONG</div>
+                            <div class="stat-value ${longStats.total_pnl >= 0 ? "positive" : "negative"}">
+                                ${longStats.total_pnl >= 0 ? "+" : ""}${(longStats.total_pnl || 0).toFixed(2)}
+                            </div>
+                            <div class="stat-sublabel">
+                                ${longStats.count || 0} trades • ${(longStats.win_rate || 0).toFixed(1)}% WR
+                            </div>
+                        </div>
+                        <div class="stat-box" style="border-left: 3px solid var(--red);">
+                            <div class="stat-label">🔴 SHORT</div>
+                            <div class="stat-value ${shortStats.total_pnl >= 0 ? "positive" : "negative"}">
+                                ${shortStats.total_pnl >= 0 ? "+" : ""}${(shortStats.total_pnl || 0).toFixed(2)}
+                            </div>
+                            <div class="stat-sublabel">
+                                ${shortStats.count || 0} trades • ${(shortStats.win_rate || 0).toFixed(1)}% WR
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Equity Curve -->
+                <div class="card">
+                    <div class="card-title">📊 Equity Curve</div>
+                    <div class="chart-container">
+                        <canvas id="equityChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Open Positions -->
+                ${
+                  openTrades.length > 0
+                    ? `
+                <div class="card">
+                    <div class="card-title">🔓 Open Positions (${openTrades.length})</div>
+                    <div id="openTradesList"></div>
+                </div>
+                `
+                    : ""
+                }
+
+                <!-- Recent Trades -->
+                <div class="card">
+                    <div class="card-title">📋 Recent Trades (${trades.length})</div>
+                    <div id="tradesList"></div>
+                </div>
+            `;
+
+        createEquityChart("equityChart", equity);
+
+        if (openTrades.length > 0) {
+          renderOpenTrades(openTrades);
+        }
+
+        renderTrades(trades);
+
+        if (Object.keys(distributions.session || {}).length > 0) {
+          renderSessionStats(distributions.session);
+        }
+      }
+
+      // Show trade detail modal
+      function showTradeDetail(tradeId) {
+        tradeModal.open(tradeId);
+      }
+
+      function renderTrades(trades) {
+        const container = document.getElementById("tradesList");
+        if (!container) return;
+
+        if (trades.length === 0) {
+          container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <div>No trades yet</div>
+                        <div style="font-size: 12px; margin-top: 8px;">
+                            Use /journal to log your first trade
+                        </div>
+                    </div>
+                `;
+          return;
+        }
+
+        container.innerHTML = `
+                <div class="trade-list">
+                    ${trades
+                      .map((t) => {
+                        const pnl = t.pnl_usd || 0;
+                        const pnlClass = pnl >= 0 ? "positive" : "negative";
+                        const direction = String(
+                          t.direction || "",
+                        ).toUpperCase();
+                        const directionEmoji =
+                          direction === "LONG" ? "🟢" : "🔴";
+                        const outcome = t.outcome || "OPEN";
+                        const outcomeEmoji =
+                          outcome === "TP"
+                            ? "✅"
+                            : outcome === "SL"
+                              ? "❌"
+                              : outcome === "OPEN"
+                                ? "🔓"
+                                : "⚪";
+
+                        // Calculate RR if available
+                        const rr = t.rr_ratio
+                          ? `RR ${t.rr_ratio.toFixed(2)}`
+                          : "";
+
+                        // Format date
+                        const date = (t.ts_open || "")
+                          .slice(5, 16)
+                          .replace("T", " ");
+
+                        // Session emoji
+                        const session = t.session || "";
+                        const sessionEmoji =
+                          session === "Asian"
+                            ? "🌏"
+                            : session === "London"
+                              ? "🇬🇧"
+                              : session === "NY"
+                                ? "🇺🇸"
+                                : "";
+
+                        return `
+                    <div class="trade-item" style="cursor: pointer;" onclick="showTradeDetail(${t.id})">
+                        <div class="trade-info">
+                            <div class="trade-symbol">
+                                ${directionEmoji} ${t.symbol} ${direction} ${outcomeEmoji}
+                            </div>
+                            <div class="trade-details">
+                                ${date} ${sessionEmoji} ${session ? session : ""} ${rr ? "• " + rr : ""}
+                            </div>
+                            ${t.notes ? `<div class="trade-notes">${t.notes.slice(0, 50)}${t.notes.length > 50 ? "..." : ""}</div>` : ""}
+                        </div>
+                        <div class="trade-pnl-container">
+                            <div class="trade-pnl ${pnlClass}">
+                                ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                            </div>
+                            ${t.pnl_pct ? `<div class="trade-pnl-pct ${pnlClass}">${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%</div>` : ""}
+                        </div>
+                    </div>
+                `;
+                      })
+                      .join("")}
+                </div>
+            `;
+      }
+
+      function renderOpenTrades(trades) {
+        const container = document.getElementById("openTradesList");
+        if (!container) return;
+
+        container.innerHTML = `
+                <div class="trade-list">
+                    ${trades
+                      .map((t) => {
+                        const direction = String(
+                          t.direction || "",
+                        ).toUpperCase();
+                        const directionEmoji =
+                          direction === "LONG" ? "🟢" : "🔴";
+                        const entry = t.entry_price || t.entry || 0;
+                        const sl = t.sl_price || t.sl || 0;
+                        const tp = t.tp_price || t.tp || 0;
+                        const rr = t.rr_ratio
+                          ? `RR ${t.rr_ratio.toFixed(2)}`
+                          : "";
+                        const date = (t.ts_open || "")
+                          .slice(5, 16)
+                          .replace("T", " ");
+
+                        return `
+                    <div class="trade-item" style="border-left: 3px solid var(--accent);">
+                        <div class="trade-info">
+                            <div class="trade-symbol">
+                                ${directionEmoji} ${t.symbol} ${direction} 🔓
+                            </div>
+                            <div class="trade-details">
+                                Entry: ${entry.toFixed(5)} • SL: ${sl.toFixed(5)} • TP: ${tp.toFixed(5)}
+                            </div>
+                            <div class="trade-details">
+                                ${date} ${rr ? "• " + rr : ""}
+                            </div>
+                        </div>
+                        <div class="trade-pnl-container">
+                            <div style="font-size: 12px; color: var(--text-muted);">OPEN</div>
+                        </div>
+                    </div>
+                `;
+                      })
+                      .join("")}
+                </div>
+            `;
+      }
+
+      function renderSessionStats(sessionData) {
+        const container = document.getElementById("sessionStats");
+        if (!container) return;
+
+        const sessions = Object.entries(sessionData).sort(
+          (a, b) => b[1] - a[1],
+        );
+        const total = sessions.reduce((sum, [_, count]) => sum + count, 0);
+
+        container.innerHTML = `
+                <div class="stats-grid" style="grid-template-columns: repeat(${Math.min(sessions.length, 3)}, 1fr);">
+                    ${sessions
+                      .map(([session, count]) => {
+                        const pct = ((count / total) * 100).toFixed(1);
+                        const emoji =
+                          session === "Asian"
+                            ? "🌏"
+                            : session === "London"
+                              ? "🇬🇧"
+                              : session === "NY"
+                                ? "🇺🇸"
+                                : "🌍";
+
+                        return `
+                    <div class="stat-box">
+                        <div class="stat-label">${emoji} ${session}</div>
+                        <div class="stat-value">${count}</div>
+                        <div class="stat-sublabel">${pct}% of trades</div>
+                    </div>
+                `;
+                      })
+                      .join("")}
+                </div>
+            `;
+      }
+
+      function showTradeDetail(tradeId) {
+        // Open trade modal with full details
+        tradeModal.open(tradeId);
+      }
+
+      // Analytics page (redirect to full page)
+      function loadAnalytics() {
+        // Redirect directly to full analytics page
+        window.location.href = "/analytics";
+      }
+
+      // Weekly page (redirect to full page)
+      function loadWeekly() {
+        // Redirect directly to full weekly page
+        window.location.href = "/weekly";
+      }
+
+      // Initialize
+      const initialPage = window.location.hash.slice(1) || "dashboard";
+
+      // Wait for account manager to initialize
+      window.addEventListener("DOMContentLoaded", () => {
+        // Initialize account rules display
+        accountRulesDisplay = new AccountRulesDisplay("accountRulesDisplay");
+
+        // Initialize dashboard date filter
+        dashboardDateFilter = new DateRangeFilter(
+          "dashboardDateFilter",
+          (range) => {
+            loadDashboard(false, range);
+          },
+        );
+
+        // Listen for account changes
+        window.addEventListener("accountChanged", () => {
+          loadDashboard(false, currentDashboardDateRange);
+        });
+
+        showPage(initialPage);
+      });
+
+      // Auto-refresh every 30 seconds if in Telegram
+      if (tg) {
+        setInterval(() => {
+          if (pages.dashboard.classList.contains("active")) {
+            loadDashboard(false);
+          }
+        }, 30000);
+      }
+    </script>
+  </body>
+</html>

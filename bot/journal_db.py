@@ -71,7 +71,11 @@ def init_db() -> None:
             broker TEXT,
             platform TEXT,
             timezone_name TEXT DEFAULT 'UTC',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            timezone TEXT DEFAULT 'UTC', -- Legacy support
+            current_balance REAL DEFAULT 10000, -- Legacy support
+            status TEXT DEFAULT 'ACTIVE', -- Legacy support
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
@@ -348,6 +352,66 @@ def create_trade(
     conn.commit()
     conn.close()
     return trade_id
+
+
+def add_manual_trade(
+    account_id: int,
+    symbol: str,
+    direction: str,
+    entry_price: float,
+    exit_price: float,
+    ts_open: str,
+    ts_close: str,
+    lots: float = 0.1,
+    asset_type: str = "forex",
+    notes: str = "",
+    outcome: str = "TP",
+) -> int:
+    """Add a finished trade manually"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Calculate P&L
+    pnl_usd = 0.0
+    pnl_pct = 0.0
+    if direction.upper() == "LONG":
+        pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+    else:
+        pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+    
+    # Simple estimate: 1 lot = 100,000 units, so 1 pip = $10 approx
+    # This is vary crude but for manual logs it might be enough if not provided
+    pnl_usd = (pnl_pct / 100) * 100000 * lots 
+
+    cursor.execute(
+        """
+        INSERT INTO trades (
+            account_id, symbol, asset_type, direction, 
+            entry_price, exit_price, ts_open, ts_close, 
+            position_size, lot_size, pnl_usd, pnl_pct, 
+            outcome, notes, source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            account_id, symbol, asset_type, direction.upper(),
+            entry_price, exit_price, ts_open, ts_close,
+            lots, lots, pnl_usd, pnl_pct,
+            outcome, notes, "manual_web"
+        ),
+    )
+    trade_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return trade_id
+
+
+def update_trade_chart_path(trade_id: int, chart_path: str) -> None:
+    """Update the chart_path column for a trade"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE trades SET chart_path = ? WHERE id = ?", (chart_path, trade_id))
+    conn.commit()
+    conn.close()
 
 
 def get_trade(trade_id: int) -> Optional[Dict[str, Any]]:
@@ -640,6 +704,11 @@ def get_analytics_breakdown(
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _safe_str(value: Any, default: str = "") -> str:
+        if value is None:
+            return default
+        return str(value)
 
     def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
         if not ts:

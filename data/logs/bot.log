@@ -1,14 +1,15 @@
-2026-03-03 21:40:41,029 - __main__ - INFO - Starting Trading Journal Bot...
-2026-03-03 21:40:41,115 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getMe "HTTP/1.1 200 OK"
-2026-03-03 21:40:41,140 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/deleteWebhook "HTTP/1.1 200 OK"
-2026-03-03 21:40:41,141 - telegram.ext.Application - INFO - Application started
-2026-03-03 21:40:41,235 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
-2026-03-03 21:40:41,280 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/sendMessage "HTTP/1.1 200 OK"
-2026-03-03 21:40:49,594 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
-2026-03-03 21:40:49,768 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/sendMessage "HTTP/1.1 200 OK"
-2026-03-03 21:40:52,883 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
-2026-03-03 21:40:52,944 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/sendMessage "HTTP/1.1 200 OK"
-2026-03-03 21:41:02,918 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
-2026-03-03 21:41:11,563 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
-2026-03-03 21:41:11,563 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
-2026-03-03 21:41:11,563 - telegram.ext.Application - INFO - Application.stop() complete
+2026-03-05 15:39:02,993 - __main__ - INFO - Starting Trading Journal Bot...
+2026-03-05 15:39:03,190 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getMe "HTTP/1.1 200 OK"
+2026-03-05 15:39:03,243 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/deleteWebhook "HTTP/1.1 200 OK"
+2026-03-05 15:39:03,244 - telegram.ext.Application - INFO - Application started
+2026-03-05 15:39:13,470 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:39:23,530 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:39:33,589 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:39:43,649 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:39:53,759 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:40:03,819 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:40:13,878 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:40:24,040 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:40:33,069 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8655996215:AAEA-al8tpDOsmgUcg1nmLClR0aOVduvJTk/getUpdates "HTTP/1.1 200 OK"
+2026-03-05 15:40:33,070 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
+2026-03-05 15:40:33,070 - telegram.ext.Application - INFO - Application.stop() complete
