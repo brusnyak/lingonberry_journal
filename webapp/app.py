@@ -182,86 +182,255 @@ def api_accounts_create():
     return jsonify({"account_id": account_id, "account": journal_db.get_account(account_id)}), 201
 
 
-@app.route("/api/market-data")
-def api_market_data():
+@app.route("/api/candles")
+def api_candles():
     symbol = request.args.get("symbol")
     asset_type = request.args.get("asset_type", "forex")
     timeframe = request.args.get("timeframe", "H1")
-    
-    # Calculate window: last 30 days
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=30)
-    
+    start_str = request.args.get("start")
+    end_str = request.args.get("end")
+
+    if not symbol:
+        return jsonify({"error": "Symbol is required"}), 400
+
+    try:
+        # Get current time once for consistent rounding
+        now_utc = datetime.now(timezone.utc)
+
+        # Determine 'end' timestamp
+        if end_str:
+            end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+        else:
+            # Round down to nearest 5 minutes for effective caching
+            end = now_utc.replace(minute=now_utc.minute - (now_utc.minute % 5), second=0, microsecond=0)
+            
+        # Determine 'start' timestamp
+        if start_str:
+            start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+        else:
+            # Calculate start based on the determined 'end'
+            start = end - timedelta(days=7)
+    except Exception as e:
+        return jsonify({"error": f"Invalid date format: {e}"}), 400
+
+    import pandas as pd
     df = load_ohlcv_with_cache(
         symbol=symbol,
         asset_type=asset_type,
         timeframe=timeframe,
         start=start,
-        end=end
+        end=end,
+        ttl_seconds=300
     )
-    
+
     if df.empty:
         return jsonify([])
-        
-    # Format for Lightweight Charts: { time: unixtime, open, high, low, close }
+
     result = []
     for _, row in df.iterrows():
-        result.append({
+        candle = {
             "time": int(row["ts"].timestamp()),
             "open": float(row["open"]),
             "high": float(row["high"]),
             "low": float(row["low"]),
             "close": float(row["close"]),
-        })
-    
+            "volume": float(row.get("volume", 0)),
+        }
+        # Include indicators added by infra.market_data
+        for col in df.columns:
+            if col.startswith("ema_") or col == "vwap":
+                val = row[col]
+                candle[col] = float(val) if pd.notnull(val) else None
+        result.append(candle)
+
     return jsonify(result)
+
+
+@app.route("/api/market-data")
+def api_market_data():
+    return api_candles()
 
 
 @app.route("/api/trades/manual", methods=["POST"])
 def api_trades_manual():
-    body = request.get_json(force=True, silent=True) or {}
-    required = ["symbol", "entry_price", "exit_price", "ts_open", "ts_close"]
-    if any(k not in body for k in required):
-        abort(400, description=f"required keys: {required}")
-    
-    # 1. Save trade to database
-    # Converting unixtime (JS) to ISO string for database
-    ts_open = datetime.fromtimestamp(body["ts_open"], timezone.utc).isoformat()
-    ts_close = datetime.fromtimestamp(body["ts_close"], timezone.utc).isoformat()
-    
-    # Calculate P&L (simple estimation if not provided)
-    entry = float(body["entry_price"])
-    exit = float(body["exit_price"])
-    lots = float(body.get("lots", 0.1))
-    direction = "LONG" if exit > entry else "SHORT" # Simplified
-    
-    # Actually, we should get direction from the UI if possible, but let's guess for now
-    # to keep it "simple chart logging".
-    
-    trade_id = journal_db.add_manual_trade(
-        account_id=_parse_account_id(request.args.get("account_id")) or 1,
-        symbol=body["symbol"],
-        direction=direction,
-        entry_price=entry,
-        exit_price=exit,
-        ts_open=ts_open,
-        ts_close=ts_close,
-        lots=lots,
-        notes=body.get("notes", ""),
-        outcome="TP" if (exit > entry if direction == "LONG" else exit < entry) else "SL"
-    )
-    
-    # 2. Generate charts
-    trade = journal_db.get_trade(trade_id)
-    charts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "reports")
-    chart_paths = chart_generator.generate_trade_charts(trade, charts_dir)
-    
-    # 3. Update trade with chart paths
-    if chart_paths:
-        relative_paths = [os.path.basename(p) for p in chart_paths]
-        journal_db.update_trade_chart_path(trade_id, ",".join(relative_paths))
-    
-    return jsonify({"trade_id": trade_id, "charts": chart_paths}), 201
+    """Manual trade entry with comprehensive error handling"""
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        
+        # Validate required fields
+        required = ["symbol", "entry_price", "exit_price", "ts_open", "ts_close"]
+        missing = [k for k in required if k not in body]
+        if missing:
+            return jsonify({
+                "error": "Missing required fields",
+                "missing_fields": missing,
+                "required_fields": required
+            }), 400
+        
+        # Parse and validate account_id
+        account_id = _parse_account_id(request.args.get("account_id"))
+        if not account_id:
+            # Try to get from body or default to 1
+            account_id = int(body.get("account_id", 1))
+        
+        # Validate account exists
+        account = journal_db.get_account(account_id)
+        if not account:
+            return jsonify({
+                "error": "Account not found",
+                "account_id": account_id
+            }), 404
+        
+        # Parse timestamps - handle both unix timestamps and ISO strings
+        try:
+            if isinstance(body["ts_open"], (int, float)):
+                ts_open = datetime.fromtimestamp(body["ts_open"], timezone.utc).isoformat()
+            else:
+                ts_open = body["ts_open"]
+                
+            if isinstance(body["ts_close"], (int, float)):
+                ts_close = datetime.fromtimestamp(body["ts_close"], timezone.utc).isoformat()
+            else:
+                ts_close = body["ts_close"]
+        except (ValueError, OSError) as e:
+            return jsonify({
+                "error": "Invalid timestamp format",
+                "details": str(e)
+            }), 400
+        
+        # Parse and validate prices
+        try:
+            entry = float(body["entry_price"])
+            exit_price = float(body["exit_price"])
+            lots = float(body.get("lots", 0.1))
+            sl_price = float(body["sl"]) if body.get("sl") else None
+            tp_price = float(body["tp"]) if body.get("tp") else None
+        except (ValueError, TypeError) as e:
+            return jsonify({
+                "error": "Invalid price or lot size",
+                "details": str(e)
+            }), 400
+        
+        # Determine direction - prefer explicit direction from body
+        direction = body.get("direction")
+        if not direction:
+            # Infer from entry/exit if not provided
+            direction = "LONG" if exit_price > entry else "SHORT"
+        direction = direction.upper()
+        
+        if direction not in ["LONG", "SHORT"]:
+            return jsonify({
+                "error": "Invalid direction",
+                "direction": direction,
+                "valid_values": ["LONG", "SHORT"]
+            }), 400
+        
+        # Determine outcome
+        outcome = body.get("outcome")
+        if not outcome:
+            # Infer outcome based on direction and exit price
+            if direction == "LONG":
+                outcome = "TP" if exit_price > entry else "SL"
+            else:
+                outcome = "TP" if exit_price < entry else "SL"
+        
+        # Extract metadata
+        is_perfect = body.get("is_perfect", False)
+        week_start = body.get("week_start")
+        notes = body.get("notes", "")
+        symbol = body["symbol"]
+        
+        # Build indicator_data from various sources
+        indicator_data = body.get("indicator_data", {})
+        if not isinstance(indicator_data, dict):
+            indicator_data = {}
+        
+        # Add additional fields to indicator_data
+        for key in ["mindset", "setup", "risk"]:
+            if key in body:
+                indicator_data[key] = body[key]
+        
+        # 1. Save trade to database
+        trade_id = journal_db.add_manual_trade(
+            account_id=account_id,
+            symbol=symbol,
+            direction=direction,
+            entry_price=entry,
+            exit_price=exit_price,
+            sl_price=sl_price,
+            tp_price=tp_price,
+            ts_open=ts_open,
+            ts_close=ts_close,
+            lots=lots,
+            notes=notes,
+            outcome=outcome,
+            indicator_data=indicator_data if indicator_data else None
+        )
+        
+        # 2. Update additional fields (is_perfect, week_start)
+        if is_perfect or week_start:
+            conn = journal_db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE trades SET is_perfect = ?, week_start = ? WHERE id = ?",
+                (1 if is_perfect else 0, week_start, trade_id)
+            )
+            conn.commit()
+            conn.close()
+        
+        # 3. Save drawings if provided
+        drawings = body.get("drawings", [])
+        if drawings and not isinstance(drawings, list):
+            drawings = [drawings]
+        
+        saved_drawings = []
+        for drw in drawings:
+            try:
+                drawing_id = journal_db.save_drawing(
+                    trade_id=trade_id,
+                    drawing_type=drw.get("type", "unknown"),
+                    drawing_data=json.dumps(drw),
+                    account_id=account_id,
+                    symbol=symbol,
+                    timeframe=body.get("timeframe", "H1")
+                )
+                saved_drawings.append(drawing_id)
+            except Exception as e:
+                print(f"Warning: Failed to save drawing: {e}")
+                # Continue even if drawing save fails
+        
+        # 4. Generate charts (optional, don't fail if this errors)
+        chart_paths = []
+        try:
+            trade = journal_db.get_trade(trade_id)
+            charts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "reports")
+            os.makedirs(charts_dir, exist_ok=True)
+            chart_paths = chart_generator.generate_trade_charts(trade, charts_dir)
+            
+            # Update trade with chart paths
+            if chart_paths:
+                relative_paths = [os.path.basename(p) for p in chart_paths]
+                journal_db.update_trade_chart_path(trade_id, ",".join(relative_paths))
+        except Exception as e:
+            print(f"Warning: Chart generation failed: {e}")
+            # Don't fail the request if chart generation fails
+        
+        return jsonify({
+            "success": True,
+            "trade_id": trade_id,
+            "charts": chart_paths,
+            "drawings_saved": len(saved_drawings)
+        }), 201
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error in api_trades_manual: {error_trace}")
+        return jsonify({
+            "error": "Internal server error",
+            "message": str(e),
+            "type": type(e).__name__
+        }), 500
 def api_account_update(account_id: int):
     body = request.get_json(force=True, silent=True) or {}
     

@@ -1,0 +1,78 @@
+/* ======================================
+   Global Form Styles for Right Panels
+   Used in Trade Entry + Weekly Review
+   ====================================== */
+
+/* Label */
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.input-group label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+
+/* Inputs, selects, textareas shared base */
+.form-input,
+.form-select,
+.form-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 11px;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: border-color 0.15s, background 0.15s;
+  appearance: auto; /* keep native select arrow */
+}
+
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+  background: var(--panel-2);
+}
+
+.form-input:disabled,
+.form-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* Right panel: scoped review-card form */
+.review-card form h3 {
+  margin: 0 0 20px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+/* Make sure the panel itself doesn't overflow */
+.right-side-panel {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.right-side-panel .review-card {
+  /* ensure form card isn't too wide */
+  min-width: 0;
+}

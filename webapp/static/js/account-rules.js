@@ -4,11 +4,17 @@ class AccountRulesDisplay {
         this.containerId = containerId;
         this.account = null;
         this.stats = null;
+        this.isExpanded = false; // Hidden by default
     }
 
     update(account, stats) {
         this.account = account;
         this.stats = stats;
+        this.render();
+    }
+
+    toggle() {
+        this.isExpanded = !this.isExpanded;
         this.render();
     }
 
@@ -23,118 +29,136 @@ class AccountRulesDisplay {
         // Calculate rule violations
         const rules = this.calculateRules();
 
+        const accountName = this.account.firm_name || 'Account';
+        
         container.innerHTML = `
-            <div class="rules-card">
-                <div class="rules-header">
+            <div class="rules-card ${this.isExpanded ? 'expanded' : 'collapsed'}">
+                <div class="rules-header" id="rules-toggle-btn" style="cursor: pointer; user-select: none;">
                     <div class="rules-title">
-                        <span class="rules-icon">🎯</span>
-                        <span>${this.account.firm_name || 'Account'} Rules</span>
+                        <i data-lucide="target" class="rules-icon"></i>
+                        <span>${accountName} Rules</span>
                     </div>
-                    <div class="rules-status ${rules.status}">
-                        ${rules.status === 'safe' ? '✓ Safe' : rules.status === 'warning' ? '⚠ Warning' : '❌ Danger'}
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div class="rules-status ${rules.status}">
+                            ${rules.status === 'safe' ? '✓' : rules.status === 'warning' ? '⚠' : '❌'}
+                        </div>
+                        <i data-lucide="${this.isExpanded ? 'chevron-up' : 'chevron-down'}" style="width: 16px; height: 16px; color: var(--muted);"></i>
                     </div>
                 </div>
 
-                <div class="rules-grid">
-                    <!-- Balance Progress -->
-                    <div class="rule-item">
-                        <div class="rule-label">
-                            <span>Current Balance</span>
-                            <span class="rule-value ${growth >= 0 ? 'positive' : 'negative'}">
-                                ${balance.toFixed(2)} ${this.account.currency}
-                            </span>
-                        </div>
-                        <div class="rule-progress">
-                            <div class="progress-bar">
-                                <div class="progress-fill ${growth >= 0 ? 'positive' : 'negative'}" 
-                                     style="width: ${Math.min(Math.abs(growth), 100)}%"></div>
-                            </div>
-                            <div class="progress-label">
-                                <span>Initial: ${initialBalance.toFixed(2)}</span>
-                                <span class="${growth >= 0 ? 'positive' : 'negative'}">
-                                    ${growth >= 0 ? '+' : ''}${growth.toFixed(2)}%
+                <div class="rules-content" style="${this.isExpanded ? 'display: block;' : 'display: none;'}">
+                    <div class="rules-vertical-list">
+                        <!-- Balance Progress -->
+                        <div class="rule-item">
+                            <div class="rule-label">
+                                <span>Current Balance</span>
+                                <span class="rule-value ${growth >= 0 ? 'positive' : 'negative'}">
+                                    ${balance.toFixed(2)} ${this.account.currency}
                                 </span>
                             </div>
+                            <div class="rule-progress">
+                                <div class="progress-bar">
+                                    <div class="progress-fill ${growth >= 0 ? 'positive' : 'negative'}" 
+                                         style="width: ${Math.min(Math.abs(growth), 100)}%"></div>
+                                </div>
+                                <div class="progress-label">
+                                    <span>Initial: ${initialBalance.toFixed(2)}</span>
+                                    <span class="${growth >= 0 ? 'positive' : 'negative'}">
+                                        ${growth >= 0 ? '+' : ''}${growth.toFixed(2)}%
+                                    </span>
+                                </div>
+                            </div>
                         </div>
+
+                        ${this.account.max_daily_loss_pct ? `
+                        <!-- Daily Loss -->
+                        <div class="rule-item ${rules.dailyLoss.status}">
+                            <div class="rule-label">
+                                <span>Daily Loss Limit</span>
+                                <span class="rule-value">
+                                    ${rules.dailyLoss.used.toFixed(2)}% / ${this.account.max_daily_loss_pct.toFixed(2)}%
+                                </span>
+                            </div>
+                            <div class="rule-progress">
+                                <div class="progress-bar">
+                                    <div class="progress-fill ${rules.dailyLoss.status}" 
+                                         style="width: ${rules.dailyLoss.percentage}%"></div>
+                                </div>
+                                <div class="progress-label">
+                                    <span>${rules.dailyLoss.remaining.toFixed(2)}% remaining</span>
+                                    <span>${rules.dailyLoss.percentage.toFixed(0)}% used</span>
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${this.account.max_total_loss_pct ? `
+                        <!-- Total Loss -->
+                        <div class="rule-item ${rules.totalLoss.status}">
+                            <div class="rule-label">
+                                <span>Max Drawdown Limit</span>
+                                <span class="rule-value">
+                                    ${rules.totalLoss.used.toFixed(2)}% / ${this.account.max_total_loss_pct.toFixed(2)}%
+                                </span>
+                            </div>
+                            <div class="rule-progress">
+                                <div class="progress-bar">
+                                    <div class="progress-fill ${rules.totalLoss.status}" 
+                                         style="width: ${rules.totalLoss.percentage}%"></div>
+                                </div>
+                                <div class="progress-label">
+                                    <span>${rules.totalLoss.remaining.toFixed(2)}% remaining</span>
+                                    <span>${rules.totalLoss.percentage.toFixed(0)}% used</span>
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${this.account.profit_target_pct ? `
+                        <!-- Profit Target -->
+                        <div class="rule-item ${rules.profitTarget.status}">
+                            <div class="rule-label">
+                                <span>Profit Target</span>
+                                <span class="rule-value">
+                                    ${rules.profitTarget.achieved.toFixed(2)}% / ${this.account.profit_target_pct.toFixed(2)}%
+                                </span>
+                            </div>
+                            <div class="rule-progress">
+                                <div class="progress-bar">
+                                    <div class="progress-fill positive" 
+                                         style="width: ${rules.profitTarget.percentage}%"></div>
+                                </div>
+                                <div class="progress-label">
+                                    <span>${rules.profitTarget.remaining.toFixed(2)}% to go</span>
+                                    <span>${rules.profitTarget.percentage.toFixed(0)}% achieved</span>
+                                </div>
+                            </div>
+                        </div>
+                        ` : ''}
                     </div>
 
-                    ${this.account.max_daily_loss_pct ? `
-                    <!-- Daily Loss -->
-                    <div class="rule-item ${rules.dailyLoss.status}">
-                        <div class="rule-label">
-                            <span>Daily Loss Limit</span>
-                            <span class="rule-value">
-                                ${rules.dailyLoss.used.toFixed(2)}% / ${this.account.max_daily_loss_pct.toFixed(2)}%
-                            </span>
-                        </div>
-                        <div class="rule-progress">
-                            <div class="progress-bar">
-                                <div class="progress-fill ${rules.dailyLoss.status}" 
-                                     style="width: ${rules.dailyLoss.percentage}%"></div>
-                            </div>
-                            <div class="progress-label">
-                                <span>${rules.dailyLoss.remaining.toFixed(2)}% remaining</span>
-                                <span>${rules.dailyLoss.percentage.toFixed(0)}% used</span>
-                            </div>
-                        </div>
-                    </div>
-                    ` : ''}
-
-                    ${this.account.max_total_loss_pct ? `
-                    <!-- Total Loss -->
-                    <div class="rule-item ${rules.totalLoss.status}">
-                        <div class="rule-label">
-                            <span>Max Drawdown Limit</span>
-                            <span class="rule-value">
-                                ${rules.totalLoss.used.toFixed(2)}% / ${this.account.max_total_loss_pct.toFixed(2)}%
-                            </span>
-                        </div>
-                        <div class="rule-progress">
-                            <div class="progress-bar">
-                                <div class="progress-fill ${rules.totalLoss.status}" 
-                                     style="width: ${rules.totalLoss.percentage}%"></div>
-                            </div>
-                            <div class="progress-label">
-                                <span>${rules.totalLoss.remaining.toFixed(2)}% remaining</span>
-                                <span>${rules.totalLoss.percentage.toFixed(0)}% used</span>
-                            </div>
-                        </div>
-                    </div>
-                    ` : ''}
-
-                    ${this.account.profit_target_pct ? `
-                    <!-- Profit Target -->
-                    <div class="rule-item ${rules.profitTarget.status}">
-                        <div class="rule-label">
-                            <span>Profit Target</span>
-                            <span class="rule-value">
-                                ${rules.profitTarget.achieved.toFixed(2)}% / ${this.account.profit_target_pct.toFixed(2)}%
-                            </span>
-                        </div>
-                        <div class="rule-progress">
-                            <div class="progress-bar">
-                                <div class="progress-fill positive" 
-                                     style="width: ${rules.profitTarget.percentage}%"></div>
-                            </div>
-                            <div class="progress-label">
-                                <span>${rules.profitTarget.remaining.toFixed(2)}% to go</span>
-                                <span>${rules.profitTarget.percentage.toFixed(0)}% achieved</span>
-                            </div>
-                        </div>
+                    ${rules.violations.length > 0 ? `
+                    <div class="rules-violations">
+                        <div class="violation-title">⚠️ Violations</div>
+                        ${rules.violations.map(v => `
+                            <div class="violation-item">${v}</div>
+                        `).join('')}
                     </div>
                     ` : ''}
                 </div>
-
-                ${rules.violations.length > 0 ? `
-                <div class="rules-violations">
-                    <div class="violation-title">⚠️ Violations</div>
-                    ${rules.violations.map(v => `
-                        <div class="violation-item">${v}</div>
-                    `).join('')}
-                </div>
-                ` : ''}
             </div>
         `;
+
+        // Bind toggle event
+        const btn = document.getElementById('rules-toggle-btn');
+        if (btn) {
+            btn.onclick = () => this.toggle();
+        }
+
+        // Initialize icons if lucide is available
+        if (window.lucide) {
+            window.lucide.createIcons();
+        }
     }
 
     calculateRules() {

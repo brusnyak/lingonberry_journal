@@ -122,6 +122,20 @@ def create_tradingview_chart(
             ax1.plot([dt - width/2, dt + width/2], [open_price, open_price],
                     color=color, linewidth=1.5)
     
+    # Plot Indicators
+    indicator_styles = {
+        'ema_9': {'color': '#60a5fa', 'lw': 1, 'label': 'EMA 9'},
+        'ema_21': {'color': '#f59e0b', 'lw': 1, 'label': 'EMA 21'},
+        'ema_50': {'color': '#8b5cf6', 'lw': 1, 'label': 'EMA 50'},
+        'ema_200': {'color': '#6b7280', 'lw': 1.5, 'label': 'EMA 200'},
+        'vwap': {'color': '#ec4899', 'lw': 1.5, 'label': 'VWAP'},
+    }
+    
+    for col, style in indicator_styles.items():
+        if col in df.columns:
+            ax1.plot(df['datetime'], df[col], color=style['color'], 
+                    linewidth=style['lw'], alpha=0.8, label=style['label'])
+    
     # Add position overlay if prices provided
     if entry_price is not None:
         is_long = direction.lower() == 'long'
@@ -190,11 +204,10 @@ def create_tradingview_chart(
     ax1.set_ylabel('Price', color=TV_COLORS['text'], fontsize=11)
     
     # Legend
-    if entry_price is not None:
-        legend = ax1.legend(loc='upper left', frameon=True, fancybox=False,
-                          facecolor=TV_COLORS['panel'], edgecolor=TV_COLORS['border'],
-                          fontsize=9, labelcolor=TV_COLORS['text'])
-        legend.get_frame().set_alpha(0.95)
+    legend = ax1.legend(loc='upper left', frameon=True, fancybox=False,
+                      facecolor=TV_COLORS['panel'], edgecolor=TV_COLORS['border'],
+                      fontsize=8, labelcolor=TV_COLORS['text'], ncol=2)
+    legend.get_frame().set_alpha(0.8)
     
     # Volume subplot
     if show_volume and 'volume' in df.columns:

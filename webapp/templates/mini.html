@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/static/css/style.css" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
       * {
         margin: 0;
@@ -359,7 +360,30 @@
     </style>
   </head>
 
-  <body class="theme-ftmo">
+  <body class="theme-lingonberry">
+    <nav class="main-nav">
+      <div class="nav-left">
+        <a href="/" class="nav-brand">
+          <i data-lucide="layers"></i>
+          Lingonberry <span>Journal</span>
+        </a>
+        <div class="nav-links">
+          <a href="/mini" class="nav-link active" id="nav-dashboard"
+            ><i data-lucide="layout-dashboard"></i> Dashboard</a
+          >
+          <a href="/analytics" class="nav-link" id="nav-analytics"
+            ><i data-lucide="bar-chart-3"></i> Analytics</a
+          >
+          <a href="/weekly" class="nav-link" id="nav-weekly"
+            ><i data-lucide="calendar"></i> Weekly</a
+          >
+          <a href="/entry" class="nav-link" id="nav-entry"
+            ><i data-lucide="plus-circle"></i> New Trade</a
+          >
+        </div>
+      </div>
+      <div class="nav-right" id="nav-account-selector"></div>
+    </nav>
     <!-- Dashboard Page -->
     <div id="dashboardPage" class="page active">
       <div class="container">
@@ -418,21 +442,6 @@
       </div>
     </div>
 
-    <!-- Bottom Navigation -->
-    <nav class="bottom-nav">
-      <a href="#dashboard" class="nav-item active" data-page="dashboard">
-        <div class="nav-icon">📊</div>
-        <div>Dashboard</div>
-      </a>
-      <a href="#analytics" class="nav-item" data-page="analytics">
-        <div class="nav-icon">📈</div>
-        <div>Analytics</div>
-      </a>
-      <a href="#weekly" class="nav-item" data-page="weekly">
-        <div class="nav-icon">📅</div>
-        <div>Weekly</div>
-      </a>
-    </nav>
 
     <script src="/static/js/api.js"></script>
     <script src="/static/js/filters.js"></script>
@@ -991,6 +1000,8 @@
           }
         }, 30000);
       }
+      // Initialize Lucide icons
+      lucide.createIcons();
     </script>
   </body>
 </html>

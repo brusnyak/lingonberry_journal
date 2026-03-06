@@ -105,6 +105,8 @@ def init_db() -> None:
             notes TEXT,
             external_id TEXT,
             provider TEXT,
+            is_perfect INTEGER DEFAULT 0,
+            week_start TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (account_id) REFERENCES accounts(id)
@@ -211,6 +213,13 @@ def init_db() -> None:
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )
     """)
+
+    # Migration for missing columns
+    trade_cols = _table_columns(conn, "trades")
+    if "is_perfect" not in trade_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN is_perfect INTEGER DEFAULT 0")
+    if "week_start" not in trade_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN week_start TEXT")
     
     conn.commit()
     conn.close()
@@ -233,18 +242,21 @@ def create_account(
     """Create a new trading account"""
     conn = get_connection()
     cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
     cursor.execute(
         """
         INSERT INTO accounts (
             name, currency, initial_balance, max_daily_loss_pct,
             max_total_loss_pct, profit_target_pct, risk_per_trade_pct,
-            firm_name, broker, platform, timezone_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            firm_name, broker, platform, timezone_name,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name, currency, initial_balance, max_daily_loss_pct,
             max_total_loss_pct, profit_target_pct, risk_per_trade_pct,
-            firm_name, broker, platform, timezone_name
+            firm_name, broker, platform, timezone_name,
+            now, now
         ),
     )
     account_id = cursor.lastrowid
@@ -366,8 +378,12 @@ def add_manual_trade(
     asset_type: str = "forex",
     notes: str = "",
     outcome: str = "TP",
+    sl_price: float = None,
+    tp_price: float = None,
+    indicator_data: dict = None,
 ) -> int:
     """Add a finished trade manually"""
+    import json
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -383,20 +399,42 @@ def add_manual_trade(
     # This is vary crude but for manual logs it might be enough if not provided
     pnl_usd = (pnl_pct / 100) * 100000 * lots 
 
+    indicator_json = json.dumps(indicator_data) if indicator_data else None
+
+    # Use provided SL/TP or extract from indicator_data if present
+    if sl_price is None and indicator_data:
+        sl_price = indicator_data.get("sl")
+    if tp_price is None and indicator_data:
+        tp_price = indicator_data.get("tp")
+    
+    # Provide defaults for NOT NULL constraints
+    # If still None, calculate reasonable defaults based on entry and direction
+    if sl_price is None:
+        # Default SL: 2% away from entry
+        if direction.upper() == "LONG":
+            sl_price = entry_price * 0.98
+        else:
+            sl_price = entry_price * 1.02
+    
+    if tp_price is None:
+        # Default TP: use exit_price or 2% profit
+        tp_price = exit_price if exit_price else (entry_price * 1.02 if direction.upper() == "LONG" else entry_price * 0.98)
+
     cursor.execute(
         """
         INSERT INTO trades (
-            account_id, symbol, asset_type, direction, 
-            entry_price, exit_price, ts_open, ts_close, 
-            position_size, lot_size, pnl_usd, pnl_pct, 
-            outcome, notes, source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            account_id, symbol, asset_type, direction,
+            entry, sl, tp, exit_price, ts_open, ts_close,
+            lot_size, pnl_usd, pnl_pct,
+            outcome, notes, source, indicator_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             account_id, symbol, asset_type, direction.upper(),
-            entry_price, exit_price, ts_open, ts_close,
-            lots, lots, pnl_usd, pnl_pct,
-            outcome, notes, "manual_web"
+            entry_price, sl_price, tp_price, exit_price,
+            ts_open, ts_close,
+            lots, pnl_usd, pnl_pct,
+            outcome, notes, "manual_web", indicator_json
         ),
     )
     trade_id = cursor.lastrowid
@@ -1133,13 +1171,43 @@ def upsert_weekly_goal(
 
 
 # Drawing operations
-def save_drawing(trade_id: int, drawing_type: str, drawing_data: str) -> int:
+def save_drawing(trade_id: int, drawing_type: str, drawing_data: str, account_id: int = 1, symbol: str = "", timeframe: str = "H1") -> int:
     """Save a drawing for a trade"""
+    import json
+    from datetime import datetime, timezone
+    
     conn = get_connection()
     cursor = conn.cursor()
+    
+    # Parse drawing_data if it's a JSON string
+    try:
+        data = json.loads(drawing_data) if isinstance(drawing_data, str) else drawing_data
+    except:
+        data = {"raw": drawing_data}
+    
+    # Extract points and style from the drawing data
+    points_json = json.dumps(data.get("points", []))
+    style_json = json.dumps(data.get("style", {}))
+    note = data.get("note", "")
+    
+    # Get trade info if not provided
+    if not symbol or not account_id:
+        cursor.execute("SELECT symbol, account_id FROM trades WHERE id = ?", (trade_id,))
+        row = cursor.fetchone()
+        if row:
+            symbol = symbol or row[0]
+            account_id = account_id or row[1]
+    
     cursor.execute(
-        "INSERT INTO drawings (trade_id, drawing_type, drawing_data) VALUES (?, ?, ?)",
-        (trade_id, drawing_type, drawing_data)
+        """INSERT INTO drawings (
+            account_id, trade_id, source, symbol, timeframe,
+            drawing_type, points_json, style_json, note, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            account_id, trade_id, "manual_web", symbol, timeframe,
+            drawing_type, points_json, style_json, note,
+            datetime.now(timezone.utc).isoformat()
+        )
     )
     drawing_id = cursor.lastrowid
     conn.commit()

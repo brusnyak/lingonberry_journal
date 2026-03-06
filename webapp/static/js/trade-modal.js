@@ -230,6 +230,46 @@ class TradeModal {
                     grid-template-columns: 1fr;
                 }
             }
+
+            .indicator-snapshot {
+                margin: 20px 0;
+                background: var(--panel-light);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                overflow: hidden;
+            }
+
+            .indicator-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 12px;
+            }
+
+            .indicator-table th, .indicator-table td {
+                padding: 10px;
+                text-align: left;
+                border: 1px solid var(--border);
+            }
+
+            .indicator-table th {
+                background: var(--panel);
+                color: var(--text-muted);
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+            .indicator-val {
+                font-family: monospace;
+                font-weight: 600;
+            }
+
+            .indicator-offset {
+                font-size: 10px;
+                margin-left: 4px;
+            }
+
+            .indicator-offset.positive { color: var(--green); }
+            .indicator-offset.negative { color: var(--red); }
         `;
         document.head.appendChild(style);
     }
@@ -376,6 +416,9 @@ class TradeModal {
                 </div>
             </div>
 
+            <!-- Technical Snapshot -->
+            ${this.renderIndicatorSnapshot(trade)}
+
             <!-- Charts -->
             ${this.renderCharts(trade)}
 
@@ -401,6 +444,68 @@ class TradeModal {
                     ` : ''}
                 </div>
             ` : ''}
+        `;
+    }
+
+    renderIndicatorSnapshot(trade) {
+        if (!trade.indicator_data) return '';
+        
+        let data = {};
+        try {
+            data = typeof trade.indicator_data === 'string' 
+                ? JSON.parse(trade.indicator_data) 
+                : trade.indicator_data;
+        } catch (e) {
+            console.warn('Failed to parse indicator data:', e);
+            return '';
+        }
+
+        const entry = data.entry || {};
+        const exit = data.exit || {};
+
+        const rows = [
+            { label: 'EMA 9', key: 'ema_9', offset: 'offset_ema_9' },
+            { label: 'EMA 21', key: 'ema_21', offset: 'offset_ema_21' },
+            { label: 'EMA 50', key: 'ema_50', offset: 'offset_ema_50' },
+            { label: 'EMA 200', key: 'ema_200', offset: 'offset_ema_200' },
+            { label: 'VWAP', key: 'vwap', offset: 'offset_vwap' }
+        ];
+
+        const formatCell = (val, offset) => {
+            if (val === undefined || val === null) return '-';
+            const offsetNum = parseFloat(offset);
+            const offsetClass = offsetNum >= 0 ? 'positive' : 'negative';
+            const offsetSign = offsetNum >= 0 ? '+' : '';
+            return `
+                <span class="indicator-val">${parseFloat(val).toFixed(5)}</span>
+                ${offset !== undefined ? `<span class="indicator-offset ${offsetClass}">${offsetSign}${offset}%</span>` : ''}
+            `;
+        };
+
+        return `
+            <div class="indicator-snapshot">
+                <div class="trade-notes-title" style="padding: 16px 16px 0 16px;">📐 Technical Context</div>
+                <div style="padding: 16px;">
+                    <table class="indicator-table">
+                        <thead>
+                            <tr>
+                                <th>Indicator</th>
+                                <th>At Entry</th>
+                                <th>At Exit</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map(row => `
+                                <tr>
+                                    <td><strong>${row.label}</strong></td>
+                                    <td>${formatCell(entry[row.key], entry[row.offset])}</td>
+                                    <td>${formatCell(exit[row.key], exit[row.offset])}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         `;
     }
 

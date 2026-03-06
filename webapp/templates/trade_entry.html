@@ -3,353 +3,329 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Trade Entry | Chart-First Journal</title>
+    <title>Trade Entry | Journal Pro</title>
     <link rel="stylesheet" href="/static/css/style.css" />
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <link rel="stylesheet" href="/static/css/_forms.css" />
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
+      .price-inputs {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 12px;
+      }
+
+      /* Entry Specific Layout */
       .entry-layout {
         display: grid;
-        grid-template-columns: 1fr 350px;
-        height: 100vh;
+        grid-template-columns: 1fr 380px;
+        height: calc(100vh - 64px);
         overflow: hidden;
         background: var(--bg);
       }
 
-      .chart-section {
-        display: flex;
-        flex-direction: column;
-        border-right: 1px solid var(--border);
-      }
-
-      .chart-toolbar {
-        padding: 12px 20px;
-        background: var(--panel-solid);
-        border-bottom: 1px solid var(--border);
-        display: flex;
-        gap: 16px;
-        align-items: center;
-      }
-
-      .chart-container {
-        flex: 1;
-        position: relative;
-      }
-
-      .form-section {
-        background: var(--panel);
-        backdrop-filter: blur(20px);
-        padding: 24px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 24px;
-      }
-
-      .symbol-selector {
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        color: var(--text);
-        padding: 8px 12px;
-        border-radius: 8px;
-        font-weight: 700;
-        outline: none;
-      }
-
-      .input-group {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .input-group label {
-        font-size: 0.75rem;
-        color: var(--muted);
-        text-transform: uppercase;
-        font-weight: 700;
-        letter-spacing: 0.05em;
-      }
-
-      .input-group input,
-      .input-group textarea,
-      .input-group select {
-        background: var(--panel-2);
-        border: 1px solid var(--border);
-        color: var(--text);
-        padding: 12px;
-        border-radius: 8px;
-        font-size: 1rem;
-      }
-
-      .btn-entry {
-        background: var(--accent);
-        color: white;
-        padding: 16px;
-        border-radius: 12px;
-        font-weight: 700;
-        border: none;
-        cursor: pointer;
-        transition: all 0.2s;
-        margin-top: auto;
-      }
-
-      .btn-entry:hover {
-        filter: brightness(1.2);
-        transform: translateY(-2px);
-      }
-
-      /* Marker Tags */
-      .marker-tag {
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 700;
-      }
-      .marker-entry {
-        background: var(--green);
-        color: white;
-      }
-      .marker-exit {
-        background: var(--red);
-        color: white;
-      }
-
-      .instruction-overlay {
+      .floating-toolbar {
         position: absolute;
         top: 20px;
         left: 50%;
         transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.6);
-        padding: 8px 16px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        pointer-events: none;
-        z-index: 10;
+        background: var(--panel-solid);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 6px 12px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        z-index: 100;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      }
+
+      .floating-toolbar .tool-btn {
+        width: 36px;
+        height: 36px;
+        margin-bottom: 0;
+      }
+
+      .floating-toolbar .divider {
+        width: 1px;
+        height: 24px;
+        background: var(--border);
+        margin: 0 8px;
+      }
+
+      .chart-top-bar {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        display: flex;
+        gap: 12px;
+        z-index: 90;
       }
     </style>
   </head>
-  <body class="theme-ftmo">
-    <div class="entry-layout">
-      <div class="chart-section">
-        <div class="chart-toolbar">
-          <select id="symbolSelect" class="symbol-selector">
-            <option value="EURUSD">EURUSD</option>
-            <option value="GBPUSD">GBPUSD</option>
-            <option value="XAUUSD">XAUUSD</option>
-            <option value="BTCUSD">BTCUSD</option>
-          </select>
-          <div class="marker-tag marker-entry" id="entryInfo">Entry: -</div>
-          <div class="marker-tag marker-exit" id="exitInfo">Exit: -</div>
-          <button class="btn ghost" onclick="resetMarkers()">Reset</button>
-        </div>
-        <div class="chart-container" id="chart">
-          <div class="instruction-overlay">
-            Click to mark Entry, then click to mark Exit
-          </div>
+
+  <body class="theme-lingonberry">
+    <nav class="main-nav">
+      <div class="nav-left">
+        <a href="/" class="nav-brand">
+          <i data-lucide="layers"></i>
+          Lingonberry <span>Journal</span>
+        </a>
+        <div class="nav-links">
+          <a href="/mini" class="nav-link" id="nav-dashboard"
+            ><i data-lucide="layout-dashboard"></i> Dashboard</a
+          >
+          <a href="/analytics" class="nav-link" id="nav-analytics"
+            ><i data-lucide="bar-chart-3"></i> Analytics</a
+          >
+          <a href="/weekly" class="nav-link" id="nav-weekly"
+            ><i data-lucide="calendar"></i> Weekly</a
+          >
+          <a href="/entry" class="nav-link active" id="nav-entry"
+            ><i data-lucide="plus-circle"></i> New Trade</a
+          >
         </div>
       </div>
+      <div class="nav-right">
+        <div id="accountSelector"></div>
+      </div>
+    </nav>
 
-      <form class="form-section" id="tradeForm">
-        <h2 class="panel-title">📝 Trade Details</h2>
-
-        <div class="input-group">
-          <label>Risk (USD or %)</label>
-          <input type="number" step="0.01" id="risk" placeholder="e.g. 100" />
-        </div>
-
-        <div class="input-group">
-          <label>Volume (Lots)</label>
-          <input type="number" step="0.01" id="lots" placeholder="e.g. 0.5" />
-        </div>
-
-        <div class="input-group">
-          <label>Mindset / Psychology</label>
-          <select id="mindset">
-            <option value="confident">Confident</option>
-            <option value="neutral">Neutral / Following Plan</option>
-            <option value="anxious">Anxious</option>
-            <option value="revenge">Revenge / FOMO</option>
+    <div class="entry-layout">
+      <!-- Center Chart -->
+      <section class="chart-center" style="position: relative">
+        <!-- Top Left Controls -->
+        <div class="chart-top-bar">
+          <select
+            id="symbolSelect"
+            class="btn ghost btn-sm"
+            style="
+              background: var(--panel-solid);
+              border: 1px solid var(--border);
+            "
+          >
+            <option value="EURUSD">EURUSD</option>
+            <option value="GBPUSD">GBPUSD</option>
+            <option value="GBPJPY">GBPJPY</option>
+            <option value="XAUUSD">XAUUSD</option>
+          </select>
+          <select
+            id="timeframeSelect"
+            class="btn ghost btn-sm"
+            style="
+              background: var(--panel-solid);
+              border: 1px solid var(--border);
+            "
+          >
+            <option value="M1">M1</option>
+            <option value="M5">M5</option>
+            <option value="M15">M15</option>
+            <option value="M30" selected>M30</option>
+            <option value="H1">H1</option>
+            <option value="H4">H4</option>
+            <option value="D">D</option>
           </select>
         </div>
 
-        <div class="input-group">
-          <label>Strategy / Setup</label>
-          <select id="setup">
-            <option value="breakout">Breakout</option>
-            <option value="reversal">Reversal</option>
-            <option value="trend_continuation">Trend Continuation</option>
-          </select>
+        <!-- Floating Top Toolbar -->
+        <div class="floating-toolbar" id="mainToolbar">
+          <button class="tool-btn active" data-tool="cursor" title="Cursor (V)">
+            <i data-lucide="mouse-pointer-2"></i>
+          </button>
+          <button class="tool-btn" data-tool="trendline" title="Trendline (L)">
+            <i data-lucide="trending-up"></i>
+            <div class="tool-star"><i data-lucide="star"></i></div>
+          </button>
+          <button class="tool-btn" data-tool="rect" title="Rectangle (R)">
+            <i data-lucide="square"></i>
+            <div class="tool-star"><i data-lucide="star"></i></div>
+          </button>
+          <div class="divider"></div>
+          <button class="tool-btn" data-tool="long" title="Long Tool">
+            <i data-lucide="arrow-up-circle"></i>
+            <div class="tool-star"><i data-lucide="star"></i></div>
+          </button>
+          <button class="tool-btn" data-tool="short" title="Short Tool">
+            <i data-lucide="arrow-down-circle"></i>
+            <div class="tool-star"><i data-lucide="star"></i></div>
+          </button>
+          <div class="divider"></div>
+          <button class="tool-btn" data-tool="bos" title="BOS">
+            <span class="text-xs font-bold">BOS</span>
+            <div class="tool-star"><i data-lucide="star"></i></div>
+          </button>
+          <button class="tool-btn" data-tool="choch" title="CHoCH">
+            <span class="text-xs font-bold">CH</span>
+            <div class="tool-star"><i data-lucide="star"></i></div>
+          </button>
+          <button class="tool-btn" data-tool="sweep" title="Liquidity Sweep">
+            <i data-lucide="zap"></i>
+            <div class="tool-star"><i data-lucide="star"></i></div>
+          </button>
         </div>
 
-        <div class="input-group">
-          <label>Notes</label>
-          <textarea
-            id="notes"
-            rows="4"
-            placeholder="What were you thinking?"
-          ></textarea>
+        <div
+          class="muted text-xs"
+          style="
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 80;
+            background: var(--panel-solid);
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+          "
+        >
+          Use <b>Long/Short</b> tool or Risk/Reward box to auto-populate form
         </div>
 
-        <button type="submit" class="btn-entry">
-          Save Trade & Generate Charts
-        </button>
-      </form>
+        <div
+          id="chartContainer"
+          style="
+            flex: 1;
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: #131722;
+          "
+        >
+          <canvas id="drawLayer"></canvas>
+          <div
+            id="favoritesBar"
+            class="favorites-bar"
+            style="display: none"
+          ></div>
+        </div>
+      </section>
+
+      <!-- Right Form Panel -->
+      <aside class="right-side-panel">
+        <div class="review-card">
+          <form
+            id="tradeForm"
+            style="display: flex; flex-direction: column; gap: 16px"
+          >
+            <h3>📝 New Trade Entry</h3>
+
+            <div class="price-inputs">
+              <div class="input-group">
+                <label>Entry</label>
+                <input
+                  type="number"
+                  step="0.00001"
+                  id="entryPrice"
+                  class="form-input"
+                  required
+                />
+              </div>
+              <div class="input-group">
+                <label>SL</label>
+                <input
+                  type="number"
+                  step="0.00001"
+                  id="slPrice"
+                  class="form-input"
+                  required
+                />
+              </div>
+              <div class="input-group">
+                <label>TP</label>
+                <input
+                  type="number"
+                  step="0.00001"
+                  id="tpPrice"
+                  class="form-input"
+                  required
+                />
+              </div>
+            </div>
+
+            <div
+              style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px"
+            >
+              <div class="input-group">
+                <label>% Risk</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  id="riskPct"
+                  value="1.0"
+                  class="form-input"
+                />
+              </div>
+              <div class="input-group">
+                <label>Lots (Calc)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  id="lots"
+                  class="form-input"
+                  disabled
+                  style="opacity: 0.6"
+                />
+              </div>
+            </div>
+
+            <div class="input-group">
+              <label>Strategy / Setup</label>
+              <select id="setup" class="form-select">
+                <option value="breakout">Breakout</option>
+                <option value="reversal">Reversal</option>
+                <option value="trend_continuation">Trend Continuation</option>
+                <option value="supply_demand">Supply / Demand</option>
+              </select>
+            </div>
+
+            <div class="input-group">
+              <label>Mindset</label>
+              <select id="mindset" class="form-select">
+                <option value="confident">Confident</option>
+                <option value="neutral" selected>
+                  Neutral / Following Plan
+                </option>
+                <option value="anxious">Anxious</option>
+                <option value="revenge">Revenge / FOMO</option>
+              </select>
+            </div>
+
+            <div class="input-group">
+              <label>Notes</label>
+              <textarea
+                id="notes"
+                rows="4"
+                class="form-textarea"
+                placeholder="Why this trade? Confluences..."
+              ></textarea>
+            </div>
+
+            <button
+              type="submit"
+              class="btn btn-primary w-full"
+              style="padding: 14px; font-weight: bold"
+            >
+              Save & Log Trade
+            </button>
+          </form>
+        </div>
+      </aside>
     </div>
 
     <script src="/static/js/api.js"></script>
+    <script src="/static/js/account-manager.js"></script>
+    <script src="/static/js/drawing-engine.js"></script>
+    <script src="/static/js/trade-entry-pro.js"></script>
     <script>
-      const chartElement = document.getElementById("chart");
-      const chart = LightweightCharts.createChart(chartElement, {
-        layout: {
-          background: { color: "#070b13" },
-          textColor: "#94a3b8",
-        },
-        grid: {
-          vertLines: { color: "rgba(255, 255, 255, 0.02)" },
-          horzLines: { color: "rgba(255, 255, 255, 0.02)" },
-        },
-        crosshair: {
-          mode: LightweightCharts.CrosshairMode.Normal,
-        },
+      document.addEventListener("DOMContentLoaded", () => {
+        new AccountManager();
+        new TradeEntryPro();
+        if (window.lucide) window.lucide.createIcons();
       });
-
-      const candleSeries = chart.addCandlestickSeries({
-        upColor: "#22c55e",
-        downColor: "#ef4444",
-        borderVisible: false,
-        wickUpColor: "#22c55e",
-        wickDownColor: "#ef4444",
-      });
-
-      // Sample data loader
-      async function loadChartData(symbol) {
-        try {
-          const url = `/api/market-data?symbol=${symbol}&asset_type=forex&timeframe=M30`;
-          const resp = await fetch(url);
-          const data = await resp.json();
-
-          if (data && data.length > 0) {
-            candleSeries.setData(data);
-            chart.timeScale().fitContent();
-            document.querySelector(".instruction-overlay").textContent =
-              "Click to mark Entry, then click to mark Exit";
-          } else {
-            document.querySelector(".instruction-overlay").textContent =
-              "No data available for " + symbol;
-          }
-        } catch (err) {
-          console.error("Failed to load chart data:", err);
-          document.querySelector(".instruction-overlay").textContent =
-            "Error loading data";
-        }
-      }
-
-      document.getElementById("symbolSelect").onchange = (e) => {
-        resetMarkers();
-        loadChartData(e.target.value);
-      };
-
-      loadChartData("EURUSD");
-
-      let entryPoint = null;
-      let exitPoint = null;
-
-      chart.subscribeClick((param) => {
-        if (!param.time || !param.point) return;
-
-        const price = candleSeries.coordinateToPrice(param.point.y);
-        const time = param.time;
-
-        if (!entryPoint) {
-          entryPoint = { time, price };
-          document.getElementById("entryInfo").textContent =
-            `Entry: ${price.toFixed(5)}`;
-          addMarker(entryPoint, "Entry", "belowBar", "#22c55e", "arrowUp");
-        } else if (!exitPoint) {
-          exitPoint = { time, price };
-          document.getElementById("exitInfo").textContent =
-            `Exit: ${price.toFixed(5)}`;
-          addMarker(exitPoint, "Exit", "aboveBar", "#ef4444", "arrowDown");
-        }
-      });
-
-      function addMarker(point, text, position, color, shape) {
-        const markers = [];
-        if (entryPoint)
-          markers.push({
-            time: entryPoint.time,
-            position: "belowBar",
-            color: "#22c55e",
-            shape: "arrowUp",
-            text: "Entry",
-          });
-        if (exitPoint)
-          markers.push({
-            time: exitPoint.time,
-            position: "aboveBar",
-            color: "#ef4444",
-            shape: "arrowDown",
-            text: "Exit",
-          });
-        candleSeries.setMarkers(markers);
-      }
-
-      function resetMarkers() {
-        entryPoint = null;
-        exitPoint = null;
-        document.getElementById("entryInfo").textContent = "Entry: -";
-        document.getElementById("exitInfo").textContent = "Exit: -";
-        candleSeries.setMarkers([]);
-      }
-
-      document.getElementById("tradeForm").onsubmit = async (e) => {
-        e.preventDefault();
-        if (!entryPoint || !exitPoint) {
-          alert("Please mark Entry and Exit on the chart first!");
-          return;
-        }
-
-        const btn = e.target.querySelector('button[type="submit"]');
-        btn.disabled = true;
-        btn.textContent = "Saving & Generating Charts...";
-
-        try {
-          const payload = {
-            symbol: document.getElementById("symbolSelect").value,
-            entry_price: entryPoint.price,
-            exit_price: exitPoint.price,
-            ts_open: entryPoint.time, // Unix time
-            ts_close: exitPoint.time, // Unix time
-            risk: document.getElementById("risk").value,
-            lots: document.getElementById("lots").value,
-            mindset: document.getElementById("mindset").value,
-            setup: document.getElementById("setup").value,
-            notes: document.getElementById("notes").value,
-          };
-
-          const resp = await fetch("/api/trades/manual", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-
-          if (resp.ok) {
-            const result = await resp.json();
-            alert("Trade Saved Successfully! Trade ID: " + result.trade_id);
-            window.location.href = "/mini"; // Redirect to dashboard
-          } else {
-            const err = await resp.json();
-            alert(
-              "Error saving trade: " + (err.description || "Unknown error"),
-            );
-          }
-        } catch (err) {
-          console.error("Save failed:", err);
-          alert("Connection error while saving");
-        } finally {
-          btn.disabled = false;
-          btn.textContent = "Save Trade & Generate Charts";
-        }
-      };
     </script>
   </body>
 </html>

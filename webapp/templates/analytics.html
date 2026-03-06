@@ -6,32 +6,20 @@
     <title>Analytics | Lingonberry Journal</title>
     <link rel="stylesheet" href="/static/css/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-      :root {
-        --bg: #0a0514;
-        --panel: rgba(20, 10, 25, 0.7);
-        --panel-light: rgba(30, 20, 35, 0.5);
-        --border: rgba(186, 85, 211, 0.15);
-        --text: #f9f5fb;
-        --muted: #b8a3c7;
-        --accent: #ba55d3;
-        --green: #10b981;
-        --red: #ef4444;
-        --radius: 12px;
-      }
-
       body {
         margin: 0;
         padding: 0;
         background:
           radial-gradient(
             circle at 0% 0%,
-            rgba(199, 56, 102, 0.15),
+            rgba(110, 14, 128, 0.15),
             transparent 40%
           ),
           radial-gradient(
             circle at 100% 100%,
-            rgba(186, 85, 211, 0.12),
+            rgba(110, 14, 128, 0.1),
             transparent 40%
           ),
           var(--bg);
@@ -216,8 +204,30 @@
   </head>
 
   <body class="theme-lingonberry">
+    <nav class="main-nav">
+      <div class="nav-left">
+        <a href="/" class="nav-brand">
+          <i data-lucide="layers"></i>
+          Lingonberry <span>Journal</span>
+        </a>
+        <div class="nav-links">
+          <a href="/mini" class="nav-link" id="nav-dashboard"
+            ><i data-lucide="layout-dashboard"></i> Dashboard</a
+          >
+          <a href="/analytics" class="nav-link active" id="nav-analytics"
+            ><i data-lucide="bar-chart-3"></i> Analytics</a
+          >
+          <a href="/weekly" class="nav-link" id="nav-weekly"
+            ><i data-lucide="calendar"></i> Weekly</a
+          >
+          <a href="/entry" class="nav-link" id="nav-entry"
+            ><i data-lucide="plus-circle"></i> New Trade</a
+          >
+        </div>
+      </div>
+      <div class="nav-right"></div>
+    </nav>
     <div class="container">
-      <a href="/mini" class="back-btn">← Back to Dashboard</a>
 
       <div class="header">
         <h1>📈 Advanced Analytics</h1>
@@ -238,5 +248,11 @@
     <script src="/static/js/filters.js"></script>
     <script src="/static/js/charts.js"></script>
     <script src="/static/js/analytics.js"></script>
+    <script>
+      // Initialize Lucide icons
+      if (window.lucide) {
+        window.lucide.createIcons();
+      }
+    </script>
   </body>
 </html>

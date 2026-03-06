@@ -173,20 +173,25 @@ def _resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
 def _fetch_ohlcv_local_csv(
     symbol: str,
+    asset_type: str,
     timeframe: str,
     start: datetime,
     end: datetime,
 ) -> pd.DataFrame:
-    # Try to find cached file for this timeframe
+    # Look in the unified directory structure: market_data/{asset}/{symbol}/{tf}.csv
+    symbol = symbol.upper()
+    asset_type = asset_type.lower()
     tf_lower = timeframe.lower()
-    path = LOCAL_MARKET_DIR / f"{symbol.upper()}_{tf_lower}.csv"
     
-    # Fallback to 5m data if specific timeframe not found
-    if not path.exists():
-        path = LOCAL_MARKET_DIR / f"{symbol.upper()}_5m.csv"
+    path = LOCAL_MARKET_DIR / asset_type / symbol / f"{tf_lower}.csv"
     
+    # Fallback to root if not found (legacy)
     if not path.exists():
-        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+        path = LOCAL_MARKET_DIR / f"{symbol}_{tf_lower}.csv"
+    
+    # Fallback to 5m if specific timeframe not found
+    if not path.exists():
+        path = LOCAL_MARKET_DIR / asset_type/ symbol / "5m.csv"
     try:
         df = pd.read_csv(path)
         ts_col = "ts" if "ts" in df.columns else "time" if "time" in df.columns else None
@@ -302,6 +307,34 @@ def load_ohlcv_with_cache(
     if not df.empty and ttl_seconds > 0:
         _write_cached_frame(cache_key, df)
     
+    # Add indicators for display and snap-capture
+    if not df.empty:
+        df = _add_indicators(df)
+        
+    return df
+
+
+def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Add EMA (9, 21, 50, 200) and VWAP to the dataframe"""
+    if df.empty:
+        return df
+    
+    # EMA Calculations
+    for period in [9, 21, 50, 200]:
+        df[f"ema_{period}"] = df["close"].ewm(span=period, adjust=False).mean()
+        
+    # VWAP Calculation
+    # Typical VWAP is cumulative within a day. 
+    # For simplicity and multi-day support, we calculate it relative to the start of the current session in the dataframe.
+    if "volume" in df.columns and (df["volume"] > 0).any():
+        df["tpv"] = (df["high"] + df["low"] + df["close"]) / 3 * df["volume"]
+        df["cum_tpv"] = df["tpv"].cumsum()
+        df["cum_vol"] = df["volume"].cumsum()
+        df["vwap"] = df["cum_tpv"] / df["cum_vol"]
+        df.drop(columns=["tpv", "cum_tpv", "cum_vol"], inplace=True)
+    else:
+        df["vwap"] = df["close"] # Fallback if no volume
+
     return df
 
 
@@ -323,7 +356,7 @@ def _fetch_ohlcv(
             # Save to market_data folder
             _save_to_market_data(ctr, symbol, asset_type, timeframe)
             return ctr
-    local = _fetch_ohlcv_local_csv(symbol=symbol, timeframe=timeframe, start=start, end=end)
+    local = _fetch_ohlcv_local_csv(symbol=symbol, asset_type=asset_type, timeframe=timeframe, start=start, end=end)
     if not local.empty:
         return local
     yf_data = _fetch_ohlcv_yfinance(symbol=symbol, asset_type=asset_type, timeframe=timeframe, start=start, end=end)
