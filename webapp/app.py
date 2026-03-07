@@ -439,7 +439,6 @@ def api_trades_manual():
         if chart_screenshot:
             try:
                 import base64
-                from datetime import datetime
                 
                 # Extract base64 data
                 if ',' in chart_screenshot:

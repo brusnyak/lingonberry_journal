@@ -5,20 +5,40 @@
  * Running on http://127.0.0.1:5000
  * Running on http://192.168.9.251:5000
 [33mPress CTRL+C to quit[0m
-127.0.0.1 - - [07/Mar/2026 15:33:25] "GET /entry HTTP/1.1" 200 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "[36mGET /static/css/_forms.css HTTP/1.1[0m" 304 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "[36mGET /static/css/style.css HTTP/1.1[0m" 304 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "[36mGET /static/js/api.js HTTP/1.1[0m" 304 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "[36mGET /static/js/account-manager.js HTTP/1.1[0m" 304 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "[36mGET /static/js/drawing-engine.js HTTP/1.1[0m" 304 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "GET /static/js/trade-entry-pro.js HTTP/1.1" 200 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "GET /api/accounts HTTP/1.1" 200 -
-127.0.0.1 - - [07/Mar/2026 15:33:25] "GET /api/accounts HTTP/1.1" 200 -
-127.0.0.1 - - [07/Mar/2026 15:33:30] "GET /api/candles?symbol=EURUSD&timeframe=M30 HTTP/1.1" 200 -
-Failed to get ticker 'GC=F' reason: Expecting value: line 1 column 1 (char 0)
+127.0.0.1 - - [07/Mar/2026 15:52:03] "GET /entry HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "[36mGET /static/css/style.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "[36mGET /static/css/_forms.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "[36mGET /static/js/api.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "[36mGET /static/js/account-manager.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "[36mGET /static/js/drawing-engine.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "GET /static/js/trade-entry-pro.js HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "GET /api/accounts HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:03] "GET /api/accounts HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:08] "GET /api/candles?symbol=EURUSD&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "GET /entry HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "[36mGET /static/css/style.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "[36mGET /static/css/_forms.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "[36mGET /static/js/api.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "[36mGET /static/js/account-manager.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "[36mGET /static/js/drawing-engine.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "[36mGET /static/js/trade-entry-pro.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "GET /api/accounts HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "GET /api/accounts HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:34] "GET /api/candles?symbol=EURUSD&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:38] "GET /api/candles?symbol=XAGUSD&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:46] "GET /api/candles?symbol=XAUUSD&timeframe=M30 HTTP/1.1" 200 -
+Failed to get ticker 'US100' reason: Expecting value: line 1 column 1 (char 0)
 
 1 Failed download:
-['GC=F']: Exception('%ticker%: No timezone found, symbol may be delisted')
-127.0.0.1 - - [07/Mar/2026 15:33:38] "GET /api/candles?symbol=XAUUSD&timeframe=M30 HTTP/1.1" 200 -
-127.0.0.1 - - [07/Mar/2026 15:33:57] "[35m[1mPOST /api/trades/manual HTTP/1.1[0m" 500 -
+['US100']: Exception('%ticker%: No timezone found, symbol may be delisted')
+127.0.0.1 - - [07/Mar/2026 15:52:52] "GET /api/candles?symbol=US100&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:55] "GET /api/candles?symbol=USDJPY&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:52:59] "GET /api/candles?symbol=EURUSD&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:53:02] "GET /api/candles?symbol=XAUUSD&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:53:08] "GET /api/candles?symbol=XAGUSD&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:53:14] "GET /api/candles?symbol=GBPJPY&timeframe=M30 HTTP/1.1" 200 -
+127.0.0.1 - - [07/Mar/2026 15:53:26] "[35m[1mPOST /api/trades/manual HTTP/1.1[0m" 500 -
