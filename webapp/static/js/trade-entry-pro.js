@@ -238,16 +238,10 @@ class TradeEntryPro {
     this.inputs.lots.value = lots.toFixed(2);
   }
 
-  determineExitPrice(direction, entry, sl, tp) {
-    // For now, we'll check if price hit SL or TP first
-    // This will be determined by scanning the candles
-    return null; // Will be set by findExitTime
-  }
-
   findExitTime(entryTime, exitPrice, direction, sl, tp) {
     // Scan through candles after entry to find when price hit SL or TP
     if (!this.currentData || this.currentData.length === 0) {
-      return null;
+      return { time: null, outcome: null, exitPrice: null };
     }
 
     // Find candles after entry time
@@ -257,25 +251,29 @@ class TradeEntryPro {
       // Skip the entry candle
       if (candle.time === entryTime) continue;
 
-      // Check if SL was hit
+      // Check which was hit first
       if (direction === 'LONG') {
+        // For LONG: check if SL hit first (price went down)
         if (candle.low <= sl) {
-          return candle.time; // SL hit
+          return { time: candle.time, outcome: 'SL', exitPrice: sl };
         }
+        // Then check if TP hit (price went up)
         if (candle.high >= tp) {
-          return candle.time; // TP hit
+          return { time: candle.time, outcome: 'TP', exitPrice: tp };
         }
       } else { // SHORT
+        // For SHORT: check if SL hit first (price went up)
         if (candle.high >= sl) {
-          return candle.time; // SL hit
+          return { time: candle.time, outcome: 'SL', exitPrice: sl };
         }
+        // Then check if TP hit (price went down)
         if (candle.low <= tp) {
-          return candle.time; // TP hit
+          return { time: candle.time, outcome: 'TP', exitPrice: tp };
         }
       }
     }
 
-    return null; // Exit not found in available data
+    return { time: null, outcome: null, exitPrice: null }; // Exit not found in available data
   }
 
 
@@ -350,7 +348,9 @@ class TradeEntryPro {
 
     // Extract trade time from drawing (if available) or use current time
     let ts_open = Math.floor(Date.now() / 1000);
-    let ts_close = null; // Will be calculated based on when price hits SL/TP
+    let ts_close = null;
+    let outcome = null;
+    let exit_price = null;
 
     const rrDrawing = this.engine.state.drawings.find(d => d.type === "riskreward");
     if (rrDrawing && rrDrawing.points && rrDrawing.points.length > 0) {
@@ -358,18 +358,23 @@ class TradeEntryPro {
       ts_open = Math.floor(rrDrawing.points[0].time);
 
       // Find when price hit SL or TP by scanning candles
-      const entryTime = ts_open;
-      const exitPrice = this.determineExitPrice(direction, entry, sl, tp);
-      ts_close = this.findExitTime(entryTime, exitPrice, direction, sl, tp);
+      const exitInfo = this.findExitTime(ts_open, null, direction, sl, tp);
 
-      const openDate = new Date(ts_open * 1000);
-      const closeDate = ts_close ? new Date(ts_close * 1000) : null;
-      console.log('   Using trade time from chart:');
-      console.log('   Entry:', openDate.toISOString(), '(', ts_open, ')');
-      if (closeDate) {
+      if (exitInfo.time) {
+        ts_close = exitInfo.time;
+        outcome = exitInfo.outcome;
+        exit_price = exitInfo.exitPrice;
+
+        const openDate = new Date(ts_open * 1000);
+        const closeDate = new Date(ts_close * 1000);
+        console.log('   Using trade time from chart:');
+        console.log('   Entry:', openDate.toISOString(), '(', ts_open, ')');
         console.log('   Exit:', closeDate.toISOString(), '(', ts_close, ')');
+        console.log('   Outcome:', outcome, 'at price:', exit_price);
       } else {
-        console.log('   Exit: Not found in chart data (using entry time)');
+        console.log('   Exit: Not found in chart data - trade still open');
+        ts_close = ts_open; // Use entry time as placeholder
+        outcome = 'OPEN';
       }
     } else {
       console.log('   No drawing found, using current time');
@@ -380,11 +385,12 @@ class TradeEntryPro {
       symbol: this.symbolSelect.value,
       direction: direction,
       entry_price: entry,
-      exit_price: null, // Will be determined by outcome
+      exit_price: exit_price, // Set the actual exit price
       sl: sl,
       tp: tp,
       ts_open: ts_open,
-      ts_close: ts_close || ts_open, // Use entry time if exit not found
+      ts_close: ts_close || ts_open,
+      outcome: outcome, // Set the outcome (TP/SL/OPEN)
       timeframe: this.tfSelect.value,
       risk: parseFloat(this.inputs.risk.value),
       lots: parseFloat(this.inputs.lots.value),
