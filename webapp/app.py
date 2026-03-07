@@ -369,11 +369,54 @@ def api_trades_manual():
         week_start = body.get("week_start")
         notes = body.get("notes", "")
         symbol = body["symbol"]
+        asset_type = body.get("asset_type", "forex")
+        timeframe = body.get("timeframe", "M30")
+        
+        # Auto-detect asset type if not provided
+        if not body.get("asset_type"):
+            symbol_upper = symbol.upper()
+            if symbol_upper in ["NAS100", "US100", "USTEC", "SPX500", "US30", "GER30", "UK100"]:
+                asset_type = "index"
+            elif symbol_upper in ["XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD", "USOIL", "UKOIL"]:
+                asset_type = "commodity"
+            elif symbol_upper.startswith("BTC") or symbol_upper.startswith("ETH"):
+                asset_type = "crypto"
+            else:
+                asset_type = "forex"
         
         # Build indicator_data from various sources
         indicator_data = body.get("indicator_data", {})
         if not isinstance(indicator_data, dict):
             indicator_data = {}
+        
+        # Capture indicators at entry timestamp
+        try:
+            entry_indicators = journal_db.capture_indicators_at_timestamp(
+                symbol=symbol,
+                asset_type=asset_type,
+                timeframe=timeframe,
+                timestamp=ts_open
+            )
+            if entry_indicators:
+                indicator_data["entry"] = entry_indicators
+                print(f"✅ Captured entry indicators for {symbol} at {ts_open}")
+        except Exception as e:
+            print(f"⚠️ Failed to capture entry indicators: {e}")
+        
+        # Capture indicators at exit timestamp if trade is closed
+        if exit_price and ts_close and ts_close != ts_open:
+            try:
+                exit_indicators = journal_db.capture_indicators_at_timestamp(
+                    symbol=symbol,
+                    asset_type=asset_type,
+                    timeframe=timeframe,
+                    timestamp=ts_close
+                )
+                if exit_indicators:
+                    indicator_data["exit"] = exit_indicators
+                    print(f"✅ Captured exit indicators for {symbol} at {ts_close}")
+            except Exception as e:
+                print(f"⚠️ Failed to capture exit indicators: {e}")
         
         # Add additional fields to indicator_data
         for key in ["mindset", "setup", "risk"]:
@@ -395,6 +438,8 @@ def api_trades_manual():
             ts_open=ts_open,
             ts_close=ts_close,
             lots=lots,
+            asset_type=asset_type,
+            timeframe=timeframe,
             notes=notes,
             outcome=outcome,
             indicator_data=indicator_data if indicator_data else None
@@ -432,7 +477,7 @@ def api_trades_manual():
                 print(f"Warning: Failed to save drawing: {e}")
                 # Continue even if drawing save fails
         
-        # 4. Save chart screenshot if provided (fast!)
+        # 4. Save user screenshot if provided (primary chart)
         chart_paths = []
         chart_screenshot = body.get("chart_screenshot")
         
@@ -449,7 +494,7 @@ def api_trades_manual():
                 os.makedirs(charts_dir, exist_ok=True)
                 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"trade_{symbol}_{direction}_{body.get('timeframe', 'M30')}_{timestamp}.jpg"
+                filename = f"trade_{symbol}_{direction}_{timeframe}_{timestamp}.jpg"
                 filepath = os.path.join(charts_dir, filename)
                 
                 # Decode base64
@@ -471,7 +516,7 @@ def api_trades_manual():
                 print(error_trace)
                 # Don't fail the request if screenshot save fails
         else:
-            print(f"ℹ️ No screenshot provided for trade {trade_id}, skipping chart generation")
+            print(f"ℹ️ No screenshot provided for trade {trade_id}")
         
         return jsonify({
             "success": True,

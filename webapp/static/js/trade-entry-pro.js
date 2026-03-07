@@ -287,33 +287,56 @@ class TradeEntryPro {
           return;
         }
 
-        // Create a temporary canvas to combine chart + drawings
+        // Get all canvases in the chart container
+        const chartCanvases = chartContainer.querySelectorAll('canvas');
+        if (chartCanvases.length === 0) {
+          reject(new Error('No canvas found in chart container'));
+          return;
+        }
+
+        // Find the largest canvas (the main chart canvas)
+        let mainCanvas = chartCanvases[0];
+        let maxArea = 0;
+        chartCanvases.forEach(canvas => {
+          const area = canvas.width * canvas.height;
+          if (area > maxArea) {
+            maxArea = area;
+            mainCanvas = canvas;
+          }
+        });
+
+        console.log('📸 Capturing chart:', {
+          canvasCount: chartCanvases.length,
+          mainCanvasSize: `${mainCanvas.width}x${mainCanvas.height}`,
+          containerSize: `${chartContainer.getBoundingClientRect().width}x${chartContainer.getBoundingClientRect().height}`
+        });
+
+        // Create a temporary canvas with the same dimensions as the main canvas
         const tempCanvas = document.createElement('canvas');
-        const rect = chartContainer.getBoundingClientRect();
-        tempCanvas.width = rect.width;
-        tempCanvas.height = rect.height;
+        tempCanvas.width = mainCanvas.width;
+        tempCanvas.height = mainCanvas.height;
         const ctx = tempCanvas.getContext('2d');
 
         // Fill background
         ctx.fillStyle = '#131722';
         ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
 
-        // Try to get the chart canvas (LightweightCharts creates its own canvas)
-        const chartCanvases = chartContainer.querySelectorAll('canvas');
-
-        // Draw all canvases (chart + drawings)
+        // Draw all canvases at their actual size
         chartCanvases.forEach(canvas => {
           try {
-            ctx.drawImage(canvas, 0, 0);
+            // Draw canvas at its actual dimensions
+            ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height);
           } catch (e) {
             console.warn('Could not draw canvas:', e);
           }
         });
 
-        // Convert to base64 (JPEG for smaller size)
-        const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.85);
+        // Convert to base64 (JPEG for smaller size, high quality)
+        const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.95);
+        console.log('✅ Screenshot captured:', (dataUrl.length / 1024).toFixed(1), 'KB');
         resolve(dataUrl);
       } catch (err) {
+        console.error('❌ Screenshot capture failed:', err);
         reject(err);
       }
     });

@@ -65,11 +65,42 @@ def import_ctrader_trades(
                 entry_price = float(_pick(pos, "entryPrice", "openPrice", default=0) or 0)
                 exit_price = float(_pick(pos, "closePrice", "exitPrice", default=0) or 0)
                 volume = float(_pick(pos, "volume", "quantity", "lotSize", default=0) or 0)
-
+                symbol = pos.get("symbolName", "")
+                
                 ts_open = _ms_to_iso(_pick(pos, "openTimestamp", "openTime", "openTimestampMs")) or datetime.now(timezone.utc).isoformat()
                 ts_close = _ms_to_iso(_pick(pos, "closeTimestamp", "closeTime", "closeTimestampMs")) or datetime.now(timezone.utc).isoformat()
                 
                 session = detect_session(ts_open)
+                
+                # Determine asset type
+                asset_type = "forex"
+                if symbol.upper() in ["NAS100", "US100", "USTEC", "SPX500", "US30"]:
+                    asset_type = "index"
+                elif symbol.upper() in ["XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD"]:
+                    asset_type = "commodity"
+                
+                # Capture indicators at entry
+                timeframe = "M30"  # Default timeframe
+                entry_indicators = journal_db.capture_indicators_at_timestamp(
+                    symbol=symbol,
+                    asset_type=asset_type,
+                    timeframe=timeframe,
+                    timestamp=ts_open,
+                )
+                
+                # Capture indicators at exit
+                exit_indicators = journal_db.capture_indicators_at_timestamp(
+                    symbol=symbol,
+                    asset_type=asset_type,
+                    timeframe=timeframe,
+                    timestamp=ts_close,
+                )
+                
+                # Build indicator_data
+                indicator_data = {
+                    "entry": entry_indicators,
+                    "exit": exit_indicators,
+                }
                 
                 # Calculate P&L
                 pnl_usd = float(_pick(pos, "grossProfit", default=0) or 0) + float(_pick(pos, "commission", default=0) or 0) + float(_pick(pos, "swap", default=0) or 0)
@@ -83,15 +114,17 @@ def import_ctrader_trades(
                 # Create trade
                 trade_id = journal_db.create_trade(
                     account_id=account_id,
-                    symbol=pos.get("symbolName", ""),
+                    symbol=symbol,
                     direction=direction,
                     entry_price=entry_price,
                     position_size=volume,
                     ts_open=ts_open,
-                    asset_type="forex",
+                    asset_type=asset_type,
                     session=session,
+                    timeframe=timeframe,
                     external_id=external_id,
                     provider="ctrader",
+                    indicator_data=indicator_data,
                 )
                 
                 # Close trade
@@ -105,12 +138,15 @@ def import_ctrader_trades(
                     ts_close=ts_close,
                     pnl_usd_override=pnl_usd,
                     pnl_pct_override=pnl_pct,
+                    exit_indicators=exit_indicators,
                 )
                 
                 imported += 1
                 
             except Exception as e:
                 print(f"Error importing position {pos.get('positionId')}: {e}")
+                import traceback
+                traceback.print_exc()
                 errors += 1
         
         return {"imported": imported, "skipped": skipped, "errors": errors}

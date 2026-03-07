@@ -19,6 +19,63 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def capture_indicators_at_timestamp(
+    symbol: str,
+    asset_type: str,
+    timeframe: str,
+    timestamp: str,
+) -> Dict[str, Optional[float]]:
+    """
+    Capture indicator values at a specific timestamp
+    
+    Returns dict with: ema_9, ema_21, ema_50, ema_200, vwap
+    """
+    import pandas as pd
+    from datetime import timedelta
+    from infra.market_data import load_ohlcv_with_cache
+    
+    try:
+        ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        # Load data with some context
+        start = ts - timedelta(days=30)
+        end = ts + timedelta(hours=1)
+        
+        df = load_ohlcv_with_cache(
+            symbol=symbol,
+            asset_type=asset_type,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            ttl_seconds=0,  # Force fresh data to ensure indicators are calculated
+        )
+        
+        if df.empty:
+            print(f"⚠️ No market data found for {symbol} at {timestamp}")
+            return {}
+        
+        # Find the candle closest to the timestamp
+        df['ts'] = pd.to_datetime(df['ts'], utc=True)
+        time_diffs = abs(df['ts'] - ts)
+        closest_idx = time_diffs.idxmin()
+        row = df.loc[closest_idx]
+        
+        # Extract indicator values
+        indicators = {}
+        for col in ['ema_9', 'ema_21', 'ema_50', 'ema_200', 'vwap']:
+            if col in row and pd.notnull(row[col]):
+                indicators[col] = float(row[col])
+            else:
+                indicators[col] = None
+        
+        return indicators
+        
+    except Exception as e:
+        print(f"Error capturing indicators: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}
+
+
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     cursor = conn.cursor()
     cursor.execute(f"PRAGMA table_info({table})")
@@ -27,6 +84,7 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def _normalize_trade_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Return a trade row with both legacy and v2 field aliases."""
+    import json
     trade = dict(row)
 
     entry_price = trade.get("entry_price", trade.get("entry"))
@@ -48,6 +106,15 @@ def _normalize_trade_row(row: Dict[str, Any]) -> Dict[str, Any]:
     trade["external_id"] = trade.get("external_id", trade.get("external_trade_id"))
     trade["provider"] = trade.get("provider", trade.get("source"))
     trade["account_id"] = trade.get("account_id", 1)
+    
+    # Deserialize indicator_data if present
+    if "indicator_data" in trade and trade["indicator_data"]:
+        try:
+            if isinstance(trade["indicator_data"], str):
+                trade["indicator_data"] = json.loads(trade["indicator_data"])
+        except:
+            trade["indicator_data"] = {}
+    
     return trade
 
 
@@ -220,6 +287,8 @@ def init_db() -> None:
         cursor.execute("ALTER TABLE trades ADD COLUMN is_perfect INTEGER DEFAULT 0")
     if "week_start" not in trade_cols:
         cursor.execute("ALTER TABLE trades ADD COLUMN week_start TEXT")
+    if "indicator_data" not in trade_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN indicator_data TEXT")
     
     conn.commit()
     conn.close()
@@ -325,8 +394,10 @@ def create_trade(
     notes: Optional[str] = None,
     external_id: Optional[str] = None,
     provider: Optional[str] = None,
+    indicator_data: Optional[Dict[str, Any]] = None,
 ) -> int:
     """Create a new trade"""
+    import json
     conn = get_connection()
     cursor = conn.cursor()
     trade_columns = _table_columns(conn, "trades")
@@ -352,6 +423,7 @@ def create_trade(
         "external_trade_id": external_id,
         "provider": provider,
         "source": provider or "manual_bot",
+        "indicator_data": json.dumps(indicator_data) if indicator_data else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -376,6 +448,7 @@ def add_manual_trade(
     ts_close: str,
     lots: float = 0.1,
     asset_type: str = "forex",
+    timeframe: str = "M30",
     notes: str = "",
     outcome: str = "TP",
     sl_price: float = None,
@@ -438,15 +511,15 @@ def add_manual_trade(
         INSERT INTO trades (
             account_id, symbol, asset_type, direction,
             entry, sl, tp, exit_price, ts_open, ts_close,
-            lot_size, pnl_usd, pnl_pct, rr_ratio, session,
+            lot_size, pnl_usd, pnl_pct, rr_ratio, session, timeframe,
             outcome, notes, source, indicator_data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             account_id, symbol, asset_type, direction.upper(),
             entry_price, sl_price, tp_price, exit_price,
             ts_open, ts_close,
-            lots, pnl_usd, pnl_pct, rr_ratio, session,
+            lots, pnl_usd, pnl_pct, rr_ratio, session, timeframe,
             outcome, notes, "manual_web", indicator_json
         ),
     )
@@ -537,8 +610,10 @@ def close_trade(
     ts_close: Optional[str] = None,
     pnl_usd_override: Optional[float] = None,
     pnl_pct_override: Optional[float] = None,
+    exit_indicators: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Close a trade and calculate P&L"""
+    import json
     if ts_close is None:
         ts_close = datetime.now(timezone.utc).isoformat()
     
@@ -562,6 +637,21 @@ def close_trade(
     if pnl_pct_override is not None:
         pnl_pct = float(pnl_pct_override)
     
+    # Merge exit indicators with existing indicator_data
+    indicator_data = {}
+    if trade.get("indicator_data"):
+        # Already deserialized by _normalize_trade_row
+        if isinstance(trade["indicator_data"], dict):
+            indicator_data = trade["indicator_data"].copy()
+        else:
+            try:
+                indicator_data = json.loads(trade["indicator_data"])
+            except:
+                pass
+    
+    if exit_indicators:
+        indicator_data["exit"] = exit_indicators
+    
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -572,6 +662,7 @@ def close_trade(
         "pnl_pct": pnl_pct,
         "outcome": outcome,
         "ts_close": ts_close,
+        "indicator_data": json.dumps(indicator_data) if indicator_data else None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     set_pairs = [f"{col} = ?" for col in updates.keys() if col in trade_columns]
