@@ -161,6 +161,7 @@ async def _finalize_trade(update: Update, context: ContextTypes.DEFAULT_TYPE, da
     if data.get("market_condition"):
         notes = (notes + " | " if notes else "") + f"market:{data['market_condition']}"
 
+    # Save trade immediately
     trade_id = journal_db.create_trade(
         account_id=account["id"],
         symbol=data["symbol"],
@@ -176,20 +177,6 @@ async def _finalize_trade(update: Update, context: ContextTypes.DEFAULT_TYPE, da
         provider="manual_bot",
     )
 
-    trade = journal_db.get_trade(trade_id)
-    chart_paths = []
-    if trade:
-        try:
-            from bot.chart_generator import generate_trade_charts
-
-            chart_paths = generate_trade_charts(
-                trade, output_dir="data/reports", context_weeks=1, timeframe=trade.get("timeframe")
-            )
-            if chart_paths:
-                journal_db.set_trade_chart_paths(trade_id, chart_paths)
-        except Exception as exc:
-            logger.warning("Chart generation skipped: %s", exc)
-
     rr = 0.0
     risk = abs(data["entry_price"] - data["sl_price"])
     reward = abs(data["tp_price"] - data["entry_price"])
@@ -201,22 +188,34 @@ async def _finalize_trade(update: Update, context: ContextTypes.DEFAULT_TYPE, da
         f"{data['symbol']} — {data['direction']}\n"
         f"Entry: {data['entry_price']} | SL: {data['sl_price']} | TP: {data['tp_price']}\n"
         f"RR: 1:{rr:.2f}\n"
-        f"Lot: {data.get('lot_size', 1.0)}"
+        f"Lot: {data.get('lot_size', 1.0)}\n\n"
+        f"📊 Generating charts in background..."
     )
 
-    if chart_paths:
-        summary += f"\n📊 Charts generated: {len(chart_paths)}"
-
     await update.message.reply_text(summary)
-    
-    # Send chart images
-    if chart_paths:
-        for path in chart_paths[:3]:
-            try:
-                with open(path, 'rb') as photo:
-                    await update.message.reply_photo(photo=photo, caption=os.path.basename(path))
-            except Exception as e:
-                logger.warning(f"Failed to send chart {path}: {e}")
+
+    # Generate charts asynchronously (non-blocking)
+    trade = journal_db.get_trade(trade_id)
+    if trade:
+        try:
+            from bot.chart_generator import generate_trade_charts
+
+            chart_paths = generate_trade_charts(
+                trade, output_dir="data/reports", context_weeks=1, timeframe=trade.get("timeframe")
+            )
+            if chart_paths:
+                journal_db.set_trade_chart_paths(trade_id, chart_paths)
+                
+                # Send chart images
+                for path in chart_paths[:3]:
+                    try:
+                        with open(path, 'rb') as photo:
+                            await update.message.reply_photo(photo=photo, caption=os.path.basename(path))
+                    except Exception as e:
+                        logger.warning(f"Failed to send chart {path}: {e}")
+        except Exception as exc:
+            logger.warning("Chart generation failed: %s", exc)
+            await update.message.reply_text(f"⚠️ Charts could not be generated: {exc}")
 
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

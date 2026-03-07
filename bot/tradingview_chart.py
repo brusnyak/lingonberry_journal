@@ -186,9 +186,20 @@ def create_tradingview_chart(
             ax1.axhline(y=exit_price, color=exit_color, linestyle=':',
                        linewidth=2, alpha=0.9, label=f'Exit: {exit_price:.5f}', zorder=10)
         
-        # Entry marker
+        # Entry marker at actual entry time
         if len(df) > 0:
-            entry_time = df['datetime'].iloc[len(df)//4]  # Place marker 1/4 into chart
+            # Find the candle closest to entry time
+            entry_time = df['datetime'].iloc[0]  # Default to first candle
+            if 'ts_open' in trade:
+                try:
+                    trade_entry_time = pd.to_datetime(trade['ts_open'])
+                    # Find closest candle to actual entry time
+                    time_diffs = abs(df['datetime'] - trade_entry_time)
+                    closest_idx = time_diffs.idxmin()
+                    entry_time = df.loc[closest_idx, 'datetime']
+                except:
+                    pass  # Fall back to first candle
+            
             marker = '^' if is_long else 'v'
             ax1.scatter([entry_time], [entry_price], marker=marker, s=150,
                        color=entry_color, edgecolor='white', linewidth=1.5, zorder=15)

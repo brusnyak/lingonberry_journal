@@ -5,12 +5,47 @@
 
 let dateFilter;
 let currentDateRange = { from_ts: null, to_ts: null };
+let currentAccountId = null;
+
+// Listen for account changes
+document.addEventListener('accountChanged', (e) => {
+    console.log('Account changed event received:', e.detail);
+    currentAccountId = e.detail.accountId;
+    loadAnalytics(currentDateRange);
+});
+
+// Also listen for the window event (for compatibility)
+window.addEventListener('accountChanged', (e) => {
+    console.log('Account changed (window event):', e.detail);
+    currentAccountId = e.detail.accountId;
+    loadAnalytics(currentDateRange);
+});
 
 async function loadAnalytics(dateRange = {}) {
     try {
         currentDateRange = dateRange;
-        const data = await api.getDashboard(dateRange);
-        const trades = await api.getTrades(dateRange);
+        const params = new URLSearchParams();
+
+        // Add date range params
+        if (dateRange.from) params.append('from', dateRange.from);
+        if (dateRange.to) params.append('to', dateRange.to);
+
+        // Add account filter
+        if (currentAccountId) {
+            params.append('account_id', currentAccountId);
+            console.log('Loading analytics for account:', currentAccountId);
+        }
+
+        const queryString = params.toString();
+        const dashboardUrl = `/api/dashboard${queryString ? '?' + queryString : ''}`;
+        const tradesUrl = `/api/trades${queryString ? '?' + queryString : ''}`;
+
+        console.log('Fetching:', dashboardUrl);
+
+        const [data, trades] = await Promise.all([
+            fetch(dashboardUrl).then(r => r.json()),
+            fetch(tradesUrl).then(r => r.json())
+        ]);
 
         // Store trades globally for heatmap
         window.currentTrades = trades;
@@ -613,8 +648,26 @@ async function renderMonteCarloProjections() {
     container.innerHTML = '<p style="color: var(--muted); text-align: center; padding: 20px;">Loading Monte Carlo simulation...</p>';
 
     try {
-        console.log('Fetching Monte Carlo data...');
-        const mcData = await api.getMonteCarlo();
+        console.log('Fetching Monte Carlo data for account:', currentAccountId);
+
+        // Build params with account filter
+        const params = new URLSearchParams();
+        if (currentAccountId) {
+            params.append('account_id', currentAccountId);
+        }
+        if (currentDateRange.from) {
+            params.append('from', currentDateRange.from);
+        }
+        if (currentDateRange.to) {
+            params.append('to', currentDateRange.to);
+        }
+
+        const queryString = params.toString();
+        const url = `/api/analytics/monte-carlo${queryString ? '?' + queryString : ''}`;
+        console.log('Monte Carlo URL:', url);
+
+        const response = await fetch(url);
+        const mcData = await response.json();
         console.log('Monte Carlo data received:', mcData);
 
         if (mcData.error) {

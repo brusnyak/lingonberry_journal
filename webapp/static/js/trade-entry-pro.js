@@ -9,6 +9,7 @@ class TradeEntryPro {
     this.symbolSelect = document.getElementById("symbolSelect");
     this.tfSelect = document.getElementById("timeframeSelect");
     this.form = document.getElementById("tradeForm");
+    this.accountBadge = document.getElementById("selectedAccountBadge");
 
     // Form Inputs
     this.inputs = {
@@ -35,7 +36,20 @@ class TradeEntryPro {
     this.initChart();
     this.setupEventListeners();
     this.setupFavorites();
+    this.updateAccountBadge();
     await this.loadData();
+  }
+
+  updateAccountBadge() {
+    if (!this.accountBadge) return;
+
+    const account = window.accountManager?.currentAccount;
+    if (account) {
+      this.accountBadge.innerHTML = `<span style="color: var(--accent);">●</span> ${account.name}`;
+      this.accountBadge.title = `Logging to: ${account.name}`;
+    } else {
+      this.accountBadge.textContent = 'No account selected';
+    }
   }
 
   initChart() {
@@ -65,6 +79,11 @@ class TradeEntryPro {
     this.container.addEventListener("drawing-added", (e) => this.handleDrawing(e.detail));
     this.container.addEventListener("drawing-updated", (e) => {
       if (e.detail.type === "riskreward") this.syncFormWithDrawing(e.detail);
+    });
+
+    // Account change listener
+    document.addEventListener('accountChanged', () => {
+      this.updateAccountBadge();
     });
 
     // Toolbar
@@ -137,6 +156,13 @@ class TradeEntryPro {
   async loadData() {
     const symbol = this.symbolSelect.value;
     const tf = this.tfSelect.value;
+
+    // Show loading notification
+    let loadingToast = null;
+    if (window.notify) {
+      loadingToast = window.notify.info(`Loading ${symbol} ${tf}...`, 0);
+    }
+
     try {
       const res = await fetch(`/api/candles?symbol=${symbol}&timeframe=${tf}`);
       const data = await res.json();
@@ -145,9 +171,28 @@ class TradeEntryPro {
         this.series.setData(data);
         this.engine.setCandles(data);
         this.chart.timeScale().fitContent();
+
+        if (window.notify && loadingToast) {
+          window.notify.dismiss(loadingToast);
+          window.notify.success(`${symbol} ${tf} loaded`);
+        }
+      } else {
+        if (window.notify && loadingToast) {
+          window.notify.dismiss(loadingToast);
+          window.notify.warning(`No data for ${symbol} ${tf}`);
+        }
       }
     } catch (err) {
       console.error("Load failed", err);
+      if (window.notify && loadingToast) {
+        window.notify.dismiss(loadingToast);
+        window.notify.error("Failed to load chart data");
+      }
+    }
+
+    // Redraw to ensure drawings are visible
+    if (this.engine) {
+      this.engine.redraw();
     }
   }
 
@@ -193,48 +238,219 @@ class TradeEntryPro {
     this.inputs.lots.value = lots.toFixed(2);
   }
 
+  determineExitPrice(direction, entry, sl, tp) {
+    // For now, we'll check if price hit SL or TP first
+    // This will be determined by scanning the candles
+    return null; // Will be set by findExitTime
+  }
+
+  findExitTime(entryTime, exitPrice, direction, sl, tp) {
+    // Scan through candles after entry to find when price hit SL or TP
+    if (!this.currentData || this.currentData.length === 0) {
+      return null;
+    }
+
+    // Find candles after entry time
+    const candlesAfterEntry = this.currentData.filter(c => c.time >= entryTime);
+
+    for (const candle of candlesAfterEntry) {
+      // Skip the entry candle
+      if (candle.time === entryTime) continue;
+
+      // Check if SL was hit
+      if (direction === 'LONG') {
+        if (candle.low <= sl) {
+          return candle.time; // SL hit
+        }
+        if (candle.high >= tp) {
+          return candle.time; // TP hit
+        }
+      } else { // SHORT
+        if (candle.high >= sl) {
+          return candle.time; // SL hit
+        }
+        if (candle.low <= tp) {
+          return candle.time; // TP hit
+        }
+      }
+    }
+
+    return null; // Exit not found in available data
+  }
+
+
+  async captureChartScreenshot() {
+    return new Promise((resolve, reject) => {
+      try {
+        // Get the chart container
+        const chartContainer = document.getElementById('chartContainer');
+        if (!chartContainer) {
+          reject(new Error('Chart container not found'));
+          return;
+        }
+
+        // Create a temporary canvas to combine chart + drawings
+        const tempCanvas = document.createElement('canvas');
+        const rect = chartContainer.getBoundingClientRect();
+        tempCanvas.width = rect.width;
+        tempCanvas.height = rect.height;
+        const ctx = tempCanvas.getContext('2d');
+
+        // Fill background
+        ctx.fillStyle = '#131722';
+        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+        // Try to get the chart canvas (LightweightCharts creates its own canvas)
+        const chartCanvases = chartContainer.querySelectorAll('canvas');
+
+        // Draw all canvases (chart + drawings)
+        chartCanvases.forEach(canvas => {
+          try {
+            ctx.drawImage(canvas, 0, 0);
+          } catch (e) {
+            console.warn('Could not draw canvas:', e);
+          }
+        });
+
+        // Convert to base64 (JPEG for smaller size)
+        const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.85);
+        resolve(dataUrl);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
   async handleSubmit(e) {
     e.preventDefault();
     const btn = this.form.querySelector("button[type='submit']");
     btn.disabled = true;
 
+    // Get current account ID with debugging
+    const accountId = window.accountManager?.getCurrentAccountId();
+    console.log('📝 Submitting trade to account:', accountId);
+
+    if (!accountId) {
+      console.error('❌ No account selected!');
+      if (window.notify) {
+        window.notify.error('Please select an account first');
+      }
+      btn.disabled = false;
+      return;
+    }
+
+    // Determine direction from entry/sl/tp
+    const entry = parseFloat(this.inputs.entry.value);
+    const sl = parseFloat(this.inputs.sl.value);
+    const tp = parseFloat(this.inputs.tp.value);
+
+    // Direction logic: if TP > entry, it's LONG; if TP < entry, it's SHORT
+    const direction = tp > entry ? 'LONG' : 'SHORT';
+    console.log('   Direction:', direction, '(TP:', tp, 'Entry:', entry, ')');
+
+    // Extract trade time from drawing (if available) or use current time
+    let ts_open = Math.floor(Date.now() / 1000);
+    let ts_close = null; // Will be calculated based on when price hits SL/TP
+
+    const rrDrawing = this.engine.state.drawings.find(d => d.type === "riskreward");
+    if (rrDrawing && rrDrawing.points && rrDrawing.points.length > 0) {
+      // Chart timestamps are already in Unix seconds
+      ts_open = Math.floor(rrDrawing.points[0].time);
+
+      // Find when price hit SL or TP by scanning candles
+      const entryTime = ts_open;
+      const exitPrice = this.determineExitPrice(direction, entry, sl, tp);
+      ts_close = this.findExitTime(entryTime, exitPrice, direction, sl, tp);
+
+      const openDate = new Date(ts_open * 1000);
+      const closeDate = ts_close ? new Date(ts_close * 1000) : null;
+      console.log('   Using trade time from chart:');
+      console.log('   Entry:', openDate.toISOString(), '(', ts_open, ')');
+      if (closeDate) {
+        console.log('   Exit:', closeDate.toISOString(), '(', ts_close, ')');
+      } else {
+        console.log('   Exit: Not found in chart data (using entry time)');
+      }
+    } else {
+      console.log('   No drawing found, using current time');
+    }
+
     const payload = {
+      account_id: accountId,
       symbol: this.symbolSelect.value,
-      entry_price: parseFloat(this.inputs.entry.value),
-      exit_price: parseFloat(this.inputs.tp.value), // Usually we log the target or leave open
-      sl: parseFloat(this.inputs.sl.value),
-      tp: parseFloat(this.inputs.tp.value),
-      ts_open: Math.floor(Date.now() / 1000), // Current time for manual entry
-      ts_close: Math.floor(Date.now() / 1000) + 3600, // +1 hour as default for manual entry if missing
+      direction: direction,
+      entry_price: entry,
+      exit_price: null, // Will be determined by outcome
+      sl: sl,
+      tp: tp,
+      ts_open: ts_open,
+      ts_close: ts_close || ts_open, // Use entry time if exit not found
+      timeframe: this.tfSelect.value,
       risk: parseFloat(this.inputs.risk.value),
       lots: parseFloat(this.inputs.lots.value),
       mindset: this.inputs.mindset.value,
       setup: this.inputs.setup.value,
       notes: this.inputs.notes.value,
-      drawings: this.engine.state.drawings // Save drawings with the trade!
+      drawings: this.engine.state.drawings,
+      indicator_data: {
+        mindset: this.inputs.mindset.value,
+        setup: this.inputs.setup.value,
+        risk_pct: parseFloat(this.inputs.risk.value),
+        lots: parseFloat(this.inputs.lots.value)
+      }
     };
 
     try {
+      // Capture chart screenshot before submitting
+      let chartScreenshot = null;
+      try {
+        chartScreenshot = await this.captureChartScreenshot();
+        console.log('📸 Chart screenshot captured');
+      } catch (err) {
+        console.warn('Failed to capture screenshot:', err);
+      }
+
       const res = await fetch("/api/trades/manual", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          ...payload,
+          chart_screenshot: chartScreenshot
+        })
       });
 
       const data = await res.json();
 
       if (res.ok) {
-        alert("Trade Logged!");
-        window.location.href = "/mini";
+        const accountName = window.accountManager?.currentAccount?.name || 'Account';
+        if (window.notify) {
+          window.notify.success(`✅ Trade logged to ${accountName}!`);
+        } else {
+          alert(`Trade logged to ${accountName}!`);
+        }
+        // Reset form instead of redirecting
+        this.form.reset();
+        this.inputs.risk.value = "1.0";
+        if (this.engine && typeof this.engine.clear === 'function') {
+          this.engine.clear();
+        }
       } else {
         console.error("Error response:", data);
         const errorMsg = data.error || "Unknown error";
         const details = data.message || data.details || "";
-        alert(`Error: ${errorMsg}\n${details}`);
+        if (window.notify) {
+          window.notify.error(`${errorMsg}${details ? ': ' + details : ''}`);
+        } else {
+          alert(`Error: ${errorMsg}\n${details}`);
+        }
       }
     } catch (err) {
       console.error("Request failed:", err);
-      alert("System Error: " + err.message);
+      if (window.notify) {
+        window.notify.error("System Error: " + err.message);
+      } else {
+        alert("System Error: " + err.message);
+      }
     } finally {
       btn.disabled = false;
     }

@@ -185,13 +185,25 @@ def api_accounts_create():
 @app.route("/api/candles")
 def api_candles():
     symbol = request.args.get("symbol")
-    asset_type = request.args.get("asset_type", "forex")
+    asset_type = request.args.get("asset_type")
     timeframe = request.args.get("timeframe", "H1")
     start_str = request.args.get("start")
     end_str = request.args.get("end")
 
     if not symbol:
         return jsonify({"error": "Symbol is required"}), 400
+    
+    # Auto-detect asset_type if not provided
+    if not asset_type:
+        symbol_upper = symbol.upper()
+        if symbol_upper in ['XAUUSD', 'XAGUSD', 'XPTUSD', 'XPDUSD']:
+            asset_type = 'commodity'
+        elif symbol_upper in ['US100', 'NAS100', 'SPX500', 'US30']:
+            asset_type = 'index'
+        elif symbol_upper.startswith('BTC') or symbol_upper.startswith('ETH'):
+            asset_type = 'crypto'
+        else:
+            asset_type = 'forex'
 
     try:
         # Get current time once for consistent rounding
@@ -220,7 +232,7 @@ def api_candles():
         timeframe=timeframe,
         start=start,
         end=end,
-        ttl_seconds=300
+        ttl_seconds=30  # 30 second cache for rapid updates like TradingView
     )
 
     if df.empty:
@@ -257,8 +269,8 @@ def api_trades_manual():
     try:
         body = request.get_json(force=True, silent=True) or {}
         
-        # Validate required fields
-        required = ["symbol", "entry_price", "exit_price", "ts_open", "ts_close"]
+        # Validate required fields - make ts_close optional since we calculate it
+        required = ["symbol", "entry_price", "ts_open"]
         missing = [k for k in required if k not in body]
         if missing:
             return jsonify({
@@ -288,10 +300,15 @@ def api_trades_manual():
             else:
                 ts_open = body["ts_open"]
                 
-            if isinstance(body["ts_close"], (int, float)):
-                ts_close = datetime.fromtimestamp(body["ts_close"], timezone.utc).isoformat()
+            # ts_close is optional - if not provided, use ts_open (will be updated when trade closes)
+            if "ts_close" in body and body["ts_close"]:
+                if isinstance(body["ts_close"], (int, float)):
+                    ts_close = datetime.fromtimestamp(body["ts_close"], timezone.utc).isoformat()
+                else:
+                    ts_close = body["ts_close"]
             else:
-                ts_close = body["ts_close"]
+                # Default to ts_open for now (trade is still open)
+                ts_close = ts_open
         except (ValueError, OSError) as e:
             return jsonify({
                 "error": "Invalid timestamp format",
@@ -301,10 +318,12 @@ def api_trades_manual():
         # Parse and validate prices
         try:
             entry = float(body["entry_price"])
-            exit_price = float(body["exit_price"])
             lots = float(body.get("lots", 0.1))
             sl_price = float(body["sl"]) if body.get("sl") else None
             tp_price = float(body["tp"]) if body.get("tp") else None
+            
+            # exit_price is optional - if not provided, trade is still open
+            exit_price = float(body["exit_price"]) if body.get("exit_price") else None
         except (ValueError, TypeError) as e:
             return jsonify({
                 "error": "Invalid price or lot size",
@@ -314,8 +333,16 @@ def api_trades_manual():
         # Determine direction - prefer explicit direction from body
         direction = body.get("direction")
         if not direction:
-            # Infer from entry/exit if not provided
-            direction = "LONG" if exit_price > entry else "SHORT"
+            # Infer from entry/tp/sl if not provided
+            if tp_price and sl_price:
+                direction = "LONG" if tp_price > entry else "SHORT"
+            elif exit_price:
+                direction = "LONG" if exit_price > entry else "SHORT"
+            else:
+                return jsonify({
+                    "error": "Cannot determine direction",
+                    "message": "Please provide direction, or both TP and SL prices"
+                }), 400
         direction = direction.upper()
         
         if direction not in ["LONG", "SHORT"]:
@@ -325,14 +352,17 @@ def api_trades_manual():
                 "valid_values": ["LONG", "SHORT"]
             }), 400
         
-        # Determine outcome
+        # Determine outcome - default to OPEN if no exit price
         outcome = body.get("outcome")
         if not outcome:
-            # Infer outcome based on direction and exit price
-            if direction == "LONG":
-                outcome = "TP" if exit_price > entry else "SL"
+            if exit_price:
+                # Infer outcome based on direction and exit price
+                if direction == "LONG":
+                    outcome = "TP" if exit_price > entry else "SL"
+                else:
+                    outcome = "TP" if exit_price < entry else "SL"
             else:
-                outcome = "TP" if exit_price < entry else "SL"
+                outcome = "OPEN"  # Trade is still open
         
         # Extract metadata
         is_perfect = body.get("is_perfect", False)
@@ -351,12 +381,15 @@ def api_trades_manual():
                 indicator_data[key] = body[key]
         
         # 1. Save trade to database
+        # If exit_price is None, use TP as placeholder for closed trade calculation
+        effective_exit = exit_price if exit_price is not None else (tp_price if outcome == "TP" else sl_price)
+        
         trade_id = journal_db.add_manual_trade(
             account_id=account_id,
             symbol=symbol,
             direction=direction,
             entry_price=entry,
-            exit_price=exit_price,
+            exit_price=effective_exit,
             sl_price=sl_price,
             tp_price=tp_price,
             ts_open=ts_open,
@@ -399,37 +432,65 @@ def api_trades_manual():
                 print(f"Warning: Failed to save drawing: {e}")
                 # Continue even if drawing save fails
         
-        # 4. Generate charts (optional, don't fail if this errors)
+        # 4. Save chart screenshot if provided (fast!)
         chart_paths = []
-        try:
-            trade = journal_db.get_trade(trade_id)
-            charts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "reports")
-            os.makedirs(charts_dir, exist_ok=True)
-            chart_paths = chart_generator.generate_trade_charts(trade, charts_dir)
-            
-            # Update trade with chart paths
-            if chart_paths:
-                relative_paths = [os.path.basename(p) for p in chart_paths]
-                journal_db.update_trade_chart_path(trade_id, ",".join(relative_paths))
-        except Exception as e:
-            print(f"Warning: Chart generation failed: {e}")
-            # Don't fail the request if chart generation fails
+        chart_screenshot = body.get("chart_screenshot")
+        
+        if chart_screenshot:
+            try:
+                import base64
+                from datetime import datetime
+                
+                # Extract base64 data
+                if ',' in chart_screenshot:
+                    chart_screenshot = chart_screenshot.split(',')[1]
+                
+                # Decode and save
+                charts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "reports")
+                os.makedirs(charts_dir, exist_ok=True)
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"trade_{symbol}_{direction}_{body.get('timeframe', 'M30')}_{timestamp}.jpg"
+                filepath = os.path.join(charts_dir, filename)
+                
+                # Decode base64
+                screenshot_data = base64.b64decode(chart_screenshot)
+                
+                with open(filepath, 'wb') as f:
+                    f.write(screenshot_data)
+                
+                chart_paths = [filepath]
+                
+                # Update trade with chart path
+                journal_db.update_trade_chart_path(trade_id, filename)
+                print(f"✅ Screenshot saved for trade {trade_id}: {filename} ({len(screenshot_data)} bytes)")
+                
+            except Exception as e:
+                import traceback
+                error_trace = traceback.format_exc()
+                print(f"⚠️ Screenshot save failed for trade {trade_id}: {e}")
+                print(error_trace)
+                # Don't fail the request if screenshot save fails
+        else:
+            print(f"ℹ️ No screenshot provided for trade {trade_id}, skipping chart generation")
         
         return jsonify({
             "success": True,
             "trade_id": trade_id,
-            "charts": chart_paths,
-            "drawings_saved": len(saved_drawings)
+            "charts": [os.path.basename(p) for p in chart_paths] if chart_paths else [],
+            "drawings_saved": len(saved_drawings),
+            "message": "Trade saved successfully" + (f" with {len(chart_paths)} charts" if chart_paths else "")
         }), 201
         
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
-        print(f"Error in api_trades_manual: {error_trace}")
+        print(f"❌ Error in api_trades_manual: {error_trace}")
         return jsonify({
             "error": "Internal server error",
             "message": str(e),
-            "type": type(e).__name__
+            "type": type(e).__name__,
+            "trace": error_trace.split('\n')[-10:]  # Last 10 lines of trace
         }), 500
 def api_account_update(account_id: int):
     body = request.get_json(force=True, silent=True) or {}
@@ -479,6 +540,79 @@ def api_account_update(account_id: int):
         )
     
     return jsonify({"account": journal_db.get_account(account_id)})
+
+
+@app.route("/api/accounts/<int:account_id>", methods=["PUT"])
+def api_account_update(account_id: int):
+    body = request.get_json(force=True, silent=True) or {}
+    
+    # Update account basic info
+    conn = journal_db.get_connection()
+    cursor = conn.cursor()
+    
+    updates = []
+    params = []
+    
+    if "name" in body:
+        updates.append("name = ?")
+        params.append(body["name"])
+    if "currency" in body:
+        updates.append("currency = ?")
+        params.append(body["currency"])
+    if "initial_balance" in body:
+        updates.append("initial_balance = ?")
+        params.append(float(body["initial_balance"]))
+    if "firm_name" in body:
+        updates.append("firm_name = ?")
+        params.append(body["firm_name"])
+    if "broker" in body:
+        updates.append("broker = ?")
+        params.append(body["broker"])
+    if "platform" in body:
+        updates.append("platform = ?")
+        params.append(body["platform"])
+    
+    if updates:
+        params.append(account_id)
+        cursor.execute(
+            f"UPDATE accounts SET {', '.join(updates)} WHERE id = ?",
+            params
+        )
+        conn.commit()
+    
+    # Update rules if provided
+    if any(k in body for k in ["max_daily_loss_pct", "max_total_loss_pct", "profit_target_pct", "risk_per_trade_pct"]):
+        journal_db.update_account_rules(
+            account_id=account_id,
+            max_daily_loss_pct=float(body.get("max_daily_loss_pct", 5)),
+            max_total_loss_pct=float(body.get("max_total_loss_pct", 10)),
+            profit_target_pct=float(body.get("profit_target_pct", 10)),
+            risk_per_trade_pct=float(body.get("risk_per_trade_pct", 1)),
+        )
+    
+    conn.close()
+    return jsonify({"account": journal_db.get_account(account_id)})
+
+
+@app.route("/api/accounts/<int:account_id>", methods=["DELETE"])
+def api_account_delete(account_id: int):
+    """Delete an account (soft delete - keeps trades)"""
+    account = journal_db.get_account(account_id)
+    if not account:
+        abort(404, description="Account not found")
+    
+    conn = journal_db.get_connection()
+    cursor = conn.cursor()
+    
+    # Soft delete by setting status to DELETED
+    cursor.execute(
+        "UPDATE accounts SET status = 'DELETED', updated_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), account_id)
+    )
+    conn.commit()
+    conn.close()
+    
+    return jsonify({"success": True, "message": "Account deleted"})
 
 
 @app.route("/api/accounts/<int:account_id>/rules", methods=["POST"])
@@ -733,83 +867,69 @@ def api_monte_carlo():
     from_ts = request.args.get("from")
     to_ts = request.args.get("to")
     
-    # Get stored results
-    stored = journal_db.get_monte_carlo_stats(
-        account_id=account_id,
-        from_ts=from_ts,
-        to_ts=to_ts,
-    )
-    
-    # If no stored results or old, run new simulation
-    if not stored.get("results") or stored.get("num_simulations", 0) == 0:
+    try:
         from core.monte_carlo import run_monte_carlo_simulation
         
-        try:
-            results = run_monte_carlo_simulation(
-                account_id=account_id,
-                num_simulations=100,  # Reduced for faster response
-                num_trades=50,
-                from_ts=from_ts,
-                to_ts=to_ts,
-            )
-            
-            if results.get("status") == "error":
-                return jsonify({
-                    "simulations": [],
-                    "stats": {},
-                    "error": results.get("message", "Not enough data")
-                })
-            
-            # Generate simulation paths for visualization
-            trades = journal_db.get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
-            closed_trades = [t for t in trades if t["outcome"] != "OPEN"]
-            pnl_pcts = [t.get("pnl_pct", 0) for t in closed_trades]
-            
-            if not pnl_pcts:
-                return jsonify({
-                    "simulations": [],
-                    "stats": {},
-                    "error": "No trade data available"
-                })
-            
-            # Generate 10 sample paths for visualization
-            import random
-            simulations = []
-            initial_balance = results.get("initial_balance", 10000)
-            
-            for _ in range(10):
-                path = [initial_balance]
-                balance = initial_balance
-                for _ in range(50):
-                    pnl_pct = random.choice(pnl_pcts)
-                    balance += balance * (pnl_pct / 100)
-                    path.append(balance)
-                simulations.append(path)
-            
-            return jsonify({
-                "simulations": simulations,
-                "stats": {
-                    "median_final": results["final_balance"]["median"] - initial_balance,
-                    "p25_final": results["final_balance"]["percentile_25"] - initial_balance,
-                    "p75_final": results["final_balance"]["percentile_75"] - initial_balance,
-                    "prob_profit": results["probability_of_profit"] / 100,
-                }
-            })
-            
-        except Exception as e:
-            print(f"Monte Carlo error: {e}")
+        results = run_monte_carlo_simulation(
+            account_id=account_id or 1,
+            num_simulations=100,
+            num_trades=50,
+            from_ts=from_ts,
+            to_ts=to_ts,
+        )
+        
+        if results.get("status") == "error":
             return jsonify({
                 "simulations": [],
                 "stats": {},
-                "error": str(e)
+                "error": results.get("message", "Not enough data")
             })
-    
-    # Return stored results
-    results = stored.get("results", {})
-    return jsonify({
-        "simulations": results.get("simulations", []),
-        "stats": results.get("stats", {})
-    })
+        
+        # Generate simulation paths for visualization
+        trades = journal_db.get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+        closed_trades = [t for t in trades if t.get("outcome") != "OPEN"]
+        pnl_pcts = [t.get("pnl_pct") for t in closed_trades if t.get("pnl_pct") is not None]
+        
+        if not pnl_pcts:
+            return jsonify({
+                "simulations": [],
+                "stats": {},
+                "error": "No trade data available"
+            })
+        
+        # Generate 10 sample paths for visualization
+        import random
+        simulations = []
+        initial_balance = results.get("initial_balance", 10000)
+        
+        for _ in range(10):
+            path = [initial_balance]
+            balance = initial_balance
+            for _ in range(50):
+                pnl_pct = random.choice(pnl_pcts)
+                balance += balance * (pnl_pct / 100)
+                path.append(balance)
+            simulations.append(path)
+        
+        return jsonify({
+            "simulations": simulations,
+            "stats": {
+                "median_final": results["final_balance"]["median"] - initial_balance,
+                "p25_final": results["final_balance"]["percentile_25"] - initial_balance,
+                "p75_final": results["final_balance"]["percentile_75"] - initial_balance,
+                "prob_profit": results["probability_of_profit"] / 100,
+            }
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"Monte Carlo error: {traceback.format_exc()}")
+        return jsonify({
+            "simulations": [],
+            "stats": {},
+            "error": str(e)
+        })
+
 
 
 @app.route("/api/trades/<int:trade_id>/playback")

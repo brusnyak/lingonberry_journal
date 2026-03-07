@@ -11,7 +11,7 @@ class DrawingEngine {
     this.container = container;
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
-    
+
     this.state = {
       drawings: [],
       currentTool: "cursor",
@@ -30,7 +30,7 @@ class DrawingEngine {
   init() {
     this.resize();
     window.addEventListener("resize", () => this.resize());
-    
+
     this.container.addEventListener("mousedown", (e) => this.handleMouseDown(e), true);
     window.addEventListener("mousemove", (e) => this.handleMouseMove(e), true);
     window.addEventListener("mouseup", (e) => this.handleMouseUp(e), true);
@@ -45,8 +45,14 @@ class DrawingEngine {
 
   resize() {
     const rect = this.container.getBoundingClientRect();
+
+    // Simple 1:1 canvas sizing (no DPR scaling for now to fix visibility)
     this.canvas.width = rect.width;
     this.canvas.height = rect.height;
+    this.canvas.style.width = rect.width + 'px';
+    this.canvas.style.height = rect.height + 'px';
+
+    console.log('Canvas resized:', rect.width, 'x', rect.height);
     this.redraw();
   }
 
@@ -66,7 +72,7 @@ class DrawingEngine {
     const rect = this.container.getBoundingClientRect();
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
-    
+
     const mouseTime = this.chart.timeScale().coordinateToTime(x);
     const mousePrice = this.series.coordinateToPrice(y);
     if (mouseTime == null || mousePrice == null) return null;
@@ -76,7 +82,7 @@ class DrawingEngine {
 
     let minD2 = 400; // 20px radius
     const visibleRange = this.chart.timeScale().getVisibleRange();
-    
+
     if (visibleRange && this.state.candles.length) {
       for (const c of this.state.candles) {
         if (c.time < visibleRange.from || c.time > visibleRange.to) continue;
@@ -85,13 +91,13 @@ class DrawingEngine {
         const cp_h = this.series.priceToCoordinate(c.high);
         const cp_l = this.series.priceToCoordinate(c.low);
         const cp_c = this.series.priceToCoordinate(c.close);
-        
+
         [
-          {y: cp_o, p: c.open}, {y: cp_h, p: c.high}, 
-          {y: cp_l, p: c.low}, {y: cp_c, p: c.close}
+          { y: cp_o, p: c.open }, { y: cp_h, p: c.high },
+          { y: cp_l, p: c.low }, { y: cp_c, p: c.close }
         ].forEach(lvl => {
           if (lvl.y == null) return;
-          const d2 = (cx - x)**2 + (lvl.y - y)**2;
+          const d2 = (cx - x) ** 2 + (lvl.y - y) ** 2;
           if (d2 < minD2) {
             minD2 = d2;
             bestPoint = { time: c.time, price: lvl.p };
@@ -129,23 +135,23 @@ class DrawingEngine {
         const first = this.state.drawingDraft.first;
         const tool = this.state.drawingDraft.tool;
         this.state.drawingDraft = null;
-        
+
         if (tool === "trendline") this.addDrawing({ type: "trendline", points: [first, p] });
         if (tool === "rect") this.addDrawing({ type: "rect", points: [first, p] });
         if (tool === "long" || tool === "short") this.addDrawing({ type: "riskreward", points: [first, p], side: tool });
-        
+
         if (["bos", "choch", "sweep"].includes(tool)) {
-          this.addDrawing({ 
-            type: "smc", 
-            points: [first, p], 
+          this.addDrawing({
+            type: "smc",
+            points: [first, p],
             label: tool.toUpperCase(),
-            style: { 
+            style: {
               stroke: tool === "sweep" ? "#f59e0b" : (tool === "bos" ? "#22c55e" : "#ef4444"),
-              dash: tool === "sweep" ? [5, 5] : [] 
+              dash: tool === "sweep" ? [5, 5] : []
             }
           });
         }
-        
+
         this.dispatchEvent("drawing-added", { tool, points: [first, p] });
         this.setTool("cursor");
       }
@@ -176,7 +182,7 @@ class DrawingEngine {
         }
 
         for (let i = 0; i < pts.length; i++) {
-          const d2 = (pts[i].x - mx)**2 + (pts[i].y - my)**2;
+          const d2 = (pts[i].x - mx) ** 2 + (pts[i].y - my) ** 2;
           if (d2 < 100) { // 10px radius
             ev.preventDefault();
             ev.stopPropagation();
@@ -195,7 +201,7 @@ class DrawingEngine {
         break;
       }
     }
-    
+
     this.state.selectedId = found;
     if (found) {
       ev.preventDefault();
@@ -215,7 +221,7 @@ class DrawingEngine {
       ev.preventDefault();
       const p = this.getPointFromMouse(ev, { disableMagnet: !!ev.shiftKey });
       if (!p) return;
-      
+
       const d = this.state.drawings.find(x => x.id === this.state.dragging.id);
       if (!d) return;
 
@@ -250,7 +256,7 @@ class DrawingEngine {
         d.points = d.points.map(pt => ({ time: pt.time + dt, price: pt.price + dp }));
         this.state.dragging.offset = p;
       }
-      
+
       this.state.dragDirty = true;
       this.dispatchEvent("drawing-updated", d);
       this.redraw();
@@ -308,34 +314,46 @@ class DrawingEngine {
   }
 
   distToSegment(px, py, x1, y1, x2, y2) {
-    const l2 = (x1 - x2)**2 + (y1 - y2)**2;
-    if (l2 === 0) return Math.sqrt((px - x1)**2 + (py - y1)**2);
+    const l2 = (x1 - x2) ** 2 + (y1 - y2) ** 2;
+    if (l2 === 0) return Math.sqrt((px - x1) ** 2 + (py - y1) ** 2);
     let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
     t = Math.max(0, Math.min(1, t));
-    return Math.sqrt((px - (x1 + t * (x2 - x1)))**2 + (py - (y1 + t * (y2 - y1)))**2);
+    return Math.sqrt((px - (x1 + t * (x2 - x1))) ** 2 + (py - (y1 + t * (y2 - y1))) ** 2);
   }
 
   addDrawing(partial) {
     const drawing = {
       id: Math.random().toString(36).substr(2, 9),
       type: partial.type,
-      points: partial.points.map(p => ({...p})),
+      points: partial.points.map(p => ({ ...p })),
       style: partial.style || { stroke: "#00a3ff", fill: "rgba(0, 163, 255, 0.1)" },
       side: partial.side || null,
       label: partial.label || null,
     };
     this.state.drawings.push(drawing);
+    console.log('✏️ Drawing added:', drawing.type, 'Side:', drawing.side, 'Total drawings:', this.state.drawings.length);
     this.redraw();
   }
 
   redraw() {
     if (!this.ctx) return;
+
+    const rect = this.container.getBoundingClientRect();
+
+    // Clear canvas
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+    if (this.state.drawings.length > 0) {
+      console.log('Redrawing', this.state.drawings.length, 'drawings');
+    }
 
     // Draw Drawings
     for (const d of this.state.drawings) {
       const pts = d.points.map(p => this.pointToXY(p)).filter(x => x);
-      if (pts.length === 0) continue;
+      if (pts.length === 0) {
+        console.warn('Drawing has no valid points:', d.type);
+        continue;
+      }
 
       this.ctx.strokeStyle = d.id === this.state.selectedId ? "#fff" : (d.style.stroke || "#00a3ff");
       this.ctx.lineWidth = 2;
@@ -368,7 +386,7 @@ class DrawingEngine {
         this.ctx.lineTo(pts[1].x, pts[1].y);
         this.ctx.stroke();
         this.ctx.setLineDash([]);
-        
+
         // Draw Label at the end or middle? User said "according label". 
         // TV usually has it at the end or middle. Let's do middle for now.
         const midX = (pts[0].x + pts[1].x) / 2;
@@ -378,9 +396,11 @@ class DrawingEngine {
         this.ctx.textAlign = "center";
         this.ctx.fillText(d.label, midX, midY - 10);
       } else if (d.type === "riskreward" && d.points.length >= 2) {
+        console.log('Drawing risk/reward box:', d.side, 'Points:', d.points.length);
+
         const entryP = d.points[0];
         const stopP = d.points[1];
-        
+
         // Ensure we have target and end points
         if (d.points.length < 3) {
           const diff = entryP.price - stopP.price;
@@ -388,7 +408,7 @@ class DrawingEngine {
         }
         if (d.points.length < 4) {
           const hours = 24; // Default length
-          d.points[3] = { time: entryP.time + 3600 * hours, price: entryP.price }; 
+          d.points[3] = { time: entryP.time + 3600 * hours, price: entryP.price };
         }
 
         const targetP = d.points[2];
@@ -397,7 +417,16 @@ class DrawingEngine {
         const entryXY = this.pointToXY(entryP);
         const stopXY = this.pointToXY(stopP);
         const targetXY = this.pointToXY(targetP);
-        const endXY = this.pointToXY(endP);
+        let endXY = this.pointToXY(endP);
+
+        // Fallback: if endXY is null (outside visible range), use fixed pixel width
+        if (!endXY && entryXY) {
+          const fixedWidth = 200; // 200px wide box
+          endXY = { x: entryXY.x + fixedWidth, y: entryXY.y };
+          console.log('⚠️ endXY was null, using fixed width fallback:', endXY);
+        }
+
+        console.log('Coordinates:', { entryXY, stopXY, targetXY, endXY });
 
         if (entryXY && stopXY && targetXY && endXY) {
           const leftX = entryXY.x;
@@ -406,24 +435,27 @@ class DrawingEngine {
           const stopY = stopXY.y;
           const targetY = targetXY.y;
 
-          // Stop Zone
-          this.ctx.fillStyle = d.side === "long" ? "rgba(239, 68, 68, 0.2)" : "rgba(34, 197, 94, 0.2)";
+          console.log('Drawing boxes at:', { leftX, rightX, entryY, stopY, targetY });
+
+          // Stop Zone (always RED - loss zone)
+          this.ctx.fillStyle = "rgba(239, 68, 68, 0.3)";
           const stopBoxY = Math.min(entryY, stopY);
           const stopBoxH = Math.abs(stopY - entryY);
           this.ctx.fillRect(leftX, stopBoxY, rightX - leftX, stopBoxH);
 
-          // Target Zone
-          this.ctx.fillStyle = d.side === "long" ? "rgba(34, 197, 94, 0.2)" : "rgba(239, 68, 68, 0.2)";
+          // Target Zone (always GREEN - profit zone)
+          this.ctx.fillStyle = "rgba(34, 197, 94, 0.3)";
           const targetBoxY = Math.min(entryY, targetY);
           const targetBoxH = Math.abs(targetY - entryY);
           this.ctx.fillRect(leftX, targetBoxY, rightX - leftX, targetBoxH);
-          
+
           this.ctx.strokeStyle = d.side === "long" ? "#22c55e" : "#ef4444";
-          this.ctx.lineWidth = 1;
+          this.ctx.lineWidth = 2;
           this.ctx.strokeRect(leftX, Math.min(targetY, stopY), rightX - leftX, Math.abs(stopY - targetY));
-          
+
           // Entry Line
           this.ctx.strokeStyle = "#94a3b8";
+          this.ctx.lineWidth = 2;
           this.ctx.beginPath();
           this.ctx.moveTo(leftX, entryY);
           this.ctx.lineTo(rightX, entryY);

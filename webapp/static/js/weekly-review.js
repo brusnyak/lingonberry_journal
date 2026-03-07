@@ -409,27 +409,31 @@ class WeeklyReview {
     }
 
     showToast(message) {
-        const toast = document.createElement('div');
-        toast.className = 'toast';
-        toast.textContent = message;
-        toast.style.cssText = `
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            background: #1a1a1a;
-            border: 1px solid #ff8c00;
-            padding: 14px 20px;
-            border-radius: 8px;
-            color: #ffffff;
-            z-index: 10000;
-            animation: slideIn 0.3s ease;
-        `;
-        document.body.appendChild(toast);
+        if (window.notify) {
+            window.notify.success(message);
+        } else {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = message;
+            toast.style.cssText = `
+                position: fixed;
+                bottom: 24px;
+                right: 24px;
+                background: #1a1a1a;
+                border: 1px solid #ff8c00;
+                padding: 14px 20px;
+                border-radius: 8px;
+                color: #ffffff;
+                z-index: 10000;
+                animation: slideIn 0.3s ease;
+            `;
+            document.body.appendChild(toast);
 
-        setTimeout(() => {
-            toast.style.animation = 'slideOut 0.3s ease';
-            setTimeout(() => toast.remove(), 300);
-        }, 2000);
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 2000);
+        }
     }
 }
 

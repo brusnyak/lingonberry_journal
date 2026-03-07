@@ -46,12 +46,16 @@ def run_monte_carlo_simulation(
         }
     
     # Extract P&L percentages
-    pnl_pcts = [t.get("pnl_pct", 0) for t in closed_trades]
+    pnl_pcts = []
+    for t in closed_trades:
+        pnl_pct = t.get("pnl_pct")
+        if pnl_pct is not None:
+            pnl_pcts.append(pnl_pct)
     
-    if not pnl_pcts:
+    if len(pnl_pcts) < 5:
         return {
             "status": "error",
-            "message": "No P&L data available",
+            "message": f"Need at least 5 trades with P&L data (found {len(pnl_pcts)})",
         }
     
     # Get account info

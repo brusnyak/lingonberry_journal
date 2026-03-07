@@ -449,11 +449,11 @@ class TradeModal {
 
     renderIndicatorSnapshot(trade) {
         if (!trade.indicator_data) return '';
-        
+
         let data = {};
         try {
-            data = typeof trade.indicator_data === 'string' 
-                ? JSON.parse(trade.indicator_data) 
+            data = typeof trade.indicator_data === 'string'
+                ? JSON.parse(trade.indicator_data)
                 : trade.indicator_data;
         } catch (e) {
             console.warn('Failed to parse indicator data:', e);
@@ -518,9 +518,9 @@ class TradeModal {
                     <div class="trade-charts">
                         <div class="trade-notes-title">📊 Multi-Timeframe Analysis</div>
                         ${paths.map(path => {
-                            const filename = path.split('/').pop();
-                            const tf = filename.split('_')[3] || 'Chart';
-                            return `
+                    const filename = path.split('/').pop();
+                    const tf = filename.split('_')[3] || 'Chart';
+                    return `
                                 <div class="trade-chart-item">
                                     <div class="trade-chart-label">${tf} Chart</div>
                                     <img 
@@ -530,7 +530,7 @@ class TradeModal {
                                     />
                                 </div>
                             `;
-                        }).join('')}
+                }).join('')}
                     </div>
                 `;
             }
@@ -557,16 +557,12 @@ class TradeModal {
                         <img 
                             src="/charts/${baseFilename}_${tf}_${timestamp}.png" 
                             alt="${tf} chart"
-                            onerror="this.placeholder_error(this)"
+                            onerror="this.parentElement.innerHTML='<p style=\\'color: var(--text-muted); text-align: center; padding: 20px;\\'>Chart not available</p>'"
                         />
                     </div>
                 `).join('')}
             </div>
         `;
-    }
-
-    placeholder_error(img) {
-        img.parentElement.innerHTML = '<p style="color: var(--text-muted); text-align: center; padding: 20px;">Chart not available</p>';
     }
 }
 

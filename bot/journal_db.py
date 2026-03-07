@@ -384,6 +384,8 @@ def add_manual_trade(
 ) -> int:
     """Add a finished trade manually"""
     import json
+    from bot.session_detector import detect_session
+    
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -420,20 +422,31 @@ def add_manual_trade(
         # Default TP: use exit_price or 2% profit
         tp_price = exit_price if exit_price else (entry_price * 1.02 if direction.upper() == "LONG" else entry_price * 0.98)
 
+    # Calculate RR ratio
+    rr_ratio = None
+    if sl_price and tp_price and entry_price:
+        risk = abs(entry_price - sl_price)
+        reward = abs(tp_price - entry_price)
+        if risk > 0:
+            rr_ratio = reward / risk
+    
+    # Detect trading session based on UTC timestamp
+    session = detect_session(ts_open)
+
     cursor.execute(
         """
         INSERT INTO trades (
             account_id, symbol, asset_type, direction,
             entry, sl, tp, exit_price, ts_open, ts_close,
-            lot_size, pnl_usd, pnl_pct,
+            lot_size, pnl_usd, pnl_pct, rr_ratio, session,
             outcome, notes, source, indicator_data
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             account_id, symbol, asset_type, direction.upper(),
             entry_price, sl_price, tp_price, exit_price,
             ts_open, ts_close,
-            lots, pnl_usd, pnl_pct,
+            lots, pnl_usd, pnl_pct, rr_ratio, session,
             outcome, notes, "manual_web", indicator_json
         ),
     )

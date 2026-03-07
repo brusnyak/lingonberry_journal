@@ -33,6 +33,7 @@ class WeeklyPro {
     this.setupEventListeners();
     this.setupFavorites();
     await this.loadData();
+    await this.loadPerfectTrades();
   }
 
   initChart() {
@@ -185,19 +186,79 @@ class WeeklyPro {
       const data = await res.json();
 
       if (res.ok) {
-        alert("Ideal Trade Logged! ✨");
+        if (window.notify) {
+          window.notify.success(`Perfect trade #${data.trade_id} logged!`);
+        } else {
+          alert("Ideal Trade Logged! ✨");
+        }
         document.getElementById("perfectTradeLogger").style.display = "none";
         document.getElementById("addBtnContainer").style.display = "block";
+        document.getElementById("perfectTradeForm").reset();
+        // Reload perfect trades list
+        this.loadPerfectTrades();
       } else {
         console.error("Error response:", data);
         const errorMsg = data.error || "Unknown error";
         const details = data.message || data.details || "";
-        alert(`Error logging trade: ${errorMsg}\n${details}`);
+        if (window.notify) {
+          window.notify.error(`${errorMsg}${details ? ': ' + details : ''}`);
+        } else {
+          alert(`Error logging trade: ${errorMsg}\n${details}`);
+        }
       }
     } catch (err) {
       console.error("Request failed:", err);
-      alert("Error logging trade: " + err.message);
+      if (window.notify) {
+        window.notify.error("Error logging trade: " + err.message);
+      } else {
+        alert("Error logging trade: " + err.message);
+      }
     }
+  }
+
+  async loadPerfectTrades() {
+    try {
+      const weekStart = this.currentWeekStart.toISOString().split('T')[0];
+      const accId = localStorage.getItem("selectedAccountId") || 1;
+      const res = await fetch(`/api/trades?account_id=${accId}`);
+      const trades = await res.json();
+
+      // Filter perfect trades for this week
+      const perfectTrades = trades.filter(t =>
+        t.is_perfect && t.week_start === weekStart
+      );
+
+      this.renderPerfectTrades(perfectTrades);
+    } catch (err) {
+      console.error("Failed to load perfect trades:", err);
+    }
+  }
+
+  renderPerfectTrades(trades) {
+    const container = document.getElementById("perfectTradesList");
+    if (!container) return;
+
+    if (trades.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">📭</div>
+          <div>No perfect trades yet</div>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = trades.map(trade => `
+      <div class="trade-item">
+        <div class="trade-header">
+          <span>${trade.direction === 'LONG' ? '🟢' : '🔴'} ${trade.symbol}</span>
+          <span class="badge">Perfect</span>
+        </div>
+        <div class="trade-details">
+          Entry: ${trade.entry_price?.toFixed(5)} | TP: ${trade.tp_price?.toFixed(5)}
+        </div>
+      </div>
+    `).join('');
   }
 
   setupFavorites() {
@@ -258,6 +319,12 @@ class WeeklyPro {
     const symbol = this.symbolSelect.value;
     const tf = this.timeframeSelect.value;
 
+    // Show loading notification
+    let loadingToast = null;
+    if (window.notify) {
+      loadingToast = window.notify.info(`Loading ${symbol} ${tf}...`, 0);
+    }
+
     // Friday end
     const end = new Date(this.currentWeekStart);
     end.setDate(end.getDate() + 5);
@@ -274,12 +341,26 @@ class WeeklyPro {
         this.series.setData(data);
         this.engine.setCandles(data);
         this.chart.timeScale().fitContent();
+
+        if (window.notify && loadingToast) {
+          window.notify.dismiss(loadingToast);
+          window.notify.success(`${symbol} ${tf} loaded`);
+        }
       } else {
         this.series.setData([]);
         this.engine.setCandles([]);
+
+        if (window.notify && loadingToast) {
+          window.notify.dismiss(loadingToast);
+          window.notify.warning(`No data for ${symbol} ${tf}`);
+        }
       }
     } catch (err) {
       console.error("Failed to load candles:", err);
+      if (window.notify && loadingToast) {
+        window.notify.dismiss(loadingToast);
+        window.notify.error("Failed to load chart data");
+      }
     }
   }
 

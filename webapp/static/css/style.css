@@ -57,8 +57,10 @@
   --grid: rgba(0, 163, 255, 0.03);
   --text: #f8fafc;
   --muted: #94a3b8;
-  --accent: #00a3ff; /* FTMO Blue */
-  --accent-secondary: #6e0e80; /* Subtle Purple */
+  --accent: #00a3ff;
+  /* FTMO Blue */
+  --accent-secondary: #6e0e80;
+  /* Subtle Purple */
   --accent-glow: rgba(0, 163, 255, 0.1);
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-bg: rgba(13, 18, 29, 0.8);
@@ -243,11 +245,25 @@
   transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.progress-fill.safe { background: var(--green); }
-.progress-fill.warning { background: var(--amber); }
-.progress-fill.danger { background: var(--red); }
-.progress-fill.positive { background: var(--green); }
-.progress-fill.negative { background: var(--red); }
+.progress-fill.safe {
+  background: var(--green);
+}
+
+.progress-fill.warning {
+  background: var(--amber);
+}
+
+.progress-fill.danger {
+  background: var(--red);
+}
+
+.progress-fill.positive {
+  background: var(--green);
+}
+
+.progress-fill.negative {
+  background: var(--red);
+}
 
 .progress-label {
   display: flex;
@@ -784,6 +800,7 @@ body {
   padding: 12px 14px;
   cursor: pointer;
   transition: background 0.2s;
+  gap: 12px;
 }
 
 .account-dropdown-item:hover {
@@ -797,6 +814,28 @@ body {
 .account-dropdown-item .check {
   color: var(--accent);
   font-weight: 700;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: all 0.2s;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn:hover {
+  background: var(--panel-light);
+  color: var(--text);
+}
+
+.icon-btn:active {
+  transform: scale(0.95);
 }
 
 .account-dropdown-divider {
@@ -2177,6 +2216,7 @@ body {
   margin: 0 auto;
   padding: 24px;
 }
+
 /* Pro Chart Layout (3-Column) */
 .pro-layout {
   display: grid;
@@ -2280,7 +2320,10 @@ body {
 }
 
 /* Favorites Toolbar */
-.tool-btn { position: relative; }
+.tool-btn {
+  position: relative;
+}
+
 .tool-star {
   position: absolute;
   top: 2px;
@@ -2296,9 +2339,20 @@ body {
   align-items: center;
   justify-content: center;
 }
-.tool-btn:hover .tool-star, .tool-star.active { opacity: 1; }
-.tool-star.active { color: #f59e0b; }
-.tool-star i { width: 10px; height: 10px; }
+
+.tool-btn:hover .tool-star,
+.tool-star.active {
+  opacity: 1;
+}
+
+.tool-star.active {
+  color: #f59e0b;
+}
+
+.tool-star i {
+  width: 10px;
+  height: 10px;
+}
 
 .favorites-bar {
   position: absolute;
@@ -2311,14 +2365,39 @@ body {
   padding: 4px 8px;
   display: flex;
   gap: 4px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   z-index: 100;
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
+
 .favorites-bar .tool-btn {
   width: 32px;
   height: 32px;
   border-radius: 50%;
   margin: 0;
+}
+
+/* Toast Notifications */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 10000;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: all 0.3s ease;
+  font-size: 14px;
+  font-weight: 500;
+  max-width: 400px;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
 }

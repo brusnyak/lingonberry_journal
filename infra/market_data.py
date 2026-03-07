@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Market Data Fetching
-Fetches OHLCV data from various sources with caching
+Fetches OHLCV data from various sources with caching and connection pooling
 """
 import hashlib
 import os
@@ -9,6 +9,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
+import threading
 
 import pandas as pd
 import yfinance as yf
@@ -19,6 +20,10 @@ from infra.ctrader_client import CTraderClient
 CACHE_DIR = Path("data/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 LOCAL_MARKET_DIR = Path("data/market_data")
+
+# Connection pool for cTrader - reuse connections for speed
+_ctrader_connection_pool = {}
+_ctrader_pool_lock = threading.Lock()
 
 
 def get_timeframe_for_asset(asset_type: str) -> str:
@@ -34,12 +39,26 @@ def get_timeframe_for_asset(asset_type: str) -> str:
 
 def _to_yf_symbol(symbol: str, asset_type: str) -> str:
     s = (symbol or "").upper().strip()
+    
+    # Special mappings for commodities
+    if asset_type == "commodity":
+        commodity_map = {
+            "XAUUSD": "GC=F",  # Gold Futures
+            "XAGUSD": "SI=F",  # Silver Futures
+            "XPTUSD": "PL=F",  # Platinum Futures
+            "XPDUSD": "PA=F",  # Palladium Futures
+        }
+        if s in commodity_map:
+            return commodity_map[s]
+    
+    # Forex symbols
     if asset_type == "forex":
         # Remove any existing suffix
         s = s.replace("=X", "").replace("/", "")
         if len(s) == 6:
             # Format as BASE/QUOTE for yfinance
             return f"{s[:3]}{s[3:]}=X"
+    
     return s
 
 
@@ -104,14 +123,25 @@ def _fetch_ohlcv_ctrader(
         "D": "D1",
     }
     period = tf_map.get(tf, "M15")
+    
     try:
-        client = CTraderClient()
-        if not client.connect():
-            return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+        # Use connection pool for speed
+        with _ctrader_pool_lock:
+            pool_key = "default"
+            if pool_key not in _ctrader_connection_pool:
+                client = CTraderClient()
+                if client.connect():
+                    _ctrader_connection_pool[pool_key] = client
+                else:
+                    return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+            client = _ctrader_connection_pool[pool_key]
+        
+        # Fetch bars using pooled connection
         bars = client.get_trendbars(symbol=symbol, timeframe=period, from_ts=start, to_ts=end, count=2000)
-        client.disconnect()
+        
         if not bars:
             return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+        
         df = pd.DataFrame(bars)
         # cTrader payload keys can differ by endpoint/account; normalize defensively.
         ts_col = "timestamp" if "timestamp" in df.columns else "time"
@@ -134,7 +164,8 @@ def _fetch_ohlcv_ctrader(
             df["volume"] = 0.0
         out = df[["ts", "open", "high", "low", "close", "volume"]].dropna(subset=["ts"])
         return out.sort_values("ts").reset_index(drop=True)
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ cTrader fetch failed for {symbol}: {e}")
         return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
 
@@ -347,18 +378,23 @@ def _fetch_ohlcv(
 ) -> pd.DataFrame:
     """Fetch OHLCV data from data source with fallback chain."""
     # Priority:
-    # 1) cTrader (forex only, when credentials + SDK are available)
+    # 1) cTrader (forex/commodities/indices - when credentials + SDK are available)
     # 2) local csv
     # 3) yfinance fallback
-    if asset_type.lower() == "forex":
-        ctr = _fetch_ohlcv_ctrader(symbol=symbol, timeframe=timeframe, start=start, end=end)
-        if not ctr.empty:
-            # Save to market_data folder
-            _save_to_market_data(ctr, symbol, asset_type, timeframe)
-            return ctr
+    
+    # Try cTrader first for all symbols (it has forex, gold, silver, indices)
+    ctr = _fetch_ohlcv_ctrader(symbol=symbol, timeframe=timeframe, start=start, end=end)
+    if not ctr.empty:
+        # Save to market_data folder for offline access
+        _save_to_market_data(ctr, symbol, asset_type, timeframe)
+        return ctr
+    
+    # Fallback to local CSV
     local = _fetch_ohlcv_local_csv(symbol=symbol, asset_type=asset_type, timeframe=timeframe, start=start, end=end)
     if not local.empty:
         return local
+    
+    # Last resort: yfinance
     yf_data = _fetch_ohlcv_yfinance(symbol=symbol, asset_type=asset_type, timeframe=timeframe, start=start, end=end)
     if not yf_data.empty:
         _save_to_market_data(yf_data, symbol, asset_type, timeframe)
