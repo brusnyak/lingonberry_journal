@@ -278,61 +278,33 @@ class TradeEntryPro {
 
 
   async captureChartScreenshot() {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       try {
-        // Get the chart container
-        const chartContainer = document.getElementById('chartContainer');
-        if (!chartContainer) {
-          reject(new Error('Chart container not found'));
+        const captureArea = document.querySelector('.chart-center') || document.getElementById('chartContainer');
+        if (!captureArea) {
+          reject(new Error('Capture area not found'));
           return;
         }
 
-        // Get all canvases in the chart container
-        const chartCanvases = chartContainer.querySelectorAll('canvas');
-        if (chartCanvases.length === 0) {
-          reject(new Error('No canvas found in chart container'));
-          return;
+        console.log('📸 Capturing full chart area...');
+        
+        if (typeof html2canvas === 'undefined') {
+          await new Promise((res, rej) => {
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+            script.onload = res;
+            script.onerror = rej;
+            document.head.appendChild(script);
+          });
         }
 
-        // Find the largest canvas (the main chart canvas)
-        let mainCanvas = chartCanvases[0];
-        let maxArea = 0;
-        chartCanvases.forEach(canvas => {
-          const area = canvas.width * canvas.height;
-          if (area > maxArea) {
-            maxArea = area;
-            mainCanvas = canvas;
-          }
+        const canvas = await html2canvas(captureArea, {
+          backgroundColor: '#131722',
+          useCORS: true,
+          scale: 2
         });
 
-        console.log('📸 Capturing chart:', {
-          canvasCount: chartCanvases.length,
-          mainCanvasSize: `${mainCanvas.width}x${mainCanvas.height}`,
-          containerSize: `${chartContainer.getBoundingClientRect().width}x${chartContainer.getBoundingClientRect().height}`
-        });
-
-        // Create a temporary canvas with the same dimensions as the main canvas
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = mainCanvas.width;
-        tempCanvas.height = mainCanvas.height;
-        const ctx = tempCanvas.getContext('2d');
-
-        // Fill background
-        ctx.fillStyle = '#131722';
-        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-
-        // Draw all canvases at their actual size
-        chartCanvases.forEach(canvas => {
-          try {
-            // Draw canvas at its actual dimensions
-            ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height);
-          } catch (e) {
-            console.warn('Could not draw canvas:', e);
-          }
-        });
-
-        // Convert to base64 (JPEG for smaller size, high quality)
-        const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.95);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
         console.log('✅ Screenshot captured:', (dataUrl.length / 1024).toFixed(1), 'KB');
         resolve(dataUrl);
       } catch (err) {

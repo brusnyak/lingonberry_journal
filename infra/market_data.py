@@ -50,6 +50,18 @@ def _to_yf_symbol(symbol: str, asset_type: str) -> str:
         }
         if s in commodity_map:
             return commodity_map[s]
+            
+    # Special mappings for indices
+    if asset_type == "index":
+        index_map = {
+            "US100": "NQ=F",
+            "NAS100": "NQ=F",
+            "SPX500": "ES=F",
+            "US500": "ES=F",
+            "US30": "YM=F",
+        }
+        if s in index_map:
+            return index_map[s]
     
     # Forex symbols
     if asset_type == "forex":
@@ -125,6 +137,13 @@ def _fetch_ohlcv_ctrader(
     period = tf_map.get(tf, "M15")
     
     try:
+        # Map common symbols for cTrader
+        ctr_symbol = symbol.upper()
+        if ctr_symbol == "US100":
+            ctr_symbol = "NAS100"
+        elif ctr_symbol == "SPX500":
+            ctr_symbol = "US500"
+
         # Use connection pool for speed
         with _ctrader_pool_lock:
             pool_key = "default"
@@ -137,7 +156,7 @@ def _fetch_ohlcv_ctrader(
             client = _ctrader_connection_pool[pool_key]
         
         # Fetch bars using pooled connection
-        bars = client.get_trendbars(symbol=symbol, timeframe=period, from_ts=start, to_ts=end, count=2000)
+        bars = client.get_trendbars(symbol=ctr_symbol, timeframe=period, from_ts=start, to_ts=end, count=2000)
         
         if not bars:
             return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
