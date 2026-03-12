@@ -14,7 +14,9 @@ class WeeklyPro {
     this.chart = null;
     this.series = null;
     this.engine = null;
-    this.starredTools = JSON.parse(localStorage.getItem("starredTools") || '["trendline", "long", "short"]');
+    this.showPerfectTrades = false; // Toggle between real and perfect trades
+    this.weekTrades = [];
+    this.weekStats = {};
 
     this.init();
   }
@@ -31,9 +33,9 @@ class WeeklyPro {
   async init() {
     this.initChart();
     this.setupEventListeners();
-    this.setupFavorites();
     await this.loadData();
-    await this.loadPerfectTrades();
+    await this.loadWeekTrades();
+    await this.loadWeekStats();
   }
 
   initChart() {
@@ -78,13 +80,9 @@ class WeeklyPro {
   }
 
   setupEventListeners() {
-    // Toolbar
+    // Toolbar - simplified (no favorites functionality)
     document.querySelectorAll(".tool-btn").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        if (e.target.closest(".tool-star")) {
-          this.toggleFavorite(btn.dataset.tool);
-          return;
-        }
+      btn.addEventListener("click", () => {
         document.querySelectorAll(".tool-btn").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         this.engine.setTool(btn.dataset.tool);
@@ -94,6 +92,23 @@ class WeeklyPro {
     // Filters
     this.symbolSelect.addEventListener("change", () => this.loadData());
     this.timeframeSelect.addEventListener("change", () => this.loadData());
+
+    // Toggle between real and perfect trades
+    const toggleBtn = document.getElementById("toggleTradeSource");
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", () => {
+        this.showPerfectTrades = !this.showPerfectTrades;
+        toggleBtn.textContent = this.showPerfectTrades ? "Show Real" : "Show Perfect";
+        this.loadWeekTrades();
+        this.loadWeekStats();
+      });
+    }
+
+    // Save reflection button
+    const saveReflectionBtn = document.getElementById("saveReflection");
+    if (saveReflectionBtn) {
+      saveReflectionBtn.addEventListener("click", () => this.saveWeeklyReflection());
+    }
 
     // Trade Entry Form Trigger
     const logPerfectBtn = document.getElementById("logPerfectTrade");
@@ -107,6 +122,21 @@ class WeeklyPro {
 
     const form = document.getElementById("perfectTradeForm");
     if (form) form.onsubmit = (e) => this.handlePerfectTradeSubmit(e);
+
+    // Week navigation
+    document.getElementById("prevWeek").addEventListener("click", () => {
+      this.currentWeekStart.setDate(this.currentWeekStart.getDate() - 7);
+      this.loadData();
+      this.loadWeekTrades();
+      this.loadWeekStats();
+    });
+
+    document.getElementById("nextWeek").addEventListener("click", () => {
+      this.currentWeekStart.setDate(this.currentWeekStart.getDate() + 7);
+      this.loadData();
+      this.loadWeekTrades();
+      this.loadWeekStats();
+    });
 
     // Risk Calculation
     const riskInput = document.getElementById("mRiskPct");
@@ -194,8 +224,9 @@ class WeeklyPro {
         document.getElementById("perfectTradeLogger").style.display = "none";
         document.getElementById("addBtnContainer").style.display = "block";
         document.getElementById("perfectTradeForm").reset();
-        // Reload perfect trades list
-        this.loadPerfectTrades();
+        // Reload trades and stats
+        this.loadWeekTrades();
+        this.loadWeekStats();
       } else {
         console.error("Error response:", data);
         const errorMsg = data.error || "Unknown error";
@@ -216,50 +247,215 @@ class WeeklyPro {
     }
   }
 
-  async loadPerfectTrades() {
+  async loadWeekTrades() {
     try {
       const weekStart = this.currentWeekStart.toISOString().split('T')[0];
       const accId = localStorage.getItem("selectedAccountId") || 1;
-      const res = await fetch(`/api/trades?account_id=${accId}`);
-      const trades = await res.json();
+      const isPerfect = this.showPerfectTrades ? 'true' : 'false';
 
-      // Filter perfect trades for this week
-      const perfectTrades = trades.filter(t =>
-        t.is_perfect && t.week_start === weekStart
-      );
+      const res = await fetch(`/api/trades/week?account_id=${accId}&week_start=${weekStart}&is_perfect=${isPerfect}`);
+      this.weekTrades = await res.json();
 
-      this.renderPerfectTrades(perfectTrades);
+      this.renderWeekTrades(this.weekTrades);
+      this.displayTradesOnChart(this.weekTrades);
     } catch (err) {
-      console.error("Failed to load perfect trades:", err);
+      console.error("Failed to load week trades:", err);
     }
   }
 
-  renderPerfectTrades(trades) {
+  async loadWeekStats() {
+    try {
+      const weekStart = this.currentWeekStart.toISOString().split('T')[0];
+      const accId = localStorage.getItem("selectedAccountId") || 1;
+      const isPerfect = this.showPerfectTrades ? 'true' : 'false';
+
+      const res = await fetch(`/api/trades/week/stats?account_id=${accId}&week_start=${weekStart}&is_perfect=${isPerfect}`);
+      this.weekStats = await res.json();
+
+      this.renderWeekStats(this.weekStats);
+    } catch (err) {
+      console.error("Failed to load week stats:", err);
+    }
+  }
+
+  displayTradesOnChart(trades) {
+    // Clear existing trade markers
+    if (this.tradeMarkers) {
+      this.tradeMarkers.forEach(marker => this.series.removeMarker(marker));
+    }
+    this.tradeMarkers = [];
+
+    // Add markers for each trade
+    trades.forEach(trade => {
+      if (!trade.ts_open) return;
+
+      // Entry marker
+      const entryTime = new Date(trade.ts_open).getTime() / 1000;
+      const entryMarker = {
+        time: entryTime,
+        position: trade.direction === 'LONG' ? 'belowBar' : 'aboveBar',
+        color: trade.direction === 'LONG' ? '#22c55e' : '#ef4444',
+        shape: trade.direction === 'LONG' ? 'arrowUp' : 'arrowDown',
+        text: `${trade.symbol} ${trade.direction}`,
+      };
+      this.tradeMarkers.push(entryMarker);
+
+      // Exit marker (if closed)
+      if (trade.ts_close && trade.outcome !== 'OPEN') {
+        const exitTime = new Date(trade.ts_close).getTime() / 1000;
+        const isWin = trade.pnl_usd > 0;
+        const exitMarker = {
+          time: exitTime,
+          position: trade.direction === 'LONG' ? 'aboveBar' : 'belowBar',
+          color: isWin ? '#22c55e' : '#ef4444',
+          shape: 'circle',
+          text: `${trade.outcome} ${isWin ? '+' : ''}${trade.pnl_usd?.toFixed(2) || 0}`,
+        };
+        this.tradeMarkers.push(exitMarker);
+      }
+    });
+
+    this.series.setMarkers(this.tradeMarkers);
+  }
+
+  renderWeekTrades(trades) {
     const container = document.getElementById("perfectTradesList");
+    const header = document.querySelector("#perfectTradesDisplay h3");
+
     if (!container) return;
+
+    // Update header
+    if (header) {
+      const label = this.showPerfectTrades ? "Perfect Trades" : "Real Trades";
+      header.textContent = `${label} (${trades.length})`;
+    }
 
     if (trades.length === 0) {
       container.innerHTML = `
         <div class="empty-state">
           <div class="empty-icon">📭</div>
-          <div>No perfect trades yet</div>
+          <div>No ${this.showPerfectTrades ? 'perfect' : 'real'} trades yet</div>
         </div>
       `;
       return;
     }
 
-    container.innerHTML = trades.map(trade => `
-      <div class="trade-item">
-        <div class="trade-header">
-          <span>${trade.direction === 'LONG' ? '🟢' : '🔴'} ${trade.symbol}</span>
-          <span class="badge">Perfect</span>
+    container.innerHTML = trades.map(trade => {
+      const pnl = trade.pnl_usd || 0;
+      const isWin = pnl > 0;
+      const outcome = trade.outcome || 'OPEN';
+
+      return `
+        <div class="trade-item" style="cursor: pointer;" onclick="weeklyPro.highlightTrade(${trade.id})">
+          <div class="trade-header">
+            <span>${trade.direction === 'LONG' ? '🟢' : '🔴'} ${trade.symbol}</span>
+            <span class="badge ${isWin ? 'success' : outcome === 'OPEN' ? 'warning' : 'danger'}">
+              ${outcome === 'OPEN' ? 'OPEN' : (isWin ? '+' : '') + pnl.toFixed(2)}
+            </span>
+          </div>
+          <div class="trade-details" style="font-size: 11px; color: var(--muted); margin-top: 4px;">
+            Entry: ${trade.entry_price?.toFixed(5)} | ${outcome !== 'OPEN' ? `Exit: ${trade.exit_price?.toFixed(5)}` : 'Running'}
+          </div>
+          ${trade.notes ? `<div style="font-size: 10px; color: var(--muted); margin-top: 4px; font-style: italic;">${trade.notes}</div>` : ''}
         </div>
-        <div class="trade-details">
-          Entry: ${trade.entry_price?.toFixed(5)} | TP: ${trade.tp_price?.toFixed(5)}
+      `;
+    }).join('');
+  }
+
+  renderWeekStats(stats) {
+    // Update the weekly reflection card with stats
+    const reflectionCard = document.querySelector('.review-card');
+    if (!reflectionCard) return;
+
+    // Check if stats summary already exists
+    let statsSummary = reflectionCard.querySelector('.week-stats-summary');
+    if (!statsSummary) {
+      statsSummary = document.createElement('div');
+      statsSummary.className = 'week-stats-summary';
+      statsSummary.style.cssText = 'margin-bottom: 16px; padding: 12px; background: var(--panel-solid); border-radius: 8px; border: 1px solid var(--border);';
+      reflectionCard.insertBefore(statsSummary, reflectionCard.firstChild.nextSibling);
+    }
+
+    const profitFactor = stats.profit_factor === null ? '∞' : stats.profit_factor;
+
+    statsSummary.innerHTML = `
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; font-size: 12px;">
+        <div>
+          <div style="color: var(--muted);">Trades</div>
+          <div style="font-weight: 600; font-size: 16px;">${stats.total_trades}</div>
+        </div>
+        <div>
+          <div style="color: var(--muted);">Win Rate</div>
+          <div style="font-weight: 600; font-size: 16px; color: ${stats.win_rate >= 50 ? '#22c55e' : '#ef4444'};">${stats.win_rate}%</div>
+        </div>
+        <div>
+          <div style="color: var(--muted);">Net P&L</div>
+          <div style="font-weight: 600; font-size: 16px; color: ${stats.net_pnl >= 0 ? '#22c55e' : '#ef4444'};">${stats.net_pnl >= 0 ? '+' : ''}$${stats.net_pnl}</div>
+        </div>
+        <div>
+          <div style="color: var(--muted);">Profit Factor</div>
+          <div style="font-weight: 600; font-size: 16px;">${profitFactor}</div>
+        </div>
+        <div>
+          <div style="color: var(--muted);">Avg R:R</div>
+          <div style="font-weight: 600; font-size: 16px;">${stats.avg_rr}</div>
+        </div>
+        <div>
+          <div style="color: var(--muted);">Best Trade</div>
+          <div style="font-weight: 600; font-size: 16px; color: #22c55e;">$${stats.best_trade}</div>
         </div>
       </div>
-    `).join('');
+    `;
   }
+
+  highlightTrade(tradeId) {
+    const trade = this.weekTrades.find(t => t.id === tradeId);
+    if (!trade || !trade.ts_open) return;
+
+    // Scroll chart to trade time
+    const entryTime = new Date(trade.ts_open).getTime() / 1000;
+    this.chart.timeScale().scrollToPosition(5, true);
+
+    // Flash notification
+    if (window.notify) {
+      window.notify.info(`${trade.symbol} ${trade.direction} @ ${trade.entry_price?.toFixed(5)}`);
+    }
+  }
+  async saveWeeklyReflection() {
+    const weekStart = this.currentWeekStart.toISOString().split('T')[0];
+    const accId = localStorage.getItem("selectedAccountId") || 1;
+    const notes = document.getElementById("weeklyNotes")?.value || '';
+
+    try {
+      const res = await fetch('/api/review/week', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: parseInt(accId),
+          week_start: weekStart,
+          summary: notes,
+        })
+      });
+
+      if (res.ok) {
+        if (window.notify) {
+          window.notify.success('Weekly reflection saved!');
+        } else {
+          alert('Weekly reflection saved!');
+        }
+      } else {
+        throw new Error('Failed to save reflection');
+      }
+    } catch (err) {
+      console.error('Failed to save reflection:', err);
+      if (window.notify) {
+        window.notify.error('Failed to save reflection');
+      } else {
+        alert('Failed to save reflection');
+      }
+    }
+  }
+
 
   setupFavorites() {
     const bar = document.getElementById("favoritesBar");
@@ -297,11 +493,15 @@ class WeeklyPro {
     document.getElementById("prevWeek").addEventListener("click", () => {
       this.currentWeekStart.setDate(this.currentWeekStart.getDate() - 7);
       this.loadData();
+      this.loadWeekTrades();
+      this.loadWeekStats();
     });
 
     document.getElementById("nextWeek").addEventListener("click", () => {
       this.currentWeekStart.setDate(this.currentWeekStart.getDate() + 7);
       this.loadData();
+      this.loadWeekTrades();
+      this.loadWeekStats();
     });
   }
 

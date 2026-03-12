@@ -2295,6 +2295,11 @@ body {
   gap: 24px;
 }
 
+/* Weekly Layout - 2 Column (No Left Toolbar) */
+.weekly-layout {
+  grid-template-columns: 1fr 380px !important;
+}
+
 .review-card {
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -2312,11 +2317,28 @@ body {
 
 .chart-controls-bar {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 12px;
-  padding: 12px 20px;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 6px 2px;
   background: var(--panel-solid);
   border-bottom: 1px solid var(--border);
+  flex-wrap: nowrap;
+}
+
+.chart-controls-bar .flex {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.chart-controls-bar .gap-2 {
+  gap: 8px;
+}
+
+.chart-controls-bar .items-center {
+  align-items: center;
 }
 
 /* Favorites Toolbar */

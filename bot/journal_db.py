@@ -289,6 +289,8 @@ def init_db() -> None:
         cursor.execute("ALTER TABLE trades ADD COLUMN week_start TEXT")
     if "indicator_data" not in trade_cols:
         cursor.execute("ALTER TABLE trades ADD COLUMN indicator_data TEXT")
+    if "direction_correct" not in trade_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN direction_correct INTEGER DEFAULT NULL")
     
     conn.commit()
     conn.close()
@@ -578,6 +580,123 @@ def get_all_trades(
     trades = [_normalize_trade_row(dict(row)) for row in cursor.fetchall()]
     conn.close()
     return trades
+def get_trades_by_week(
+    week_start: str,
+    account_id: Optional[int] = None,
+    is_perfect: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
+    """Get trades for a specific week
+
+    Args:
+        week_start: ISO date string for Monday of the week (e.g., '2026-03-02')
+        account_id: Optional account filter
+        is_perfect: Optional filter for perfect trades (True/False/None for all)
+
+    Returns:
+        List of trade dictionaries
+    """
+    from datetime import datetime, timedelta
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Calculate week end (Sunday)
+    week_start_dt = datetime.fromisoformat(week_start)
+    week_end_dt = week_start_dt + timedelta(days=7)
+    week_end = week_end_dt.strftime('%Y-%m-%d')
+
+    query = "SELECT * FROM trades WHERE ts_open >= ? AND ts_open < ?"
+    params = [week_start, week_end]
+
+    if account_id is not None:
+        query += " AND account_id = ?"
+        params.append(account_id)
+
+    if is_perfect is not None:
+        query += " AND is_perfect = ?"
+        params.append(1 if is_perfect else 0)
+
+    query += " ORDER BY ts_open ASC"
+
+    cursor.execute(query, params)
+    trades = [_normalize_trade_row(dict(row)) for row in cursor.fetchall()]
+    conn.close()
+    return trades
+def get_week_stats(
+    week_start: str,
+    account_id: Optional[int] = None,
+    is_perfect: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Get statistics for a specific week
+
+    Args:
+        week_start: ISO date string for Monday of the week
+        account_id: Optional account filter
+        is_perfect: Optional filter for perfect trades
+
+    Returns:
+        Dictionary with week statistics
+    """
+    trades = get_trades_by_week(week_start, account_id, is_perfect)
+
+    if not trades:
+        return {
+            "week_start": week_start,
+            "total_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0,
+            "net_pnl": 0,
+            "avg_win": 0,
+            "avg_loss": 0,
+            "profit_factor": 0,
+            "best_trade": 0,
+            "worst_trade": 0,
+            "avg_rr": 0,
+        }
+
+    closed_trades = [t for t in trades if t.get("outcome") in ("TP", "SL", "MANUAL")]
+    wins = [t for t in closed_trades if t.get("pnl_usd", 0) > 0]
+    losses = [t for t in closed_trades if t.get("pnl_usd", 0) < 0]
+
+    total_wins = sum(t.get("pnl_usd", 0) for t in wins)
+    total_losses = abs(sum(t.get("pnl_usd", 0) for t in losses))
+
+    profit_factor = 0
+    if total_losses > 0:
+        profit_factor = total_wins / total_losses
+    elif total_wins > 0:
+        profit_factor = float('inf')
+
+    # Calculate average R:R
+    rr_values = []
+    for t in closed_trades:
+        entry = t.get("entry_price")
+        sl = t.get("sl_price")
+        tp = t.get("tp_price")
+        if entry and sl and tp:
+            risk = abs(entry - sl)
+            reward = abs(tp - entry)
+            if risk > 0:
+                rr_values.append(reward / risk)
+
+    return {
+        "week_start": week_start,
+        "total_trades": len(trades),
+        "closed_trades": len(closed_trades),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(len(wins) / len(closed_trades) * 100, 1) if closed_trades else 0,
+        "net_pnl": round(sum(t.get("pnl_usd", 0) for t in closed_trades), 2),
+        "avg_win": round(total_wins / len(wins), 2) if wins else 0,
+        "avg_loss": round(total_losses / len(losses), 2) if losses else 0,
+        "profit_factor": None if profit_factor == float('inf') else round(profit_factor, 2),
+        "best_trade": round(max((t.get("pnl_usd", 0) for t in closed_trades), default=0), 2),
+        "worst_trade": round(min((t.get("pnl_usd", 0) for t in closed_trades), default=0), 2),
+        "avg_rr": round(sum(rr_values) / len(rr_values), 2) if rr_values else 0,
+    }
+
+
 
 
 def get_open_trades(account_id: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -782,13 +901,15 @@ def get_stats(
     losses = [t for t in closed_trades if (t.get("pnl_usd") or 0) < 0]
     
     total_pnl = sum(t.get("pnl_usd", 0) for t in closed_trades)
-    total_wins = sum(t.get("pnl_usd", 0) for t in wins)
-    total_losses = abs(sum(t.get("pnl_usd", 0) for t in losses))
+    # Fix: Filter out None values for accurate profit factor calculation
+    total_wins = sum(t["pnl_usd"] for t in wins if t.get("pnl_usd") is not None)
+    total_losses = abs(sum(t["pnl_usd"] for t in losses if t.get("pnl_usd") is not None))
     
     win_rate = (len(wins) / len(closed_trades)) * 100 if closed_trades else 0
     avg_win = total_wins / len(wins) if wins else 0
     avg_loss = total_losses / len(losses) if losses else 0
-    profit_factor = total_wins / total_losses if total_losses > 0 else 0
+    # Fix: Handle edge case where all trades are wins (no losses)
+    profit_factor = total_wins / total_losses if total_losses > 0 else (float('inf') if total_wins > 0 else 0)
     
     # Calculate max drawdown on equity (starting from initial balance)
     equity = initial_balance
@@ -810,6 +931,10 @@ def get_stats(
         std_dev = math.sqrt(variance)
         if std_dev > 0:
             sharpe_ratio = (mean_ret / std_dev) * math.sqrt(len(returns))
+    
+    # Convert infinity to None for JSON serialization
+    if math.isinf(profit_factor):
+        profit_factor = None
     
     return {
         "total_trades": len(closed_trades),
@@ -1078,6 +1203,211 @@ def get_analytics_breakdown(
     }
 
 
+def analyze_direction_correctness(
+    trade_id: Optional[int] = None,
+    account_id: Optional[int] = None,
+    from_ts: Optional[str] = None,
+    to_ts: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Analyze if trade direction was correct by checking if price reached TP after SL hit.
+    Can analyze a single trade or batch analyze trades.
+    
+    Returns:
+        For single trade: {"trade_id": int, "direction_correct": bool, "analysis": str}
+        For batch: {"analyzed": int, "updated": int, "results": [...]}
+    """
+    import pandas as pd
+    from infra.market_data import load_ohlcv_with_cache
+    
+    if trade_id:
+        trades = [get_trade(trade_id)]
+        if not trades[0]:
+            return {"error": f"Trade {trade_id} not found"}
+    else:
+        trades = get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+        # Only analyze closed losing trades with SL and TP defined
+        trades = [
+            t for t in trades 
+            if t["outcome"] not in ["OPEN"] 
+            and t.get("pnl_usd", 0) < 0
+            and t.get("sl_price") is not None
+            and t.get("tp_price") is not None
+        ]
+    
+    results = []
+    updated_count = 0
+    
+    for trade in trades:
+        try:
+            # Validate required fields
+            if not trade.get("ts_close"):
+                results.append({
+                    "trade_id": trade["id"],
+                    "direction_correct": None,
+                    "analysis": "No close timestamp"
+                })
+                continue
+            
+            # Get timeframe, default to m15 if not set
+            timeframe = trade.get("timeframe") or "m15"
+            
+            # Parse timestamps
+            ts_close = datetime.fromisoformat(trade["ts_close"].replace("Z", "+00:00"))
+            
+            # Load market data from close time to EOD (or +24h)
+            end_time = ts_close + timedelta(hours=24)
+            
+            df = load_ohlcv_with_cache(
+                symbol=trade["symbol"],
+                asset_type=trade.get("asset_type") or "forex",
+                timeframe=timeframe,
+                start=ts_close,
+                end=end_time,
+                ttl_seconds=3600,  # Cache for 1 hour
+            )
+            
+            if df.empty:
+                results.append({
+                    "trade_id": trade["id"],
+                    "direction_correct": None,
+                    "analysis": "No market data available"
+                })
+                continue
+            
+            entry = float(trade["entry_price"])
+            tp = float(trade["tp_price"])
+            direction = str(trade.get("direction", "")).upper()
+            
+            if not direction or direction not in ["LONG", "SHORT"]:
+                results.append({
+                    "trade_id": trade["id"],
+                    "direction_correct": None,
+                    "analysis": f"Invalid direction: {trade.get('direction')}"
+                })
+                continue
+            
+            # Check if price reached TP after SL was hit
+            direction_correct = False
+            
+            if direction == "LONG":
+                # For LONG: check if high reached or exceeded TP
+                max_price = df["high"].max()
+                direction_correct = max_price >= tp
+                analysis = f"Max price after SL: {max_price:.5f}, TP: {tp:.5f}"
+            else:  # SHORT
+                # For SHORT: check if low reached or went below TP
+                min_price = df["low"].min()
+                direction_correct = min_price <= tp
+                analysis = f"Min price after SL: {min_price:.5f}, TP: {tp:.5f}"
+            
+            # Update trade in database
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE trades SET direction_correct = ? WHERE id = ?",
+                (1 if direction_correct else 0, trade["id"])
+            )
+            conn.commit()
+            conn.close()
+            updated_count += 1
+            
+            results.append({
+                "trade_id": trade["id"],
+                "direction_correct": direction_correct,
+                "analysis": analysis
+            })
+            
+        except Exception as e:
+            import traceback
+            results.append({
+                "trade_id": trade["id"],
+                "direction_correct": None,
+                "analysis": f"Error: {str(e)}\n{traceback.format_exc()}"
+            })
+    
+    if trade_id:
+        return results[0] if results else {"error": "No analysis performed"}
+    else:
+        return {
+            "analyzed": len(results),
+            "updated": updated_count,
+            "results": results
+        }
+
+
+def get_direction_accuracy_stats(
+    account_id: Optional[int] = None,
+    from_ts: Optional[str] = None,
+    to_ts: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Calculate direction accuracy statistics.
+    
+    Returns:
+        {
+            "overall_accuracy": float,  # % of trades with correct direction
+            "win_accuracy": float,      # % of wins with correct direction
+            "loss_accuracy": float,     # % of losses with correct direction
+            "total_analyzed": int,
+            "correct_direction": int,
+            "by_direction": {...}
+        }
+    """
+    trades = get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+    closed_trades = [t for t in trades if t["outcome"] != "OPEN"]
+    
+    # Filter trades that have been analyzed
+    analyzed_trades = [t for t in closed_trades if t.get("direction_correct") is not None]
+    
+    if not analyzed_trades:
+        return {
+            "overall_accuracy": 0,
+            "win_accuracy": 0,
+            "loss_accuracy": 0,
+            "total_analyzed": 0,
+            "correct_direction": 0,
+            "by_direction": {
+                "long": {"total": 0, "correct": 0, "accuracy": 0},
+                "short": {"total": 0, "correct": 0, "accuracy": 0}
+            },
+            "note": "No trades analyzed yet. Run analyze_direction_correctness() first."
+        }
+    
+    wins = [t for t in analyzed_trades if t.get("pnl_usd", 0) > 0]
+    losses = [t for t in analyzed_trades if t.get("pnl_usd", 0) < 0]
+    
+    correct_overall = [t for t in analyzed_trades if t["direction_correct"] == 1]
+    correct_wins = [t for t in wins if t["direction_correct"] == 1]
+    correct_losses = [t for t in losses if t["direction_correct"] == 1]
+    
+    long_trades = [t for t in analyzed_trades if t["direction"].upper() == "LONG"]
+    short_trades = [t for t in analyzed_trades if t["direction"].upper() == "SHORT"]
+    
+    long_correct = [t for t in long_trades if t["direction_correct"] == 1]
+    short_correct = [t for t in short_trades if t["direction_correct"] == 1]
+    
+    return {
+        "overall_accuracy": (len(correct_overall) / len(analyzed_trades) * 100) if analyzed_trades else 0,
+        "win_accuracy": (len(correct_wins) / len(wins) * 100) if wins else 0,
+        "loss_accuracy": (len(correct_losses) / len(losses) * 100) if losses else 0,
+        "total_analyzed": len(analyzed_trades),
+        "correct_direction": len(correct_overall),
+        "by_direction": {
+            "long": {
+                "total": len(long_trades),
+                "correct": len(long_correct),
+                "accuracy": (len(long_correct) / len(long_trades) * 100) if long_trades else 0,
+            },
+            "short": {
+                "total": len(short_trades),
+                "correct": len(short_correct),
+                "accuracy": (len(short_correct) / len(short_trades) * 100) if short_trades else 0,
+            },
+        },
+    }
+
+
 # Review operations
 def upsert_trade_review_note(
     trade_id: int,
@@ -1169,8 +1499,15 @@ def upsert_weekly_review(
     next_week_focus: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create or update weekly review"""
+    from datetime import datetime, timedelta
+    
     conn = get_connection()
     cursor = conn.cursor()
+    
+    # Calculate week_end (Sunday)
+    week_start_date = datetime.strptime(week_start, '%Y-%m-%d')
+    week_end_date = week_start_date + timedelta(days=6)
+    week_end = week_end_date.strftime('%Y-%m-%d')
     
     cursor.execute(
         "SELECT id FROM weekly_reviews WHERE account_id = ? AND week_start = ?",
@@ -1192,11 +1529,11 @@ def upsert_weekly_review(
         cursor.execute(
             """
             INSERT INTO weekly_reviews (
-                account_id, week_start, summary, key_wins,
-                key_mistakes, next_week_focus
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                account_id, week_start, week_end, summary, key_wins,
+                key_mistakes, next_week_focus, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
-            (account_id, week_start, summary, key_wins, key_mistakes, next_week_focus),
+            (account_id, week_start, week_end, summary, key_wins, key_mistakes, next_week_focus),
         )
     
     conn.commit()
@@ -1204,9 +1541,20 @@ def upsert_weekly_review(
         "SELECT * FROM weekly_reviews WHERE account_id = ? AND week_start = ?",
         (account_id, week_start)
     )
-    review = dict(cursor.fetchone())
+    row = cursor.fetchone()
     conn.close()
-    return review
+    
+    if row:
+        return dict(row)
+    return {
+        "account_id": account_id,
+        "week_start": week_start,
+        "week_end": week_end,
+        "summary": summary,
+        "key_wins": key_wins,
+        "key_mistakes": key_mistakes,
+        "next_week_focus": next_week_focus,
+    }
 
 
 def get_weekly_goals(account_id: int, week_start: str) -> List[Dict[str, Any]]:

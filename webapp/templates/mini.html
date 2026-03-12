@@ -1,582 +1,567 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-    />
-    <title>Lingonberry Journal</title>
-    <link rel="stylesheet" href="/static/css/style.css" />
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
 
-      :root {
-        --bg: #0a0e1a;
-        --panel: #141824;
-        --panel-light: #1a1f2e;
-        --border: rgba(255, 255, 255, 0.08);
-        --text: #ffffff;
-        --text-muted: #8b92a8;
-        --accent: #6366f1;
-        --green: #10b981;
-        --red: #ef4444;
-        --radius: 12px;
-      }
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Lingonberry Journal</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
 
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          "Helvetica Neue", Arial, sans-serif;
-        background: var(--bg);
-        color: var(--text);
-        line-height: 1.5;
-        -webkit-font-smoothing: antialiased;
-        padding: 0;
-        margin: 0;
-        overflow-x: hidden;
-      }
+    :root {
+      --bg: #0a0e1a;
+      --panel: #141824;
+      --panel-light: #1a1f2e;
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #ffffff;
+      --text-muted: #8b92a8;
+      --accent: #6366f1;
+      --green: #10b981;
+      --red: #ef4444;
+      --radius: 12px;
+    }
 
-      .container {
-        max-width: 100%;
-        padding: 16px;
-        padding-bottom: 80px;
-      }
+    body {
+      font-family:
+        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      padding: 0;
+      margin: 0;
+      overflow-x: hidden;
+    }
 
-      .header {
-        margin-bottom: 24px;
-      }
+    .container {
+      max-width: 100%;
+      padding: 16px;
+      padding-bottom: 80px;
+    }
 
-      .header h1 {
-        font-size: 28px;
-        font-weight: 700;
-        margin-bottom: 4px;
-      }
+    .header {
+      margin-bottom: 24px;
+    }
 
-      .header .subtitle {
-        color: var(--text-muted);
-        font-size: 14px;
-      }
+    .header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
 
-      .card {
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 16px;
-        margin-bottom: 16px;
-      }
+    .header .subtitle {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
 
-      .card-title {
-        font-size: 14px;
-        font-weight: 600;
-        color: var(--text-muted);
-        margin-bottom: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
 
-      .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 12px;
-      }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
 
-      .stat-box {
-        background: var(--panel-light);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 12px;
-      }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
 
-      .stat-label {
-        font-size: 11px;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 6px;
-      }
+    .stat-box {
+      background: var(--panel-light);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
 
-      .stat-value {
-        font-size: 24px;
-        font-weight: 700;
-        line-height: 1;
-      }
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
 
-      .stat-value.positive {
-        color: var(--green);
-      }
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1;
+    }
 
-      .stat-value.negative {
-        color: var(--red);
-      }
+    .stat-value.positive {
+      color: var(--green);
+    }
 
-      .chart-container {
-        position: relative;
-        height: 220px;
-        margin: 12px 0;
-      }
+    .stat-value.negative {
+      color: var(--red);
+    }
 
-      .trade-list {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
+    .chart-container {
+      position: relative;
+      height: 220px;
+      margin: 12px 0;
+    }
 
-      .trade-item {
-        background: var(--panel-light);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 12px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      }
+    .trade-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
 
-      .trade-info {
-        flex: 1;
-      }
+    .trade-item {
+      background: var(--panel-light);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
 
-      .trade-symbol {
-        font-weight: 600;
-        font-size: 15px;
-        margin-bottom: 4px;
-      }
+    .trade-info {
+      flex: 1;
+    }
 
-      .trade-details {
-        font-size: 12px;
-        color: var(--text-muted);
-      }
+    .trade-symbol {
+      font-weight: 600;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
 
-      .trade-pnl {
-        font-size: 18px;
-        font-weight: 700;
-        text-align: right;
-      }
+    .trade-details {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
 
-      .stat-sublabel {
-        font-size: 10px;
-        color: var(--text-muted);
-        margin-top: 4px;
-      }
+    .trade-pnl {
+      font-size: 18px;
+      font-weight: 700;
+      text-align: right;
+    }
 
-      .trade-notes {
-        font-size: 11px;
-        color: var(--text-muted);
-        margin-top: 4px;
-        font-style: italic;
-      }
+    .stat-sublabel {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
 
-      .trade-pnl-container {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 2px;
-      }
+    .trade-notes {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-style: italic;
+    }
 
-      .trade-pnl-pct {
-        font-size: 11px;
-        font-weight: 600;
-      }
+    .trade-pnl-container {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+    }
 
-      .trade-item {
-        transition:
-          background-color 0.2s,
-          transform 0.1s;
-      }
+    .trade-pnl-pct {
+      font-size: 11px;
+      font-weight: 600;
+    }
 
-      .trade-item:hover {
-        background: var(--panel);
-      }
+    .trade-item {
+      transition:
+        background-color 0.2s,
+        transform 0.1s;
+    }
 
-      .trade-item:active {
-        transform: scale(0.98);
-      }
+    .trade-item:hover {
+      background: var(--panel);
+    }
 
-      .loading {
-        text-align: center;
-        padding: 60px 20px;
-        color: var(--text-muted);
-      }
+    .trade-item:active {
+      transform: scale(0.98);
+    }
 
-      .loading-spinner {
-        width: 40px;
-        height: 40px;
-        border: 3px solid var(--border);
-        border-top-color: var(--accent);
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-        margin: 0 auto 16px;
-      }
+    .loading {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+    }
 
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
 
-      .error {
-        background: rgba(239, 68, 68, 0.1);
-        border: 1px solid var(--red);
-        padding: 16px;
-        border-radius: var(--radius);
-        color: var(--red);
-        margin: 20px 0;
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
       }
+    }
 
-      .error-title {
-        font-weight: 600;
-        margin-bottom: 8px;
-      }
+    .error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid var(--red);
+      padding: 16px;
+      border-radius: var(--radius);
+      color: var(--red);
+      margin: 20px 0;
+    }
 
-      .btn {
-        background: var(--accent);
-        color: white;
-        border: none;
-        padding: 14px;
-        border-radius: 8px;
-        font-size: 15px;
-        font-weight: 600;
-        cursor: pointer;
-        width: 100%;
-        margin-top: 12px;
-      }
+    .error-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
 
-      .btn:active {
-        opacity: 0.8;
-      }
+    .btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 12px;
+    }
 
-      .empty-state {
-        text-align: center;
-        padding: 40px 20px;
-        color: var(--text-muted);
-      }
+    .btn:active {
+      opacity: 0.8;
+    }
 
-      .empty-state-icon {
-        font-size: 48px;
-        margin-bottom: 12px;
-      }
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted);
+    }
 
-      /* Bottom Navigation */
-      .bottom-nav {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: var(--panel);
-        border-top: 1px solid var(--border);
-        display: flex;
-        justify-content: space-around;
-        padding: 8px 0 max(8px, env(safe-area-inset-bottom));
-        z-index: 100;
-      }
+    .empty-state-icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+    }
 
-      .nav-item {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 4px;
-        padding: 8px;
-        color: var(--text-muted);
-        text-decoration: none;
-        font-size: 11px;
-        font-weight: 600;
-        transition: color 0.2s;
-      }
+    /* Bottom Navigation */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-around;
+      padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+      z-index: 100;
+    }
 
-      .nav-item.active {
-        color: var(--accent);
-      }
+    .nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 11px;
+      font-weight: 600;
+      transition: color 0.2s;
+    }
 
-      .nav-icon {
-        font-size: 20px;
-      }
+    .nav-item.active {
+      color: var(--accent);
+    }
 
-      /* Page container with bottom padding for nav */
-      .page {
-        display: none;
-      }
+    .nav-icon {
+      font-size: 20px;
+    }
 
-      .page.active {
-        display: block;
-      }
+    /* Page container with bottom padding for nav */
+    .page {
+      display: none;
+    }
 
-      /* Refresh button */
-      .refresh-btn {
-        background: var(--panel-light);
-        border: 1px solid var(--border);
-        color: var(--text-muted);
-        padding: 8px 16px;
-        border-radius: 8px;
-        font-size: 12px;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
+    .page.active {
+      display: block;
+    }
 
-      .refresh-btn:active {
-        opacity: 0.7;
-      }
+    /* Refresh button */
+    .refresh-btn {
+      background: var(--panel-light);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
 
-      /* Skeleton loading */
-      .skeleton {
-        background: linear-gradient(
-          90deg,
+    .refresh-btn:active {
+      opacity: 0.7;
+    }
+
+    /* Skeleton loading */
+    .skeleton {
+      background: linear-gradient(90deg,
           var(--panel-light) 25%,
           var(--panel) 50%,
-          var(--panel-light) 75%
-        );
-        background-size: 200% 100%;
-        animation: skeleton-loading 1.5s ease-in-out infinite;
-        border-radius: 8px;
+          var(--panel-light) 75%);
+      background-size: 200% 100%;
+      animation: skeleton-loading 1.5s ease-in-out infinite;
+      border-radius: 8px;
+    }
+
+    @keyframes skeleton-loading {
+      0% {
+        background-position: 200% 0;
       }
 
-      @keyframes skeleton-loading {
-        0% {
-          background-position: 200% 0;
-        }
-
-        100% {
-          background-position: -200% 0;
-        }
+      100% {
+        background-position: -200% 0;
       }
+    }
 
-      .skeleton-text {
-        height: 16px;
-        margin-bottom: 8px;
-      }
+    .skeleton-text {
+      height: 16px;
+      margin-bottom: 8px;
+    }
 
-      .skeleton-stat {
-        height: 80px;
-      }
-    </style>
-  </head>
+    .skeleton-stat {
+      height: 80px;
+    }
+  </style>
+</head>
 
-  <body class="theme-lingonberry">
-    <nav class="main-nav">
-      <div class="nav-left">
-        <a href="/" class="nav-brand">
-          <i data-lucide="layers"></i>
-          Lingonberry <span>Journal</span>
-        </a>
-        <div class="nav-links">
-          <a href="/mini" class="nav-link active" id="nav-dashboard"
-            ><i data-lucide="layout-dashboard"></i> Dashboard</a
-          >
-          <a href="/analytics" class="nav-link" id="nav-analytics"
-            ><i data-lucide="bar-chart-3"></i> Analytics</a
-          >
-          <a href="/weekly" class="nav-link" id="nav-weekly"
-            ><i data-lucide="calendar"></i> Weekly</a
-          >
-          <a href="/entry" class="nav-link" id="nav-entry"
-            ><i data-lucide="plus-circle"></i> New Trade</a
-          >
-        </div>
+<body class="theme-lingonberry">
+  <nav class="main-nav">
+    <div class="nav-left">
+      <a href="/" class="nav-brand">
+        <i data-lucide="layers"></i>
+        Lingonberry <span>Journal</span>
+      </a>
+      <div class="nav-links">
+        <a href="/mini" class="nav-link active" id="nav-dashboard"><i data-lucide="layout-dashboard"></i> Dashboard</a>
+        <a href="/analytics" class="nav-link" id="nav-analytics"><i data-lucide="bar-chart-3"></i> Analytics</a>
+        <a href="/weekly" class="nav-link" id="nav-weekly"><i data-lucide="calendar"></i> Weekly</a>
+        <a href="/entry" class="nav-link" id="nav-entry"><i data-lucide="plus-circle"></i> New Trade</a>
       </div>
-      <div class="nav-right" id="nav-account-selector"></div>
-    </nav>
-    <!-- Dashboard Page -->
-    <div id="dashboardPage" class="page active">
-      <div class="container">
-        <div
-          class="header"
-          style="
+    </div>
+    <div class="nav-right" id="nav-account-selector"></div>
+  </nav>
+  <!-- Dashboard Page -->
+  <div id="dashboardPage" class="page active">
+    <div class="container">
+      <div class="header" style="
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
             margin-bottom: 16px;
-          "
-        >
-          <div>
-            <h1>📊 Dashboard</h1>
-            <div class="subtitle" id="lastUpdate">Loading...</div>
-          </div>
-          <div id="accountSelector"></div>
+          ">
+        <div>
+          <h1>📊 Dashboard</h1>
+          <div class="subtitle" id="lastUpdate">Loading...</div>
         </div>
-        <div id="accountRulesDisplay"></div>
-        <div id="dashboardDateFilter"></div>
-        <div id="dashboardContent">
-          <div class="loading">
-            <div class="loading-spinner"></div>
-            <div>Loading your trading data...</div>
-          </div>
+        <div id="accountSelector"></div>
+      </div>
+      <div id="accountRulesDisplay"></div>
+      <div id="dashboardDateFilter"></div>
+      <div id="dashboardContent">
+        <div class="loading">
+          <div class="loading-spinner"></div>
+          <div>Loading your trading data...</div>
         </div>
       </div>
     </div>
+  </div>
 
-    <!-- Analytics Page -->
-    <div id="analyticsPage" class="page">
-      <div class="container">
-        <div class="header">
-          <h1>📈 Analytics</h1>
-          <div class="subtitle">Advanced performance insights</div>
-        </div>
-        <div id="analyticsContent">
-          <div class="card">
-            <div class="card-title">Coming Soon</div>
-            <p style="color: var(--text-muted)">
-              Advanced analytics including time-based heatmaps, risk-reward
-              distribution, and consistency metrics will be available here.
-            </p>
-          </div>
+  <!-- Analytics Page -->
+  <div id="analyticsPage" class="page">
+    <div class="container">
+      <div class="header">
+        <h1>📈 Analytics</h1>
+        <div class="subtitle">Advanced performance insights</div>
+      </div>
+      <div id="analyticsContent">
+        <div class="card">
+          <div class="card-title">Coming Soon</div>
+          <p style="color: var(--text-muted)">
+            Advanced analytics including time-based heatmaps, risk-reward
+            distribution, and consistency metrics will be available here.
+          </p>
         </div>
       </div>
     </div>
+  </div>
 
-    <!-- Weekly Page -->
-    <div id="weeklyPage" class="page">
-      <div class="container">
-        <div class="header">
-          <h1>📅 Weekly Review</h1>
-          <div class="subtitle">Redirecting to full page...</div>
-        </div>
+  <!-- Weekly Page -->
+  <div id="weeklyPage" class="page">
+    <div class="container">
+      <div class="header">
+        <h1>📅 Weekly Review</h1>
+        <div class="subtitle">Redirecting to full page...</div>
       </div>
     </div>
+  </div>
 
 
-    <script src="/static/js/api.js"></script>
-    <script src="/static/js/filters.js"></script>
-    <script src="/static/js/trade-modal.js"></script>
-    <script src="/static/js/charts.js"></script>
-    <script src="/static/js/account-manager.js"></script>
-    <script src="/static/js/account-rules.js"></script>
-    <script>
-      const tg = window.Telegram?.WebApp;
-      if (tg) {
-        tg.ready();
-        tg.expand();
-        // Only set colors if supported (v6.1+)
-        if (tg.setHeaderColor && tg.version >= "6.1") {
-          tg.setHeaderColor("#0a0e1a");
-        }
-        if (tg.setBackgroundColor && tg.version >= "6.1") {
-          tg.setBackgroundColor("#0a0e1a");
-        }
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/filters.js"></script>
+  <script src="/static/js/trade-modal.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/account-manager.js"></script>
+  <script src="/static/js/account-rules.js"></script>
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      // Only set colors if supported (v6.1+)
+      if (tg.setHeaderColor && tg.version >= "6.1") {
+        tg.setHeaderColor("#0a0e1a");
+      }
+      if (tg.setBackgroundColor && tg.version >= "6.1") {
+        tg.setBackgroundColor("#0a0e1a");
+      }
+    }
+
+    // Navigation
+    const pages = {
+      dashboard: document.getElementById("dashboardPage"),
+      analytics: document.getElementById("analyticsPage"),
+      weekly: document.getElementById("weeklyPage"),
+    };
+
+    const navItems = document.querySelectorAll(".nav-item");
+
+    function showPage(pageName) {
+      // Hide all pages
+      Object.values(pages).forEach((page) => page.classList.remove("active"));
+
+      // Show selected page
+      if (pages[pageName]) {
+        pages[pageName].classList.add("active");
       }
 
-      // Navigation
-      const pages = {
-        dashboard: document.getElementById("dashboardPage"),
-        analytics: document.getElementById("analyticsPage"),
-        weekly: document.getElementById("weeklyPage"),
-      };
-
-      const navItems = document.querySelectorAll(".nav-item");
-
-      function showPage(pageName) {
-        // Hide all pages
-        Object.values(pages).forEach((page) => page.classList.remove("active"));
-
-        // Show selected page
-        if (pages[pageName]) {
-          pages[pageName].classList.add("active");
-        }
-
-        // Update nav active state
-        navItems.forEach((item) => {
-          if (item.dataset.page === pageName) {
-            item.classList.add("active");
-          } else {
-            item.classList.remove("active");
-          }
-        });
-
-        // Load page content if needed
-        if (pageName === "dashboard" && !window.dashboardLoaded) {
-          loadDashboard();
-        } else if (pageName === "analytics" && !window.analyticsLoaded) {
-          loadAnalytics();
-        } else if (pageName === "weekly" && !window.weeklyLoaded) {
-          loadWeekly();
-        }
-      }
-
-      // Handle navigation clicks
+      // Update nav active state
       navItems.forEach((item) => {
-        item.addEventListener("click", (e) => {
-          e.preventDefault();
-          const pageName = item.dataset.page;
-          showPage(pageName);
-          window.location.hash = pageName;
-        });
+        if (item.dataset.page === pageName) {
+          item.classList.add("active");
+        } else {
+          item.classList.remove("active");
+        }
       });
 
-      // Handle browser back/forward
-      window.addEventListener("hashchange", () => {
-        const hash = window.location.hash.slice(1) || "dashboard";
-        showPage(hash);
+      // Load page content if needed
+      if (pageName === "dashboard" && !window.dashboardLoaded) {
+        loadDashboard();
+      } else if (pageName === "analytics" && !window.analyticsLoaded) {
+        loadAnalytics();
+      } else if (pageName === "weekly" && !window.weeklyLoaded) {
+        loadWeekly();
+      }
+    }
+
+    // Handle navigation clicks
+    navItems.forEach((item) => {
+      item.addEventListener("click", (e) => {
+        e.preventDefault();
+        const pageName = item.dataset.page;
+        showPage(pageName);
+        window.location.hash = pageName;
       });
+    });
 
-      // Dashboard loading
-      let dashboardDateFilter;
-      let currentDashboardDateRange = {};
-      let accountRulesDisplay;
+    // Handle browser back/forward
+    window.addEventListener("hashchange", () => {
+      const hash = window.location.hash.slice(1) || "dashboard";
+      showPage(hash);
+    });
 
-      async function loadDashboard(
-        useCache = true,
-        dateRange = currentDashboardDateRange,
-      ) {
-        try {
-          currentDashboardDateRange = dateRange;
+    // Dashboard loading
+    let dashboardDateFilter;
+    let currentDashboardDateRange = {};
+    let accountRulesDisplay;
 
-          // Get current account ID
-          const accountId = accountManager?.getCurrentAccountId();
-          const params = { ...dateRange };
-          if (accountId) params.account_id = accountId;
+    async function loadDashboard(
+      useCache = true,
+      dateRange = currentDashboardDateRange,
+    ) {
+      try {
+        currentDashboardDateRange = dateRange;
 
-          // Try cache first
-          if (useCache && Object.keys(dateRange).length === 0) {
-            const cached = api.getCached("/dashboard");
-            if (cached) {
-              renderDashboard(cached);
-              document.getElementById("lastUpdate").textContent =
-                `Cached ${new Date().toLocaleTimeString()}`;
-              // Load fresh data in background
-              loadDashboard(false, dateRange);
-              return;
-            }
-          }
+        // Get current account ID
+        const accountId = accountManager?.getCurrentAccountId();
+        const params = { ...dateRange };
+        if (accountId) params.account_id = accountId;
 
-          const data = await api.getDashboard(params);
-          renderDashboard(data);
-          window.dashboardLoaded = true;
-
-          document.getElementById("lastUpdate").textContent =
-            `Updated ${new Date().toLocaleTimeString()}`;
-
-          // Update account rules display
-          if (accountManager?.currentAccount && accountRulesDisplay) {
-            accountRulesDisplay.update(
-              accountManager.currentAccount,
-              data.stats,
-            );
-          }
-        } catch (err) {
-          console.error("Error loading dashboard:", err);
-
-          // Try to show cached data on error
+        // Try cache first
+        if (useCache && Object.keys(dateRange).length === 0) {
           const cached = api.getCached("/dashboard");
           if (cached) {
             renderDashboard(cached);
             document.getElementById("lastUpdate").textContent =
-              `⚠️ Offline - showing cached data`;
-          } else {
-            renderError(err);
+              `Cached ${new Date().toLocaleTimeString()}`;
+            // Load fresh data in background
+            loadDashboard(false, dateRange);
+            return;
           }
         }
-      }
 
-      function renderError(err) {
-        document.getElementById("dashboardContent").innerHTML = `
+        const data = await api.getDashboard(params);
+        renderDashboard(data);
+        window.dashboardLoaded = true;
+
+        document.getElementById("lastUpdate").textContent =
+          `Updated ${new Date().toLocaleTimeString()}`;
+
+        // Update account rules display
+        if (accountManager?.currentAccount && accountRulesDisplay) {
+          accountRulesDisplay.update(
+            accountManager.currentAccount,
+            data.stats,
+          );
+        }
+      } catch (err) {
+        console.error("Error loading dashboard:", err);
+
+        // Try to show cached data on error
+        const cached = api.getCached("/dashboard");
+        if (cached) {
+          renderDashboard(cached);
+          document.getElementById("lastUpdate").textContent =
+            `⚠️ Offline - showing cached data`;
+        } else {
+          renderError(err);
+        }
+      }
+    }
+
+    function renderError(err) {
+      document.getElementById("dashboardContent").innerHTML = `
                 <div class="error">
                     <div class="error-title">⚠️ Unable to Load Data</div>
                     <p>Make sure your Flask backend is running:</p>
@@ -597,42 +582,42 @@
                     </div>
                 </div>
             `;
-      }
+    }
 
-      function renderDashboard(data) {
-        const stats = data.stats || {};
-        const trades = (data.trades || []).slice(0, 20); // Show more trades
-        const equity = data.equity || [];
-        const analytics = data.analytics || {};
-        const distributions = data.distributions || {};
-        const openTrades = data.open_trades || [];
+    function renderDashboard(data) {
+      const stats = data.stats || {};
+      const trades = (data.trades || []).slice(0, 20); // Show more trades
+      const equity = data.equity || [];
+      const analytics = data.analytics || {};
+      const distributions = data.distributions || {};
+      const openTrades = data.open_trades || [];
 
-        const netPnl = (stats.balance || 0) - (stats.initial_balance || 0);
-        const netPnlClass = netPnl >= 0 ? "positive" : "negative";
+      const netPnl = (stats.balance || 0) - (stats.initial_balance || 0);
+      const netPnlClass = netPnl >= 0 ? "positive" : "negative";
 
-        // Calculate additional metrics
-        const avgWin = stats.avg_win_usd || 0;
-        const avgLoss = stats.avg_loss_usd || 0;
-        const winRate = stats.win_rate || 0;
-        const profitFactor = stats.profit_factor || 0;
-        const sharpe = stats.sharpe_ratio || 0;
-        const maxDD = stats.max_drawdown_pct || 0;
-        const expectancy = stats.expectancy || 0;
+      // Calculate additional metrics
+      const avgWin = stats.avg_win_usd || 0;
+      const avgLoss = stats.avg_loss_usd || 0;
+      const winRate = stats.win_rate || 0;
+      const profitFactor = stats.profit_factor === null ? Infinity : (stats.profit_factor || 0);
+      const sharpe = stats.sharpe_ratio || 0;
+      const maxDD = stats.max_drawdown_pct || 0;
+      const expectancy = stats.expectancy || 0;
 
-        // Directional stats (from analytics.by_direction)
-        const byDirection = analytics.by_direction || {};
-        const longStats = byDirection.long || {
-          count: 0,
-          total_pnl: 0,
-          win_rate: 0,
-        };
-        const shortStats = byDirection.short || {
-          count: 0,
-          total_pnl: 0,
-          win_rate: 0,
-        };
+      // Directional stats (from analytics.by_direction)
+      const byDirection = analytics.by_direction || {};
+      const longStats = byDirection.long || {
+        count: 0,
+        total_pnl: 0,
+        win_rate: 0,
+      };
+      const shortStats = byDirection.short || {
+        count: 0,
+        total_pnl: 0,
+        win_rate: 0,
+      };
 
-        document.getElementById("dashboardContent").innerHTML = `
+      document.getElementById("dashboardContent").innerHTML = `
                 <!-- Account Summary -->
                 <div class="card">
                     <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
@@ -671,9 +656,9 @@
                         <div class="stat-box">
                             <div class="stat-label">Profit Factor</div>
                             <div class="stat-value ${profitFactor >= 1.5 ? "positive" : profitFactor >= 1 ? "" : "negative"}">
-                                ${profitFactor.toFixed(2)}
+                                ${profitFactor === Infinity ? '∞' : profitFactor.toFixed(2)}
                             </div>
-                            <div class="stat-sublabel">${profitFactor >= 1.5 ? "Excellent" : profitFactor >= 1 ? "Good" : "Poor"}</div>
+                            <div class="stat-sublabel">${profitFactor === Infinity ? "Perfect!" : profitFactor >= 1.5 ? "Excellent" : profitFactor >= 1 ? "Good" : "Poor"}</div>
                         </div>
                         <div class="stat-box">
                             <div class="stat-label">Avg Win</div>
@@ -703,16 +688,15 @@
                 </div>
 
                 <!-- Session Distribution -->
-                ${
-                  Object.keys(distributions.session || {}).length > 0
-                    ? `
+                ${Object.keys(distributions.session || {}).length > 0
+          ? `
                 <div class="card">
                     <div class="card-title">🌍 Session Distribution</div>
                     <div id="sessionStats"></div>
                 </div>
                 `
-                    : ""
-                }
+          : ""
+        }
 
                 <!-- Directional Breakdown -->
                 <div class="card">
@@ -748,16 +732,15 @@
                 </div>
 
                 <!-- Open Positions -->
-                ${
-                  openTrades.length > 0
-                    ? `
+                ${openTrades.length > 0
+          ? `
                 <div class="card">
                     <div class="card-title">🔓 Open Positions (${openTrades.length})</div>
                     <div id="openTradesList"></div>
                 </div>
                 `
-                    : ""
-                }
+          : ""
+        }
 
                 <!-- Recent Trades -->
                 <div class="card">
@@ -766,30 +749,30 @@
                 </div>
             `;
 
-        createEquityChart("equityChart", equity);
+      createEquityChart("equityChart", equity);
 
-        if (openTrades.length > 0) {
-          renderOpenTrades(openTrades);
-        }
-
-        renderTrades(trades);
-
-        if (Object.keys(distributions.session || {}).length > 0) {
-          renderSessionStats(distributions.session);
-        }
+      if (openTrades.length > 0) {
+        renderOpenTrades(openTrades);
       }
 
-      // Show trade detail modal
-      function showTradeDetail(tradeId) {
-        tradeModal.open(tradeId);
+      renderTrades(trades);
+
+      if (Object.keys(distributions.session || {}).length > 0) {
+        renderSessionStats(distributions.session);
       }
+    }
 
-      function renderTrades(trades) {
-        const container = document.getElementById("tradesList");
-        if (!container) return;
+    // Show trade detail modal
+    function showTradeDetail(tradeId) {
+      tradeModal.open(tradeId);
+    }
 
-        if (trades.length === 0) {
-          container.innerHTML = `
+    function renderTrades(trades) {
+      const container = document.getElementById("tradesList");
+      if (!container) return;
+
+      if (trades.length === 0) {
+        container.innerHTML = `
                     <div class="empty-state">
                         <div class="empty-state-icon">📭</div>
                         <div>No trades yet</div>
@@ -798,52 +781,52 @@
                         </div>
                     </div>
                 `;
-          return;
-        }
+        return;
+      }
 
-        container.innerHTML = `
+      container.innerHTML = `
                 <div class="trade-list">
                     ${trades
-                      .map((t) => {
-                        const pnl = t.pnl_usd || 0;
-                        const pnlClass = pnl >= 0 ? "positive" : "negative";
-                        const direction = String(
-                          t.direction || "",
-                        ).toUpperCase();
-                        const directionEmoji =
-                          direction === "LONG" ? "🟢" : "🔴";
-                        const outcome = t.outcome || "OPEN";
-                        const outcomeEmoji =
-                          outcome === "TP"
-                            ? "✅"
-                            : outcome === "SL"
-                              ? "❌"
-                              : outcome === "OPEN"
-                                ? "🔓"
-                                : "⚪";
+          .map((t) => {
+            const pnl = t.pnl_usd || 0;
+            const pnlClass = pnl >= 0 ? "positive" : "negative";
+            const direction = String(
+              t.direction || "",
+            ).toUpperCase();
+            const directionEmoji =
+              direction === "LONG" ? "🟢" : "🔴";
+            const outcome = t.outcome || "OPEN";
+            const outcomeEmoji =
+              outcome === "TP"
+                ? "✅"
+                : outcome === "SL"
+                  ? "❌"
+                  : outcome === "OPEN"
+                    ? "🔓"
+                    : "⚪";
 
-                        // Calculate RR if available
-                        const rr = t.rr_ratio
-                          ? `RR ${t.rr_ratio.toFixed(2)}`
-                          : "";
+            // Calculate RR if available
+            const rr = t.rr_ratio
+              ? `RR ${t.rr_ratio.toFixed(2)}`
+              : "";
 
-                        // Format date
-                        const date = (t.ts_open || "")
-                          .slice(5, 16)
-                          .replace("T", " ");
+            // Format date
+            const date = (t.ts_open || "")
+              .slice(5, 16)
+              .replace("T", " ");
 
-                        // Session emoji
-                        const session = t.session || "";
-                        const sessionEmoji =
-                          session === "Asian"
-                            ? "🌏"
-                            : session === "London"
-                              ? "🇬🇧"
-                              : session === "NY"
-                                ? "🇺🇸"
-                                : "";
+            // Session emoji
+            const session = t.session || "";
+            const sessionEmoji =
+              session === "Asian"
+                ? "🌏"
+                : session === "London"
+                  ? "🇬🇧"
+                  : session === "NY"
+                    ? "🇺🇸"
+                    : "";
 
-                        return `
+            return `
                     <div class="trade-item" style="cursor: pointer;" onclick="showTradeDetail(${t.id})">
                         <div class="trade-info">
                             <div class="trade-symbol">
@@ -862,36 +845,36 @@
                         </div>
                     </div>
                 `;
-                      })
-                      .join("")}
+          })
+          .join("")}
                 </div>
             `;
-      }
+    }
 
-      function renderOpenTrades(trades) {
-        const container = document.getElementById("openTradesList");
-        if (!container) return;
+    function renderOpenTrades(trades) {
+      const container = document.getElementById("openTradesList");
+      if (!container) return;
 
-        container.innerHTML = `
+      container.innerHTML = `
                 <div class="trade-list">
                     ${trades
-                      .map((t) => {
-                        const direction = String(
-                          t.direction || "",
-                        ).toUpperCase();
-                        const directionEmoji =
-                          direction === "LONG" ? "🟢" : "🔴";
-                        const entry = t.entry_price || t.entry || 0;
-                        const sl = t.sl_price || t.sl || 0;
-                        const tp = t.tp_price || t.tp || 0;
-                        const rr = t.rr_ratio
-                          ? `RR ${t.rr_ratio.toFixed(2)}`
-                          : "";
-                        const date = (t.ts_open || "")
-                          .slice(5, 16)
-                          .replace("T", " ");
+          .map((t) => {
+            const direction = String(
+              t.direction || "",
+            ).toUpperCase();
+            const directionEmoji =
+              direction === "LONG" ? "🟢" : "🔴";
+            const entry = t.entry_price || t.entry || 0;
+            const sl = t.sl_price || t.sl || 0;
+            const tp = t.tp_price || t.tp || 0;
+            const rr = t.rr_ratio
+              ? `RR ${t.rr_ratio.toFixed(2)}`
+              : "";
+            const date = (t.ts_open || "")
+              .slice(5, 16)
+              .replace("T", " ");
 
-                        return `
+            return `
                     <div class="trade-item" style="border-left: 3px solid var(--accent);">
                         <div class="trade-info">
                             <div class="trade-symbol">
@@ -909,99 +892,100 @@
                         </div>
                     </div>
                 `;
-                      })
-                      .join("")}
+          })
+          .join("")}
                 </div>
             `;
-      }
+    }
 
-      function renderSessionStats(sessionData) {
-        const container = document.getElementById("sessionStats");
-        if (!container) return;
+    function renderSessionStats(sessionData) {
+      const container = document.getElementById("sessionStats");
+      if (!container) return;
 
-        const sessions = Object.entries(sessionData).sort(
-          (a, b) => b[1] - a[1],
-        );
-        const total = sessions.reduce((sum, [_, count]) => sum + count, 0);
+      const sessions = Object.entries(sessionData).sort(
+        (a, b) => b[1] - a[1],
+      );
+      const total = sessions.reduce((sum, [_, count]) => sum + count, 0);
 
-        container.innerHTML = `
+      container.innerHTML = `
                 <div class="stats-grid" style="grid-template-columns: repeat(${Math.min(sessions.length, 3)}, 1fr);">
                     ${sessions
-                      .map(([session, count]) => {
-                        const pct = ((count / total) * 100).toFixed(1);
-                        const emoji =
-                          session === "Asian"
-                            ? "🌏"
-                            : session === "London"
-                              ? "🇬🇧"
-                              : session === "NY"
-                                ? "🇺🇸"
-                                : "🌍";
+          .map(([session, count]) => {
+            const pct = ((count / total) * 100).toFixed(1);
+            const emoji =
+              session === "Asian"
+                ? "🌏"
+                : session === "London"
+                  ? "🇬🇧"
+                  : session === "NY"
+                    ? "🇺🇸"
+                    : "🌍";
 
-                        return `
+            return `
                     <div class="stat-box">
                         <div class="stat-label">${emoji} ${session}</div>
                         <div class="stat-value">${count}</div>
                         <div class="stat-sublabel">${pct}% of trades</div>
                     </div>
                 `;
-                      })
-                      .join("")}
+          })
+          .join("")}
                 </div>
             `;
-      }
+    }
 
-      function showTradeDetail(tradeId) {
-        // Open trade modal with full details
-        tradeModal.open(tradeId);
-      }
+    function showTradeDetail(tradeId) {
+      // Open trade modal with full details
+      tradeModal.open(tradeId);
+    }
 
-      // Analytics page (redirect to full page)
-      function loadAnalytics() {
-        // Redirect directly to full analytics page
-        window.location.href = "/analytics";
-      }
+    // Analytics page (redirect to full page)
+    function loadAnalytics() {
+      // Redirect directly to full analytics page
+      window.location.href = "/analytics";
+    }
 
-      // Weekly page (redirect to full page)
-      function loadWeekly() {
-        // Redirect directly to full weekly page
-        window.location.href = "/weekly";
-      }
+    // Weekly page (redirect to full page)
+    function loadWeekly() {
+      // Redirect directly to full weekly page
+      window.location.href = "/weekly";
+    }
 
-      // Initialize
-      const initialPage = window.location.hash.slice(1) || "dashboard";
+    // Initialize
+    const initialPage = window.location.hash.slice(1) || "dashboard";
 
-      // Wait for account manager to initialize
-      window.addEventListener("DOMContentLoaded", () => {
-        // Initialize account rules display
-        accountRulesDisplay = new AccountRulesDisplay("accountRulesDisplay");
+    // Wait for account manager to initialize
+    window.addEventListener("DOMContentLoaded", () => {
+      // Initialize account rules display
+      accountRulesDisplay = new AccountRulesDisplay("accountRulesDisplay");
 
-        // Initialize dashboard date filter
-        dashboardDateFilter = new DateRangeFilter(
-          "dashboardDateFilter",
-          (range) => {
-            loadDashboard(false, range);
-          },
-        );
+      // Initialize dashboard date filter
+      dashboardDateFilter = new DateRangeFilter(
+        "dashboardDateFilter",
+        (range) => {
+          loadDashboard(false, range);
+        },
+      );
 
-        // Listen for account changes
-        window.addEventListener("accountChanged", () => {
-          loadDashboard(false, currentDashboardDateRange);
-        });
-
-        showPage(initialPage);
+      // Listen for account changes
+      window.addEventListener("accountChanged", () => {
+        loadDashboard(false, currentDashboardDateRange);
       });
 
-      // Auto-refresh every 30 seconds if in Telegram
-      if (tg) {
-        setInterval(() => {
-          if (pages.dashboard.classList.contains("active")) {
-            loadDashboard(false);
-          }
-        }, 30000);
-      }
-      // Initialize Lucide icons
-      lucide.createIcons();
-    </script>
-  </body>
+      showPage(initialPage);
+    });
+
+    // Auto-refresh every 30 seconds if in Telegram
+    if (tg) {
+      setInterval(() => {
+        if (pages.dashboard.classList.contains("active")) {
+          loadDashboard(false);
+        }
+      }, 30000);
+    }
+    // Initialize Lucide icons
+    lucide.createIcons();
+  </script>
+</body>
+
 </html>

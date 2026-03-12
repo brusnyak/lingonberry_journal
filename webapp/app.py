@@ -66,6 +66,9 @@ def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts:
     # Advanced Directional Analytics
     direction_stats = journal_db.get_analytics_breakdown(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     
+    # Direction Accuracy Stats
+    direction_accuracy = journal_db.get_direction_accuracy_stats(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+    
     monte_carlo = journal_db.get_monte_carlo_stats(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     results = monte_carlo.get("results") or {}
     monte_carlo["simulations"] = results.get("simulations") or [[stats["balance"] for _ in range(10)]]
@@ -78,6 +81,7 @@ def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts:
         "trades": sorted(trades, key=lambda x: x["ts_open"], reverse=True),
         "calendar": calendar,
         "analytics": direction_stats,
+        "direction_accuracy": direction_accuracy,
         "monte_carlo": monte_carlo,
         "distributions": {
             "session": by_session,
@@ -367,6 +371,16 @@ def api_trades_manual():
         # Extract metadata
         is_perfect = body.get("is_perfect", False)
         week_start = body.get("week_start")
+        
+        # Auto-calculate week_start if not provided
+        if not week_start:
+            from datetime import datetime, timedelta
+            ts_open_dt = datetime.fromisoformat(ts_open.replace('Z', '+00:00'))
+            day_of_week = ts_open_dt.weekday()  # Monday = 0, Sunday = 6
+            days_since_monday = day_of_week
+            monday = ts_open_dt - timedelta(days=days_since_monday)
+            week_start = monday.strftime('%Y-%m-%d')
+        
         notes = body.get("notes", "")
         symbol = body["symbol"]
         asset_type = body.get("asset_type", "forex")
@@ -794,6 +808,49 @@ def api_goal_week_get():
     account_id = _parse_account_id(request.args.get("account_id")) or 1
     week_start = request.args.get("week_start") or _default_week_start_iso()
     return jsonify(journal_db.get_weekly_goals(account_id=account_id, week_start=week_start))
+@app.route("/api/trades/week")
+def api_trades_week():
+    """Get trades for a specific week"""
+    account_id = _parse_account_id(request.args.get("account_id"))
+    week_start = request.args.get("week_start") or _default_week_start_iso()
+
+    # Parse is_perfect filter
+    is_perfect = None
+    if request.args.get("is_perfect") == "true":
+        is_perfect = True
+    elif request.args.get("is_perfect") == "false":
+        is_perfect = False
+
+    trades = journal_db.get_trades_by_week(
+        week_start=week_start,
+        account_id=account_id,
+        is_perfect=is_perfect
+    )
+    return jsonify(trades)
+
+
+@app.route("/api/trades/week/stats")
+def api_trades_week_stats():
+    """Get statistics for a specific week"""
+    account_id = _parse_account_id(request.args.get("account_id"))
+    week_start = request.args.get("week_start") or _default_week_start_iso()
+
+    # Parse is_perfect filter
+    is_perfect = None
+    if request.args.get("is_perfect") == "true":
+        is_perfect = True
+    elif request.args.get("is_perfect") == "false":
+        is_perfect = False
+
+    stats = journal_db.get_week_stats(
+        week_start=week_start,
+        account_id=account_id,
+        is_perfect=is_perfect
+    )
+    return jsonify(stats)
+
+
+
 
 
 @app.route("/api/replay/<int:trade_id>")
@@ -901,6 +958,37 @@ def api_export_ml():
         account_id=body.get("account_id"),
         from_ts=body.get("from"),
         to_ts=body.get("to"),
+    )
+    return jsonify(result)
+
+
+@app.route("/api/analytics/direction-accuracy")
+def api_direction_accuracy():
+    """Get direction accuracy statistics"""
+    account_id = _parse_account_id(request.args.get("account_id"))
+    from_ts = request.args.get("from")
+    to_ts = request.args.get("to")
+    return jsonify(journal_db.get_direction_accuracy_stats(
+        account_id=account_id,
+        from_ts=from_ts,
+        to_ts=to_ts
+    ))
+
+
+@app.route("/api/analytics/analyze-direction", methods=["POST"])
+def api_analyze_direction():
+    """Analyze direction correctness for trades"""
+    body = request.get_json(force=True, silent=True) or {}
+    trade_id = body.get("trade_id")
+    account_id = body.get("account_id")
+    from_ts = body.get("from")
+    to_ts = body.get("to")
+    
+    result = journal_db.analyze_direction_correctness(
+        trade_id=trade_id,
+        account_id=account_id,
+        from_ts=from_ts,
+        to_ts=to_ts
     )
     return jsonify(result)
 

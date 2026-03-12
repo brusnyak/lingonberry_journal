@@ -1,163 +1,124 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Weekly Review | Journal Pro</title>
-    <link rel="stylesheet" href="/static/css/style.css" />
-    <link rel="stylesheet" href="/static/css/_forms.css" />
 
-    <link
-      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-  </head>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weekly Review | Journal Pro</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="/static/css/_forms.css" />
 
-  <body class="theme-lingonberry">
-    <nav class="main-nav">
-      <div class="nav-left">
-        <a href="/" class="nav-brand">
-          <i data-lucide="layers"></i>
-          Lingonberry <span>Journal</span>
-        </a>
-        <div class="nav-links">
-          <a href="/mini" class="nav-link" id="nav-dashboard"
-            ><i data-lucide="layout-dashboard"></i> Dashboard</a
-          >
-          <a href="/analytics" class="nav-link" id="nav-analytics"
-            ><i data-lucide="bar-chart-3"></i> Analytics</a
-          >
-          <a href="/weekly" class="nav-link active" id="nav-weekly"
-            ><i data-lucide="calendar"></i> Weekly</a
-          >
-          <a href="/entry" class="nav-link" id="nav-entry"
-            ><i data-lucide="plus-circle"></i> New Trade</a
-          >
+  <link
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet" />
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+
+<body class="theme-lingonberry">
+  <nav class="main-nav">
+    <div class="nav-left">
+      <a href="/" class="nav-brand">
+        <i data-lucide="layers"></i>
+        Lingonberry <span>Journal</span>
+      </a>
+      <div class="nav-links">
+        <a href="/mini" class="nav-link" id="nav-dashboard"><i data-lucide="layout-dashboard"></i> Dashboard</a>
+        <a href="/analytics" class="nav-link" id="nav-analytics"><i data-lucide="bar-chart-3"></i> Analytics</a>
+        <a href="/weekly" class="nav-link active" id="nav-weekly"><i data-lucide="calendar"></i> Weekly</a>
+        <a href="/entry" class="nav-link" id="nav-entry"><i data-lucide="plus-circle"></i> New Trade</a>
+      </div>
+    </div>
+    <div class="nav-right">
+      <div id="accountSelector"></div>
+    </div>
+  </nav>
+
+  <div class="pro-layout weekly-layout">
+    <!-- Center Chart -->
+    <section class="chart-center">
+      <div class="chart-controls-bar">
+        <div class="flex gap-2 items-center">
+          <button class="btn ghost btn-sm icon-btn" id="prevWeek">
+            <i data-lucide="chevron-left"></i>
+          </button>
+          <span class="font-bold whitespace-nowrap" id="weekRangeDisplay">Feb 23 - Feb 27, 2026</span>
+          <button class="btn ghost btn-sm icon-btn" id="nextWeek">
+            <i data-lucide="chevron-right"></i>
+          </button>
+          <div style="width: 1px; height: 20px; background: var(--border); margin: 0 8px;"></div>
+          <select id="symbolSelect" class="form-select btn ghost btn-sm" style="min-width: 110px; font-size: 12px;">
+            <option value="EURUSD">EURUSD</option>
+            <option value="GBPUSD">GBPUSD</option>
+            <option value="GBPJPY">GBPJPY</option>
+            <option value="USDJPY">USDJPY</option>
+            <option value="XAUUSD">GOLD</option>
+            <option value="XAGUSD">SILVER</option>
+            <option value="US100">US100</option>
+          </select>
+          <select id="timeframeSelect" class="btn ghost btn-sm" style="font-size: 12px;">
+            <option value="M1">M1</option>
+            <option value="M5">M5</option>
+            <option value="M15">M15</option>
+            <option value="M30">M30</option>
+            <option value="H1" selected>H1</option>
+            <option value="H4">H4</option>
+            <option value="D">D</option>
+          </select>
         </div>
       </div>
-      <div class="nav-right">
-        <div id="accountSelector"></div>
+      <div id="chartContainer">
+        <canvas id="drawLayer"></canvas>
+        <!-- Drawing Tools Bar (Always Visible) -->
+        <div id="favoritesBar" class="favorites-bar" style="display: flex;">
+          <button class="tool-btn active" data-tool="cursor" title="Cursor (V)">
+            <i data-lucide="mouse-pointer-2"></i>
+          </button>
+          <button class="tool-btn" data-tool="trendline" title="Trendline (L)">
+            <i data-lucide="trending-up"></i>
+          </button>
+          <button class="tool-btn" data-tool="hline" title="Horizontal Line (H)">
+            <i data-lucide="minus"></i>
+          </button>
+          <button class="tool-btn" data-tool="rect" title="Rectangle (R)">
+            <i data-lucide="square"></i>
+          </button>
+          <div style="width: 1px; height: 24px; background: var(--border); margin: 0 8px;"></div>
+          <button class="tool-btn" data-tool="long" title="Long Tool">
+            <i data-lucide="arrow-up-circle"></i>
+          </button>
+          <button class="tool-btn" data-tool="short" title="Short Tool">
+            <i data-lucide="arrow-down-circle"></i>
+          </button>
+          <div style="width: 1px; height: 24px; background: var(--border); margin: 0 8px;"></div>
+          <button class="tool-btn" data-tool="bos" title="BOS">
+            <span style="font-size: 10px; font-weight: 700;">BOS</span>
+          </button>
+          <button class="tool-btn" data-tool="choch" title="CHoCH">
+            <span style="font-size: 10px; font-weight: 700;">CH</span>
+          </button>
+          <button class="tool-btn" data-tool="sweep" title="Liquidity Sweep">
+            <i data-lucide="zap"></i>
+          </button>
+        </div>
       </div>
-    </nav>
+    </section>
 
-    <div class="pro-layout">
-      <!-- Left Toolbar -->
-      <aside class="drawing-toolbar" id="mainToolbar">
-        <button class="tool-btn active" data-tool="cursor" title="Cursor (V)">
-          <i data-lucide="mouse-pointer-2"></i>
-        </button>
-        <button class="tool-btn" data-tool="trendline" title="Trendline (L)">
-          <i data-lucide="trending-up"></i>
-          <div class="tool-star"><i data-lucide="star"></i></div>
-        </button>
-        <button class="tool-btn" data-tool="hline" title="Horizontal Line (H)">
-          <i data-lucide="minus"></i>
-          <div class="tool-star"><i data-lucide="star"></i></div>
-        </button>
-        <button class="tool-btn" data-tool="rect" title="Rectangle (R)">
-          <i data-lucide="square"></i>
-          <div class="tool-star"><i data-lucide="star"></i></div>
-        </button>
-        <div
-          class="divider"
-          style="
-            height: 1px;
-            background: var(--border);
-            width: 100%;
-            margin: 8px 0;
-          "
-        ></div>
-        <button class="tool-btn" data-tool="long" title="Long Tool">
-          <i data-lucide="arrow-up-circle"></i>
-          <div class="tool-star"><i data-lucide="star"></i></div>
-        </button>
-        <button class="tool-btn" data-tool="short" title="Short Tool">
-          <i data-lucide="arrow-down-circle"></i>
-          <div class="tool-star"><i data-lucide="star"></i></div>
-        </button>
-        <div
-          class="divider"
-          style="
-            height: 1px;
-            background: var(--border);
-            width: 100%;
-            margin: 8px 0;
-          "
-        ></div>
-        <button class="tool-btn" data-tool="bos" title="BOS">
-          <span class="text-xs font-bold">BOS</span>
-          <div class="tool-star"><i data-lucide="star"></i></div>
-        </button>
-        <button class="tool-btn" data-tool="choch" title="CHoCH">
-          <span class="text-xs font-bold">CH</span>
-          <div class="tool-star"><i data-lucide="star"></i></div>
-        </button>
-        <button class="tool-btn" data-tool="sweep" title="Liquidity Sweep">
-          <i data-lucide="zap"></i>
-          <div class="tool-star"><i data-lucide="star"></i></div>
-        </button>
-      </aside>
-
-      <!-- Center Chart -->
-      <section class="chart-center">
-        <div class="chart-controls-bar">
-          <div class="flex gap-2">
-            <button class="btn ghost btn-sm icon-btn" id="prevWeek">
-              <i data-lucide="chevron-left"></i>
-            </button>
-            <span class="font-bold whitespace-nowrap" id="weekRangeDisplay"
-              >Feb 23 - Feb 27, 2026</span
-            >
-            <button class="btn ghost btn-sm icon-btn" id="nextWeek">
-              <i data-lucide="chevron-right"></i>
-            </button>
-          </div>
-          <div class="flex gap-2 ml-auto">
-            <select
-              id="symbolSelect"
-              class="form-select btn ghost btn-sm"
-              style="min-width: 120px"
-            >
-              <option value="EURUSD">EURUSD</option>
-              <option value="GBPUSD">GBPUSD</option>
-              <option value="GBPJPY">GBPJPY</option>
-              <option value="USDJPY">USDJPY</option>
-              <option value="XAUUSD">GOLD (XAUUSD)</option>
-              <option value="XAGUSD">SILVER (XAGUSD)</option>
-              <option value="US100">US100 (Nasdaq)</option>
-            </select>
-            <select id="timeframeSelect" class="btn ghost btn-sm">
-              <option value="M1">M1</option>
-              <option value="M5">M5</option>
-              <option value="M15">M15</option>
-              <option value="M30">M30</option>
-              <option value="H1" selected>H1</option>
-              <option value="H4">H4</option>
-              <option value="D">D</option>
-            </select>
-          </div>
+    <!-- Right Panel -->
+    <aside class="right-side-panel">
+      <div class="review-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3 style="margin: 0;">Weekly Stats</h3>
+          <button id="toggleTradeSource" class="btn ghost btn-sm" style="font-size: 11px;">
+            Show Perfect
+          </button>
         </div>
-        <div id="chartContainer">
-          <canvas id="drawLayer"></canvas>
-          <div
-            id="favoritesBar"
-            class="favorites-bar"
-            style="display: none"
-          ></div>
-        </div>
-      </section>
+      </div>
 
-      <!-- Right Panel -->
-      <aside class="right-side-panel">
-        <div class="review-card">
-          <h3>Weekly Reflection</h3>
-          <textarea
-            id="weeklyNotes"
-            class="form-textarea"
-            placeholder="What did you learn this week? Any mistakes to avoid?"
-            style="
+      <div class="review-card">
+        <h3>Weekly Reflection</h3>
+        <textarea id="weeklyNotes" class="form-textarea"
+          placeholder="What did you learn this week? Any mistakes to avoid?" style="
               width: 100%;
               min-height: 120px;
               background: var(--panel-solid);
@@ -167,154 +128,101 @@
               padding: 12px;
               margin-bottom: 12px;
               font-family: inherit;
-            "
-          ></textarea>
-          <button class="btn btn-primary w-full" id="saveReflection">
-            Save Reflection
-          </button>
-        </div>
+            "></textarea>
+        <button class="btn btn-primary w-full" id="saveReflection">
+          Save Reflection
+        </button>
+      </div>
 
-        <div class="review-card" id="perfectTradeLogger" style="display: none">
-          <h3>✨ Log Perfect Trade</h3>
-          <form
-            id="perfectTradeForm"
-            style="display: flex; flex-direction: column; gap: 12px"
-          >
-            <div
-              style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px"
-            >
-              <div class="input-group">
-                <label>Entry</label>
-                <input
-                  type="number"
-                  step="0.00001"
-                  id="mEntry"
-                  required
-                  class="form-input"
-                />
-              </div>
-              <div class="input-group">
-                <label>SL</label>
-                <input
-                  type="number"
-                  step="0.00001"
-                  id="mSL"
-                  required
-                  class="form-input"
-                />
-              </div>
-            </div>
-            <div
-              style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px"
-            >
-              <div class="input-group">
-                <label>TP</label>
-                <input
-                  type="number"
-                  step="0.00001"
-                  id="mTP"
-                  required
-                  class="form-input"
-                />
-              </div>
-              <div class="input-group">
-                <label>% Risk</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  id="mRiskPct"
-                  value="1.0"
-                  class="form-input"
-                />
-              </div>
+      <div class="review-card" id="perfectTradeLogger" style="display: none">
+        <h3>✨ Log Perfect Trade</h3>
+        <form id="perfectTradeForm" style="display: flex; flex-direction: column; gap: 12px">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+            <div class="input-group">
+              <label>Entry</label>
+              <input type="number" step="0.00001" id="mEntry" required class="form-input" />
             </div>
             <div class="input-group">
-              <label>Lots (Calc)</label>
-              <input
-                type="number"
-                step="0.01"
-                id="mLots"
-                disabled
-                class="form-input"
-                style="opacity: 0.6"
-              />
+              <label>SL</label>
+              <input type="number" step="0.00001" id="mSL" required class="form-input" />
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+            <div class="input-group">
+              <label>TP</label>
+              <input type="number" step="0.00001" id="mTP" required class="form-input" />
             </div>
             <div class="input-group">
-              <label>Notes</label>
-              <textarea
-                id="mNotes"
-                rows="2"
-                class="form-textarea"
-                placeholder="Confluences..."
-              ></textarea>
+              <label>% Risk</label>
+              <input type="number" step="0.1" id="mRiskPct" value="1.0" class="form-input" />
             </div>
-            <button type="submit" class="btn btn-primary w-full">
-              Save to Session
-            </button>
-            <button
-              type="button"
-              class="btn ghost btn-sm w-full"
-              onclick="
+          </div>
+          <div class="input-group">
+            <label>Lots (Calc)</label>
+            <input type="number" step="0.01" id="mLots" disabled class="form-input" style="opacity: 0.6" />
+          </div>
+          <div class="input-group">
+            <label>Notes</label>
+            <textarea id="mNotes" rows="2" class="form-textarea" placeholder="Confluences..."></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary w-full">
+            Save to Session
+          </button>
+          <button type="button" class="btn ghost btn-sm w-full" onclick="
                 document.getElementById('perfectTradeLogger').style.display =
                   'none';
                 document.getElementById('addBtnContainer').style.display =
                   'block';
-              "
-            >
-              Cancel
-            </button>
-          </form>
-        </div>
+              ">
+            Cancel
+          </button>
+        </form>
+      </div>
 
-        <div class="review-card" id="perfectTradesDisplay">
-          <h3>Perfect Trades (0)</h3>
-          <div
-            id="perfectTradesList"
-            style="display: flex; flex-direction: column; gap: 12px"
-          >
-            <div class="muted text-sm text-center">
-              No perfect trades logged.
-            </div>
-          </div>
-          <div id="addBtnContainer" style="margin-top: 12px">
-            <button
-              id="logPerfectTrade"
-              class="btn ghost w-full"
-              style="border-style: dashed; border-color: var(--muted)"
-            >
-              <i data-lucide="plus"></i> Add Perfect Trade
-            </button>
+      <div class="review-card" id="perfectTradesDisplay">
+        <h3>Perfect Trades (0)</h3>
+        <div id="perfectTradesList" style="display: flex; flex-direction: column; gap: 12px">
+          <div class="muted text-sm text-center">
+            No perfect trades logged.
           </div>
         </div>
-
-        <div class="review-card">
-          <h3>Account Rules Status</h3>
-          <div id="accountRulesMini"></div>
+        <div id="addBtnContainer" style="margin-top: 12px">
+          <button id="logPerfectTrade" class="btn ghost w-full"
+            style="border-style: dashed; border-color: var(--muted)">
+            <i data-lucide="plus"></i> Add Perfect Trade
+          </button>
         </div>
-      </aside>
-    </div>
+      </div>
 
-    <!-- Trade Modal Removed - Form Integrated -->
+      <div class="review-card">
+        <h3>Account Rules Status</h3>
+        <div id="accountRulesMini"></div>
+      </div>
+    </aside>
+  </div>
 
-    <script src="/static/js/notifications.js"></script>
-    <script src="/static/js/api.js"></script>
-    <script src="/static/js/account-manager.js"></script>
-    <script src="/static/js/account-rules.js"></script>
-    <script src="/static/js/drawing-engine.js"></script>
-    <script src="/static/js/weekly-pro.js"></script>
-    <script>
-      document.addEventListener("DOMContentLoaded", () => {
-        // Initialize Account Manager
-        const accountManager = new AccountManager();
+  <!-- Trade Modal Removed - Form Integrated -->
 
-        // Initialize Weekly Pro logic
-        const weeklyPro = new WeeklyPro();
+  <script src="/static/js/notifications.js"></script>
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/account-manager.js"></script>
+  <script src="/static/js/account-rules.js"></script>
+  <script src="/static/js/drawing-engine.js"></script>
+  <script src="/static/js/weekly-pro.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      // Initialize Account Manager
+      const accountManager = new AccountManager();
 
-        // Initialize Lucide icons
-        if (window.lucide) {
-          window.lucide.createIcons();
-        }
-      });
-    </script>
-  </body>
+      // Initialize Weekly Pro logic
+      const weeklyPro = new WeeklyPro();
+
+      // Initialize Lucide icons
+      if (window.lucide) {
+        window.lucide.createIcons();
+      }
+    });
+  </script>
+</body>
+
 </html>
