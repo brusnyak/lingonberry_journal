@@ -9,8 +9,8 @@ data/cache/
 data/exports/
 charts/
 .pytest_cache/
-.key
-.key.pub
+*.key
+*.key.pub
 
 # Documentation (keep only README)
 *.md
