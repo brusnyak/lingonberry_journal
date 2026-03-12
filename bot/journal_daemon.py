@@ -118,9 +118,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "Commands:\n"
         "/journal — Log a new trade\n"
         "/open — View open trades\n"
-        "/close — Close a trade\n"
         "/stats — View performance stats\n"
-        "/report — Open Mini App dashboard\n"
+        "/report — Open Dashboard\n"
+        "/mini — Setup Mini App Button\n"
         "/cancel — Cancel current journal flow"
     )
 
@@ -296,12 +296,13 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
     
-    # For now, direct users to local webapp
+    # Use the configured WEBAPP_URL
+    url = WEBAPP_URL.rstrip('/')
     await update.message.reply_text(
         "📊 Trading Dashboard\n\n"
-        "Open in your browser:\n"
-        "http://localhost:5000\n\n"
-        "Make sure webapp is running: `make webapp`"
+        f"Open in your browser:\n{url}\n\n"
+        "Or use the 'Open Dashboard' button below.",
+        reply_markup=_webapp_keyboard()
     )
 
 
