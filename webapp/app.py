@@ -10,6 +10,7 @@ from flask_cors import CORS
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bot import journal_db, chart_generator
 from core.exporter import export_ml_dataset
+from core.raw_trade_import import parse_raw_trades
 from infra.market_data import get_timeframe_for_asset, load_ohlcv_with_cache, replay_window
 from infra.pine_bridge import process_pine_payload
 from jobs.sltp_poller import SLTPPoller
@@ -550,6 +551,80 @@ def api_trades_manual():
             "type": type(e).__name__,
             "trace": error_trace.split('\n')[-10:]  # Last 10 lines of trace
         }), 500
+
+
+@app.route("/api/trades/import_raw", methods=["POST"])
+def api_trades_import_raw():
+    """Import raw trade logs (platform or prop firm) and store as manual trades."""
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        raw_text = body.get("text", "")
+        if not raw_text.strip():
+            return jsonify({"error": "Missing raw trade text"}), 400
+
+        account_id = _parse_account_id(request.args.get("account_id"))
+        if not account_id:
+            account_id = int(body.get("account_id", 1))
+
+        account = journal_db.get_account(account_id)
+        if not account:
+            return jsonify({"error": "Account not found", "account_id": account_id}), 404
+
+        tz_offset = int(body.get("timezone_offset_hours", 2))
+        timeframe = body.get("timeframe", "M30")
+
+        trades = parse_raw_trades(raw_text, tz_offset_hours=tz_offset)
+        if not trades:
+            return jsonify({"error": "No trades parsed from input"}), 400
+
+        imported = []
+        skipped = 0
+        for t in trades:
+            try:
+                trade_id = journal_db.create_trade(
+                    account_id=account_id,
+                    symbol=t["symbol"],
+                    direction=t["direction"],
+                    entry_price=t["entry_price"],
+                    position_size=t.get("lots", 0.1),
+                    ts_open=t["ts_open"],
+                    sl_price=t.get("sl"),
+                    tp_price=t.get("tp"),
+                    timeframe=timeframe,
+                    notes=t.get("notes"),
+                    external_id=t.get("external_id"),
+                    provider="import_api",
+                )
+
+                journal_db.close_trade(
+                    trade_id=trade_id,
+                    exit_price=t["exit_price"],
+                    outcome=t.get("outcome", "MANUAL"),
+                    event_type="import",
+                    provider="import_api",
+                    payload=t,
+                    ts_close=t.get("ts_close"),
+                    pnl_usd_override=t.get("pnl_usd"),
+                )
+
+                imported.append({
+                    "trade_id": trade_id,
+                    "symbol": t["symbol"],
+                    "ts_open": t["ts_open"],
+                })
+            except Exception:
+                skipped += 1
+
+        return jsonify({
+            "imported": imported,
+            "imported_count": len(imported),
+            "skipped": skipped,
+        })
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ Error in api_trades_import_raw: {error_trace}")
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
 def api_account_update(account_id: int):
     body = request.get_json(force=True, silent=True) or {}
     

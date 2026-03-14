@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Trading Journal Telegram Bot."""
+import json
 import logging
 import os
 import sys
+from urllib import request as urlrequest
+from urllib.error import HTTPError, URLError
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -22,6 +25,13 @@ logger = logging.getLogger(__name__)
 WEBAPP_URL = os.getenv("WEBAPP_URL", "http://localhost:5000/mini")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_JOURNAL") or os.getenv("TELEGRAM_JOURAL")
 AUTH_ID = int(os.getenv("TELEGRAM_JOURNAL_CHAT", "0") or "0")
+
+
+def _api_base() -> str:
+    base = WEBAPP_URL.rstrip("/")
+    if base.endswith("/mini"):
+        base = base[:-5]
+    return base
 
 JOURNAL_STEPS = [
     "symbol",
@@ -121,6 +131,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/stats — View performance stats\n"
         "/report — Open Dashboard\n"
         "/mini — Setup Mini App Button\n"
+        "/import — Paste trade logs\n"
         "/cancel — Cancel current journal flow"
     )
 
@@ -131,8 +142,67 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await update.message.reply_text(
         "Commands:\n"
-        "/journal, /open, /close, /stats, /report, /weekly, /cancel"
+        "/journal, /open, /close, /stats, /report, /weekly, /import, /cancel"
     )
+
+
+async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ You are not authorized to use this bot.")
+        return
+
+    raw_text = ""
+    if update.message and update.message.text:
+        parts = update.message.text.split(None, 1)
+        if len(parts) > 1:
+            raw_text = parts[1]
+
+    if not raw_text and update.message and update.message.reply_to_message:
+        raw_text = update.message.reply_to_message.text or ""
+
+    if not raw_text.strip():
+        await update.message.reply_text(
+            "Paste your trade log after the command, or reply to a message with /import.\n\n"
+            "Example:\n"
+            "/import <paste logs>"
+        )
+        return
+
+    account = _current_account()
+    if not account:
+        await update.message.reply_text("❌ No account found to import into.")
+        return
+
+    payload = {
+        "text": raw_text,
+        "account_id": account["id"],
+        "timezone_offset_hours": 2,
+        "timeframe": "M30",
+    }
+
+    url = f"{_api_base()}/api/trades/import_raw?account_id={account['id']}"
+    req = urlrequest.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlrequest.urlopen(req, timeout=25) as resp:
+            body = resp.read().decode("utf-8")
+        data = json.loads(body) if body else {}
+        imported = data.get("imported_count", 0)
+        skipped = data.get("skipped", 0)
+        await update.message.reply_text(
+            f"✅ Imported {imported} trades into {account['name']}.\n"
+            f"Skipped: {skipped}"
+        )
+    except HTTPError as exc:
+        details = exc.read().decode("utf-8") if exc.fp else ""
+        await update.message.reply_text(f"❌ Import failed: {exc.code}\n{details}")
+    except URLError as exc:
+        await update.message.reply_text(f"❌ Import failed: {exc}")
 
 
 async def journal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -469,6 +539,7 @@ def main() -> None:
     application.add_handler(CommandHandler("open", open_command))
     application.add_handler(CommandHandler("close", close_command))
     application.add_handler(CommandHandler("weekly", weekly_command))
+    application.add_handler(CommandHandler("import", import_command))
     application.add_handler(CallbackQueryHandler(daily_reminder_callback, pattern="^daily_reminder:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     application.add_error_handler(error_handler)

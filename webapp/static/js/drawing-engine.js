@@ -16,10 +16,19 @@ class DrawingEngine {
       drawings: [],
       currentTool: "cursor",
       selectedId: null,
+      selectedIds: [],
       drawingDraft: null,
       dragging: null, // {id, pointIdx, offset}
+      lasso: null, // {start:{x,y}, current:{x,y}}
       mouse: null,
       candles: [],
+      sessionBreaks: {
+        enabled: false,
+        times: [],
+        color: "rgba(56, 189, 248, 0.35)",
+        width: 1,
+        dash: [4, 6],
+      },
       hoveredHandle: null,
       dragDirty: false,
     };
@@ -58,13 +67,44 @@ class DrawingEngine {
 
   setCandles(candles) {
     this.state.candles = candles;
+    this.computeSessionBreaks();
   }
 
   setTool(toolId) {
     this.state.currentTool = toolId;
     this.state.drawingDraft = null;
     this.state.selectedId = null;
+    this.state.selectedIds = [];
     this.redraw();
+  }
+
+  setSessionBreaks(enabled, opts = {}) {
+    this.state.sessionBreaks.enabled = !!enabled;
+    if (opts.color) this.state.sessionBreaks.color = opts.color;
+    if (opts.width) this.state.sessionBreaks.width = opts.width;
+    if (opts.dash) this.state.sessionBreaks.dash = opts.dash;
+    this.redraw();
+  }
+
+  computeSessionBreaks() {
+    const breaks = [];
+    let prevKey = null;
+    for (const c of this.state.candles || []) {
+      const d = new Date(c.time * 1000);
+      const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+      if (prevKey && key !== prevKey) breaks.push(c.time);
+      prevKey = key;
+    }
+    this.state.sessionBreaks.times = breaks;
+  }
+
+  isSelected(id) {
+    return this.state.selectedIds.includes(id);
+  }
+
+  setSelection(ids, primaryId = null) {
+    this.state.selectedIds = Array.from(new Set(ids));
+    this.state.selectedId = primaryId || this.state.selectedIds[0] || null;
   }
 
   getPointFromMouse(ev, opts = {}) {
@@ -115,6 +155,45 @@ class DrawingEngine {
     return { x, y };
   }
 
+  ensureRiskRewardPoints(d) {
+    if (d.points.length < 3) {
+      const entryP = d.points[0];
+      const stopP = d.points[1];
+      const diff = entryP.price - stopP.price;
+      d.points[2] = { time: entryP.time, price: entryP.price + diff * 2 };
+    }
+    if (d.points.length < 4) {
+      const entryP = d.points[0];
+      const hours = 24;
+      d.points[3] = { time: entryP.time + 3600 * hours, price: entryP.price };
+    }
+  }
+
+  getRiskRewardXY(d) {
+    this.ensureRiskRewardPoints(d);
+    const entryP = d.points[0];
+    const stopP = d.points[1];
+    const targetP = d.points[2];
+    const endP = d.points[3];
+
+    const entryXY = this.pointToXY(entryP);
+    const stopXY = this.pointToXY(stopP);
+    const targetXY = this.pointToXY(targetP);
+    let endXY = this.pointToXY(endP);
+
+    if (!entryXY || !stopXY || !targetXY) return null;
+
+    if (!endXY) {
+      const fixedWidth = 200;
+      const leftX = entryXY.x;
+      const maxRight = Math.max(leftX + 20, this.canvas.width - 6);
+      const rightX = Math.min(leftX + fixedWidth, maxRight);
+      endXY = { x: rightX, y: entryXY.y };
+    }
+
+    return { entryXY, stopXY, targetXY, endXY };
+  }
+
   handleMouseDown(ev) {
     const p = this.getPointFromMouse(ev, { disableMagnet: !!ev.shiftKey });
     if (!p) return;
@@ -158,6 +237,20 @@ class DrawingEngine {
       return;
     }
 
+    const multiKey = ev.metaKey || ev.ctrlKey;
+
+    // Start lasso selection with Cmd/Ctrl + drag
+    if (multiKey) {
+      const rect = this.container.getBoundingClientRect();
+      const mx = ev.clientX - rect.left;
+      const my = ev.clientY - rect.top;
+      this.state.lasso = { start: { x: mx, y: my }, current: { x: mx, y: my } };
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.redraw();
+      return;
+    }
+
     // Hit Testing
     const rect = this.container.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
@@ -169,14 +262,8 @@ class DrawingEngine {
       if (selected) {
         let pts = [];
         if (selected.type === "riskreward") {
-          // PointToXY doesn't work directly because RR has virtual points sometimes or depends on entry
-          const entryXY = this.pointToXY(selected.points[0]);
-          const stopXY = this.pointToXY(selected.points[1]);
-          const targetXY = this.pointToXY(selected.points[2]);
-          const endXY = this.pointToXY(selected.points[3]);
-          if (entryXY && stopXY && targetXY && endXY) {
-            pts = [entryXY, stopXY, targetXY, { x: endXY.x, y: entryXY.y }];
-          }
+          const rr = this.getRiskRewardXY(selected);
+          if (rr) pts = [rr.entryXY, rr.stopXY, rr.targetXY, rr.endXY];
         } else {
           pts = selected.points.map(p => this.pointToXY(p)).filter(x => x);
         }
@@ -202,12 +289,27 @@ class DrawingEngine {
       }
     }
 
-    this.state.selectedId = found;
     if (found) {
+      if (multiKey) {
+        if (this.isSelected(found)) {
+          this.setSelection(this.state.selectedIds.filter(id => id !== found), this.state.selectedId === found ? null : this.state.selectedId);
+        } else {
+          this.setSelection([...this.state.selectedIds, found], found);
+        }
+      } else {
+        this.setSelection([found], found);
+      }
       ev.preventDefault();
       ev.stopPropagation();
       this.state.dragging = { id: found, offset: { time: p.time, price: p.price }, isHandle: false };
       this.state.dragDirty = false;
+    } else {
+      if (multiKey) {
+        const allIds = this.state.drawings.map(d => d.id);
+        this.setSelection(allIds, allIds[0] || null);
+      } else {
+        this.setSelection([], null);
+      }
     }
     this.redraw();
   }
@@ -216,6 +318,12 @@ class DrawingEngine {
     const rect = this.container.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
     const my = ev.clientY - rect.top;
+
+    if (this.state.lasso) {
+      this.state.lasso.current = { x: mx, y: my };
+      this.redraw();
+      return;
+    }
 
     if (this.state.dragging) {
       ev.preventDefault();
@@ -250,10 +358,15 @@ class DrawingEngine {
           d.points[this.state.dragging.pointIdx] = p;
         }
       } else {
-        // Drag entire drawing
+        // Drag entire drawing (move all selected if applicable)
         const dt = p.time - this.state.dragging.offset.time;
         const dp = p.price - this.state.dragging.offset.price;
-        d.points = d.points.map(pt => ({ time: pt.time + dt, price: pt.price + dp }));
+        const selected = this.state.selectedIds.length ? this.state.selectedIds : [d.id];
+        for (const id of selected) {
+          const target = this.state.drawings.find(x => x.id === id);
+          if (!target) continue;
+          target.points = target.points.map(pt => ({ time: pt.time + dt, price: pt.price + dp }));
+        }
         this.state.dragging.offset = p;
       }
 
@@ -269,14 +382,64 @@ class DrawingEngine {
   }
 
   handleMouseUp() {
+    if (this.state.lasso) {
+      const { start, current } = this.state.lasso;
+      const minX = Math.min(start.x, current.x);
+      const maxX = Math.max(start.x, current.x);
+      const minY = Math.min(start.y, current.y);
+      const maxY = Math.max(start.y, current.y);
+
+      const hits = [];
+      for (const d of this.state.drawings) {
+        const bbox = this.getDrawingBBox(d);
+        if (!bbox) continue;
+        const intersects = !(bbox.maxX < minX || bbox.minX > maxX || bbox.maxY < minY || bbox.minY > maxY);
+        if (intersects) hits.push(d.id);
+      }
+      this.setSelection(hits, hits[0] || null);
+      this.state.lasso = null;
+      this.redraw();
+      return;
+    }
+
     this.state.dragging = null;
   }
 
   handleKeyDown(ev) {
-    if ((ev.key === "Delete" || ev.key === "Backspace") && this.state.selectedId) {
-      this.state.drawings = this.state.drawings.filter(x => x.id !== this.state.selectedId);
-      this.state.selectedId = null;
+    const active = document.activeElement;
+    const tag = active?.tagName?.toLowerCase();
+    if (tag === "input" || tag === "textarea" || active?.isContentEditable) {
+      return;
+    }
+    const key = ev.key.toLowerCase();
+    const multiKey = ev.metaKey || ev.ctrlKey;
+
+    if ((key === "delete" || key === "backspace") && this.state.selectedIds.length) {
+      const toDelete = new Set(this.state.selectedIds);
+      this.state.drawings = this.state.drawings.filter(x => !toDelete.has(x.id));
+      this.setSelection([], null);
       this.redraw();
+      return;
+    }
+
+    if (multiKey && key === "a") {
+      ev.preventDefault();
+      const allIds = this.state.drawings.map(d => d.id);
+      this.setSelection(allIds, allIds[0] || null);
+      this.redraw();
+      return;
+    }
+
+    if (multiKey && key === "c") {
+      ev.preventDefault();
+      this.copySelected();
+      return;
+    }
+
+    if (multiKey && key === "v") {
+      ev.preventDefault();
+      this.pasteCopied();
+      return;
     }
   }
 
@@ -303,11 +466,13 @@ class DrawingEngine {
       const dist = this.distToSegment(mx, my, pts[0].x, pts[0].y, pts[1].x, pts[1].y);
       return dist < 10;
     }
-    if (d.type === "riskreward" && pts.length >= 2) {
-      const leftX = pts[0].x;
-      const rightX = pts[3]?.x || pts[1].x;
-      const topY = Math.min(pts[0].y, pts[1].y, pts[2]?.y || pts[1].y);
-      const bottomY = Math.max(pts[0].y, pts[1].y, pts[2]?.y || pts[1].y);
+    if (d.type === "riskreward") {
+      const rr = this.getRiskRewardXY(d);
+      if (!rr) return false;
+      const leftX = rr.entryXY.x;
+      const rightX = rr.endXY.x;
+      const topY = Math.min(rr.entryXY.y, rr.stopXY.y, rr.targetXY.y);
+      const bottomY = Math.max(rr.entryXY.y, rr.stopXY.y, rr.targetXY.y);
       return mx >= leftX && mx <= rightX && my >= topY && my <= bottomY;
     }
     return false;
@@ -321,6 +486,32 @@ class DrawingEngine {
     return Math.sqrt((px - (x1 + t * (x2 - x1))) ** 2 + (py - (y1 + t * (y2 - y1))) ** 2);
   }
 
+  getDrawingBBox(d) {
+    if (d.type === "riskreward") {
+      const rr = this.getRiskRewardXY(d);
+      if (!rr) return null;
+      const xs = [rr.entryXY.x, rr.stopXY.x, rr.targetXY.x, rr.endXY.x];
+      const ys = [rr.entryXY.y, rr.stopXY.y, rr.targetXY.y, rr.endXY.y];
+      return {
+        minX: Math.min(...xs),
+        maxX: Math.max(...xs),
+        minY: Math.min(...ys),
+        maxY: Math.max(...ys),
+      };
+    }
+
+    const pts = d.points.map(p => this.pointToXY(p)).filter(x => x);
+    if (!pts.length) return null;
+    const xs = pts.map(p => p.x);
+    const ys = pts.map(p => p.y);
+    return {
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minY: Math.min(...ys),
+      maxY: Math.max(...ys),
+    };
+  }
+
   addDrawing(partial) {
     const drawing = {
       id: Math.random().toString(36).substr(2, 9),
@@ -329,10 +520,62 @@ class DrawingEngine {
       style: partial.style || { stroke: "#00a3ff", fill: "rgba(0, 163, 255, 0.1)" },
       side: partial.side || null,
       label: partial.label || null,
+      source: partial.source || null,
     };
     this.state.drawings.push(drawing);
+    if (partial.select !== false && drawing.type === "riskreward") {
+      this.setSelection([drawing.id], drawing.id);
+    }
     console.log('✏️ Drawing added:', drawing.type, 'Side:', drawing.side, 'Total drawings:', this.state.drawings.length);
     this.redraw();
+    return drawing;
+  }
+
+  getClipboardOffsetSeconds() {
+    const candles = this.state.candles || [];
+    if (candles.length >= 2) {
+      const dt = Math.abs(candles[1].time - candles[0].time);
+      if (dt > 0) return dt;
+    }
+    return 3600;
+  }
+
+  copySelected() {
+    if (!this.state.selectedIds.length) return;
+    const selected = this.state.drawings.filter(d => this.state.selectedIds.includes(d.id));
+    this.state.clipboard = selected.map(d => ({
+      type: d.type,
+      points: d.points.map(p => ({ ...p })),
+      style: d.style ? { ...d.style } : undefined,
+      side: d.side || null,
+      label: d.label || null,
+      note: d.note,
+    }));
+  }
+
+  pasteCopied() {
+    if (!this.state.clipboard || !this.state.clipboard.length) return;
+    const dt = this.getClipboardOffsetSeconds();
+    const newIds = [];
+
+    for (const item of this.state.clipboard) {
+      const drawing = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: item.type,
+        points: item.points.map(p => ({ time: p.time + dt, price: p.price })),
+        style: item.style ? { ...item.style } : { stroke: "#00a3ff", fill: "rgba(0, 163, 255, 0.1)" },
+        side: item.side || null,
+        label: item.label || null,
+        note: item.note,
+      };
+      this.state.drawings.push(drawing);
+      newIds.push(drawing.id);
+    }
+
+    if (newIds.length) {
+      this.setSelection(newIds, newIds[0]);
+      this.redraw();
+    }
   }
 
   redraw() {
@@ -342,6 +585,25 @@ class DrawingEngine {
 
     // Clear canvas
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+    // Session breaks (daily separators)
+    if (this.state.sessionBreaks.enabled && this.state.sessionBreaks.times.length) {
+      const visibleRange = this.chart.timeScale().getVisibleRange();
+      this.ctx.save();
+      this.ctx.strokeStyle = this.state.sessionBreaks.color;
+      this.ctx.lineWidth = this.state.sessionBreaks.width;
+      this.ctx.setLineDash(this.state.sessionBreaks.dash);
+      for (const t of this.state.sessionBreaks.times) {
+        if (visibleRange && (t < visibleRange.from || t > visibleRange.to)) continue;
+        const x = this.chart.timeScale().timeToCoordinate(t);
+        if (x == null) continue;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x, 0);
+        this.ctx.lineTo(x, this.canvas.height);
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
 
     if (this.state.drawings.length > 0) {
       console.log('Redrawing', this.state.drawings.length, 'drawings');
@@ -398,37 +660,13 @@ class DrawingEngine {
       } else if (d.type === "riskreward" && d.points.length >= 2) {
         console.log('Drawing risk/reward box:', d.side, 'Points:', d.points.length);
 
-        const entryP = d.points[0];
-        const stopP = d.points[1];
+        const rr = this.getRiskRewardXY(d);
+        if (rr) {
+          const { entryXY, stopXY, targetXY, endXY } = rr;
+          const entryP = d.points[0];
+          const stopP = d.points[1];
+          const targetP = d.points[2];
 
-        // Ensure we have target and end points
-        if (d.points.length < 3) {
-          const diff = entryP.price - stopP.price;
-          d.points[2] = { time: entryP.time, price: entryP.price + diff * 2 }; // Target 2R
-        }
-        if (d.points.length < 4) {
-          const hours = 24; // Default length
-          d.points[3] = { time: entryP.time + 3600 * hours, price: entryP.price };
-        }
-
-        const targetP = d.points[2];
-        const endP = d.points[3];
-
-        const entryXY = this.pointToXY(entryP);
-        const stopXY = this.pointToXY(stopP);
-        const targetXY = this.pointToXY(targetP);
-        let endXY = this.pointToXY(endP);
-
-        // Fallback: if endXY is null (outside visible range), use fixed pixel width
-        if (!endXY && entryXY) {
-          const fixedWidth = 200; // 200px wide box
-          endXY = { x: entryXY.x + fixedWidth, y: entryXY.y };
-          console.log('⚠️ endXY was null, using fixed width fallback:', endXY);
-        }
-
-        console.log('Coordinates:', { entryXY, stopXY, targetXY, endXY });
-
-        if (entryXY && stopXY && targetXY && endXY) {
           const leftX = entryXY.x;
           const rightX = endXY.x;
           const entryY = entryXY.y;
@@ -465,17 +703,22 @@ class DrawingEngine {
           this.ctx.fillStyle = "#fff";
           this.ctx.font = "10px Inter";
           this.ctx.textAlign = "left";
-          const rr = (Math.abs(targetP.price - entryP.price) / Math.abs(entryP.price - stopP.price)).toFixed(2);
-          this.ctx.fillText(`R:R ${rr}`, leftX + 5, entryY - 5);
+          const rrValue = (Math.abs(targetP.price - entryP.price) / Math.abs(entryP.price - stopP.price)).toFixed(2);
+          this.ctx.fillText(`R:R ${rrValue}`, leftX + 5, entryY - 5);
         }
       }
 
       // Draw selection handles
-      if (d.id === this.state.selectedId) {
+      if (this.isSelected(d.id)) {
         this.ctx.fillStyle = "#fff";
         this.ctx.strokeStyle = "#00a3ff";
         this.ctx.lineWidth = 1;
-        for (const pt of pts) {
+        let handlePts = pts;
+        if (d.type === "riskreward") {
+          const rr = this.getRiskRewardXY(d);
+          if (rr) handlePts = [rr.entryXY, rr.stopXY, rr.targetXY, rr.endXY];
+        }
+        for (const pt of handlePts) {
           this.ctx.beginPath();
           this.ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
           this.ctx.fill();
@@ -496,6 +739,23 @@ class DrawingEngine {
         this.ctx.stroke();
         this.ctx.setLineDash([]);
       }
+    }
+
+    // Draw Lasso Selection Box
+    if (this.state.lasso) {
+      const { start, current } = this.state.lasso;
+      const x = Math.min(start.x, current.x);
+      const y = Math.min(start.y, current.y);
+      const w = Math.abs(start.x - current.x);
+      const h = Math.abs(start.y - current.y);
+      this.ctx.save();
+      this.ctx.strokeStyle = "rgba(56, 189, 248, 0.9)";
+      this.ctx.fillStyle = "rgba(56, 189, 248, 0.12)";
+      this.ctx.lineWidth = 1;
+      this.ctx.setLineDash([6, 6]);
+      this.ctx.strokeRect(x, y, w, h);
+      this.ctx.fillRect(x, y, w, h);
+      this.ctx.restore();
     }
   }
 }

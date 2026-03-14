@@ -17,6 +17,7 @@ class WeeklyPro {
     this.showPerfectTrades = false; // Toggle between real and perfect trades
     this.weekTrades = [];
     this.weekStats = {};
+    this.starredTools = JSON.parse(localStorage.getItem("starredTools") || '["trendline", "long", "short"]');
 
     this.init();
   }
@@ -33,6 +34,7 @@ class WeeklyPro {
   async init() {
     this.initChart();
     this.setupEventListeners();
+    this.setupFavorites();
     await this.loadData();
     await this.loadWeekTrades();
     await this.loadWeekStats();
@@ -77,12 +79,17 @@ class WeeklyPro {
 
     // Drawing Engine
     this.engine = new DrawingEngine(this.chart, this.series, this.container, this.canvas);
+    this.engine.setSessionBreaks(true, { color: "rgba(56, 189, 248, 0.45)", dash: [3, 6], width: 1 });
   }
 
   setupEventListeners() {
-    // Toolbar - simplified (no favorites functionality)
+    // Toolbar
     document.querySelectorAll(".tool-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", (e) => {
+        if (e.target.closest(".tool-star")) {
+          this.toggleFavorite(btn.dataset.tool);
+          return;
+        }
         document.querySelectorAll(".tool-btn").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         this.engine.setTool(btn.dataset.tool);
@@ -98,7 +105,7 @@ class WeeklyPro {
     if (toggleBtn) {
       toggleBtn.addEventListener("click", () => {
         this.showPerfectTrades = !this.showPerfectTrades;
-        toggleBtn.textContent = this.showPerfectTrades ? "Show Real" : "Show Perfect";
+        toggleBtn.textContent = this.showPerfectTrades ? "Show Manual" : "Show Perfect";
         this.loadWeekTrades();
         this.loadWeekStats();
       });
@@ -279,43 +286,51 @@ class WeeklyPro {
   }
 
   displayTradesOnChart(trades) {
-    // Clear existing trade markers
-    if (this.tradeMarkers) {
-      this.tradeMarkers.forEach(marker => this.series.removeMarker(marker));
+    // Clear existing trade drawings
+    if (this.tradeDrawingIds && this.tradeDrawingIds.length) {
+      const remove = new Set(this.tradeDrawingIds);
+      this.engine.state.drawings = this.engine.state.drawings.filter(d => !remove.has(d.id));
+      this.tradeDrawingIds = [];
     }
-    this.tradeMarkers = [];
 
-    // Add markers for each trade
+    const toEpochSeconds = (value) => {
+      if (!value) return null;
+      if (typeof value === "number") return value;
+      const ms = Date.parse(value);
+      return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+    };
+
+    const defaultEndSeconds = 3600 * 4;
+
+    this.tradeDrawingIds = [];
     trades.forEach(trade => {
       if (!trade.ts_open) return;
+      const entryTime = toEpochSeconds(trade.ts_open);
+      const exitTime = toEpochSeconds(trade.ts_close);
+      const entryPrice = parseFloat(trade.entry_price);
+      const sl = parseFloat(trade.sl_price || trade.sl);
+      const tp = parseFloat(trade.tp_price || trade.tp);
 
-      // Entry marker
-      const entryTime = new Date(trade.ts_open).getTime() / 1000;
-      const entryMarker = {
-        time: entryTime,
-        position: trade.direction === 'LONG' ? 'belowBar' : 'aboveBar',
-        color: trade.direction === 'LONG' ? '#22c55e' : '#ef4444',
-        shape: trade.direction === 'LONG' ? 'arrowUp' : 'arrowDown',
-        text: `${trade.symbol} ${trade.direction}`,
-      };
-      this.tradeMarkers.push(entryMarker);
+      if (!entryTime || !entryPrice || !sl || !tp) return;
 
-      // Exit marker (if closed)
-      if (trade.ts_close && trade.outcome !== 'OPEN') {
-        const exitTime = new Date(trade.ts_close).getTime() / 1000;
-        const isWin = trade.pnl_usd > 0;
-        const exitMarker = {
-          time: exitTime,
-          position: trade.direction === 'LONG' ? 'aboveBar' : 'belowBar',
-          color: isWin ? '#22c55e' : '#ef4444',
-          shape: 'circle',
-          text: `${trade.outcome} ${isWin ? '+' : ''}${trade.pnl_usd?.toFixed(2) || 0}`,
-        };
-        this.tradeMarkers.push(exitMarker);
-      }
+      const side = String(trade.direction || "").toLowerCase() === "short" ? "short" : "long";
+      const endTime = exitTime || (entryTime + defaultEndSeconds);
+
+      const drawing = this.engine.addDrawing({
+        type: "riskreward",
+        points: [
+          { time: entryTime, price: entryPrice },
+          { time: entryTime, price: sl },
+          { time: entryTime, price: tp },
+          { time: endTime, price: entryPrice },
+        ],
+        side,
+        source: "trade",
+        select: false,
+      });
+
+      if (drawing?.id) this.tradeDrawingIds.push(drawing.id);
     });
-
-    this.series.setMarkers(this.tradeMarkers);
   }
 
   renderWeekTrades(trades) {
@@ -326,7 +341,7 @@ class WeeklyPro {
 
     // Update header
     if (header) {
-      const label = this.showPerfectTrades ? "Perfect Trades" : "Real Trades";
+      const label = this.showPerfectTrades ? "Perfect Trades" : "Manual Trades";
       header.textContent = `${label} (${trades.length})`;
     }
 
@@ -334,7 +349,7 @@ class WeeklyPro {
       container.innerHTML = `
         <div class="empty-state">
           <div class="empty-icon">📭</div>
-          <div>No ${this.showPerfectTrades ? 'perfect' : 'real'} trades yet</div>
+          <div>No ${this.showPerfectTrades ? 'perfect' : 'manual'} trades yet</div>
         </div>
       `;
       return;
@@ -488,20 +503,6 @@ class WeeklyPro {
     document.querySelectorAll("#mainToolbar .tool-star").forEach(star => {
       const tool = star.parentElement.dataset.tool;
       star.classList.toggle("active", this.starredTools.includes(tool));
-    });
-
-    document.getElementById("prevWeek").addEventListener("click", () => {
-      this.currentWeekStart.setDate(this.currentWeekStart.getDate() - 7);
-      this.loadData();
-      this.loadWeekTrades();
-      this.loadWeekStats();
-    });
-
-    document.getElementById("nextWeek").addEventListener("click", () => {
-      this.currentWeekStart.setDate(this.currentWeekStart.getDate() + 7);
-      this.loadData();
-      this.loadWeekTrades();
-      this.loadWeekStats();
     });
   }
 

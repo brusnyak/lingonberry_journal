@@ -72,6 +72,7 @@ class TradeEntryPro {
     });
 
     this.engine = new DrawingEngine(this.chart, this.series, this.container, this.canvas);
+    this.engine.setSessionBreaks(true, { color: "rgba(56, 189, 248, 0.45)", dash: [3, 6], width: 1 });
   }
 
   setupEventListeners() {
