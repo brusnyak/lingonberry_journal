@@ -196,9 +196,9 @@ class CTraderClient:
         return self._protobuf.get_live_quote(symbol=symbol, account_id=account_id) if self._protobuf else None
 
     def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict]:
-        # Trading/positions endpoints can be added here later via additional ProtoOA messages.
-        _ = account_id
-        return []
+        if not self.connected and not self.connect():
+            return []
+        return self._protobuf.get_open_positions(account_id=account_id) if self._protobuf else []
 
     def get_closed_positions(
         self,
@@ -207,9 +207,10 @@ class CTraderClient:
         to_ts: Optional[datetime] = None,
         limit: int = 100,
     ) -> List[Dict]:
-        # Historical deal import is not wired yet in this adapter.
-        _ = (account_id, from_ts, to_ts, limit)
-        return []
+        if not self.connected and not self.connect():
+            return []
+        # DealList has its own limit/paging in cTrader, using its basic implementation here.
+        return self._protobuf.get_closed_deals(from_ts=from_ts, to_ts=to_ts, account_id=account_id) if self._protobuf else []
 
     def get_historical_trades(
         self,

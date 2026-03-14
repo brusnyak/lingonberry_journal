@@ -3,7 +3,7 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help venv install env-check run-web run-bot run-all stop-all status test sltp-check export-ml import-csv deploy-prep ctrader-sync ctrader-test ctrader-fetch ctrader-viz git-init deploy setup-mini-app bot webapp clean daily-reminder setup-daily-reminder
+.PHONY: help venv install env-check run-web run-bot run-all stop-all status test sltp-check export-ml import-csv deploy-prep ctrader-sync ctrader-test ctrader-fetch ctrader-viz git-init deploy setup-mini-app bot webapp clean daily-reminder setup-daily-reminder ctrader-refresh setup-ctrader-cron
 
 help:
 	@echo "Targets:"
@@ -25,6 +25,8 @@ help:
 	@echo "  make ctrader-sync   - sync trades from cTrader to database"
 	@echo "  make daily-reminder - test daily reminder (send now)"
 	@echo "  make setup-daily-reminder - install cron job for daily reminders"
+	@echo "  make ctrader-refresh - refresh cTrader access token now"
+	@echo "  make setup-ctrader-cron - install cron job for monthly cTrader token refresh"
 	@echo "  make git-init       - initialize git repository"
 	@echo "  make deploy         - deploy to GitHub"
 	@echo "  make setup-mini-app - setup Telegram Mini App"
@@ -108,3 +110,9 @@ deploy:
 
 setup-mini-app:
 	@bash scripts/setup_mini_app.sh
+
+ctrader-refresh: env-check
+	$(PY) scripts/automate_ctrader_token.py
+
+setup-ctrader-cron: env-check
+	@bash scripts/setup_ctrader_cron.sh

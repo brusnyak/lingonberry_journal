@@ -27,11 +27,15 @@ try:
     from ctrader_open_api.messages.OpenApiMessages_pb2 import (
         ProtoOAAccountAuthReq,
         ProtoOAApplicationAuthReq,
+        ProtoOADealListReq,
+        ProtoOADealListRes,
         ProtoOAErrorRes,
         ProtoOAGetAccountListByAccessTokenReq,
         ProtoOAGetAccountListByAccessTokenRes,
         ProtoOAGetTrendbarsReq,
         ProtoOAGetTrendbarsRes,
+        ProtoOAReconcileReq,
+        ProtoOAReconcileRes,
         ProtoOASpotEvent,
         ProtoOASymbolsListReq,
         ProtoOASubscribeSpotsReq,
@@ -48,11 +52,15 @@ except Exception as exc_openapipy:
         from OpenApiPy.messages.OpenApiMessages_pb2 import (
             ProtoOAAccountAuthReq,
             ProtoOAApplicationAuthReq,
+            ProtoOADealListReq,
+            ProtoOADealListRes,
             ProtoOAErrorRes,
             ProtoOAGetAccountListByAccessTokenReq,
             ProtoOAGetAccountListByAccessTokenRes,
             ProtoOAGetTrendbarsReq,
             ProtoOAGetTrendbarsRes,
+            ProtoOAReconcileReq,
+            ProtoOAReconcileRes,
             ProtoOASpotEvent,
             ProtoOASymbolsListReq,
             ProtoOASubscribeSpotsReq,
@@ -69,11 +77,15 @@ except Exception as exc_openapipy:
             from OpenAPI.messages.OpenApiMessages_pb2 import (
                 ProtoOAAccountAuthReq,
                 ProtoOAApplicationAuthReq,
+                ProtoOADealListReq,
+                ProtoOADealListRes,
                 ProtoOAErrorRes,
                 ProtoOAGetAccountListByAccessTokenReq,
                 ProtoOAGetAccountListByAccessTokenRes,
                 ProtoOAGetTrendbarsReq,
                 ProtoOAGetTrendbarsRes,
+                ProtoOAReconcileReq,
+                ProtoOAReconcileRes,
                 ProtoOASpotEvent,
                 ProtoOASymbolsListReq,
                 ProtoOASubscribeSpotsReq,
@@ -454,3 +466,72 @@ class CTraderProtobufClient:
                 self._send_request(unsub, timeout_seconds=3)
             except Exception:
                 pass
+    def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict]:
+        if not self.connected and not self.connect():
+            return []
+
+        req = ProtoOAReconcileReq()
+        req.ctidTraderAccountId = int(account_id or self.account_id)
+
+        try:
+            res = self._send_request(req)
+        except Exception as exc:
+            print(f"❌ Failed to fetch open positions: {exc}")
+            return []
+
+        positions: List[Dict] = []
+        for pos in getattr(res, "position", []):
+            symbol_id = int(getattr(pos, "symbolId", 0))
+            positions.append({
+                "positionId": int(getattr(pos, "positionId", 0)),
+                "symbolId": symbol_id,
+                "symbolName": self.symbols_by_id.get(symbol_id, {}).get("name", str(symbol_id)),
+                "tradeSide": str(getattr(pos, "tradeSide", "")).upper(),
+                "volume": float(getattr(pos, "volume", 0)) / 100.0, # cTrader volume is in cents
+                "entryPrice": self._scale_price(getattr(pos, "entryPrice", 0), symbol_id),
+                "stopLoss": self._scale_price(getattr(pos, "stopLoss", None), symbol_id),
+                "takeProfit": self._scale_price(getattr(pos, "takeProfit", None), symbol_id),
+                "openTimestamp": int(getattr(pos, "tradeData", {}).get("openTimestamp", 0)),
+            })
+        return positions
+
+    def get_closed_deals(
+        self,
+        from_ts: Optional[datetime] = None,
+        to_ts: Optional[datetime] = None,
+        account_id: Optional[str] = None
+    ) -> List[Dict]:
+        if not self.connected and not self.connect():
+            return []
+
+        req = ProtoOADealListReq()
+        req.ctidTraderAccountId = int(account_id or self.account_id)
+        
+        if from_ts:
+            req.fromTimestamp = int(from_ts.timestamp() * 1000)
+        if to_ts:
+            req.toTimestamp = int(to_ts.timestamp() * 1000)
+
+        try:
+            res = self._send_request(req)
+        except Exception as exc:
+            print(f"❌ Failed to fetch deal list: {exc}")
+            return []
+
+        deals: List[Dict] = []
+        for deal in getattr(res, "deal", []):
+            symbol_id = int(getattr(deal, "symbolId", 0))
+            deals.append({
+                "dealId": int(getattr(deal, "dealId", 0)),
+                "positionId": int(getattr(deal, "positionId", 0)),
+                "symbolId": symbol_id,
+                "symbolName": self.symbols_by_id.get(symbol_id, {}).get("name", str(symbol_id)),
+                "volume": float(getattr(deal, "volume", 0)) / 100.0,
+                "executionPrice": self._scale_price(getattr(deal, "executionPrice", 0), symbol_id),
+                "tradeSide": str(getattr(deal, "tradeSide", "")).upper(),
+                "executionTimestamp": int(getattr(deal, "executionTimestamp", 0)),
+                "grossProfit": float(getattr(deal, "grossProfit", 0)) / 100.0,
+                "commission": float(getattr(deal, "commission", 0)) / 100.0,
+                "swap": float(getattr(deal, "swap", 0)) / 100.0,
+            })
+        return deals
