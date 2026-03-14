@@ -148,8 +148,19 @@ class DrawingEngine {
     return bestPoint;
   }
 
-  pointToXY(p) {
-    const x = this.chart.timeScale().timeToCoordinate(p.time);
+  timeToX(time) {
+    const x = this.chart.timeScale().timeToCoordinate(time);
+    if (x != null) return x;
+    const visibleRange = this.chart.timeScale().getVisibleRange();
+    if (!visibleRange) return null;
+    if (time < visibleRange.from) return 0;
+    if (time > visibleRange.to) return this.canvas.width;
+    return null;
+  }
+
+  pointToXY(p, opts = {}) {
+    const { clampTime = false } = opts;
+    const x = clampTime ? this.timeToX(p.time) : this.chart.timeScale().timeToCoordinate(p.time);
     const y = this.series.priceToCoordinate(p.price);
     if (x == null || y == null) return null;
     return { x, y };
@@ -176,10 +187,10 @@ class DrawingEngine {
     const targetP = d.points[2];
     const endP = d.points[3];
 
-    const entryXY = this.pointToXY(entryP);
-    const stopXY = this.pointToXY(stopP);
-    const targetXY = this.pointToXY(targetP);
-    let endXY = this.pointToXY(endP);
+    const entryXY = this.pointToXY(entryP, { clampTime: true });
+    const stopXY = this.pointToXY(stopP, { clampTime: true });
+    const targetXY = this.pointToXY(targetP, { clampTime: true });
+    let endXY = this.pointToXY(endP, { clampTime: true });
 
     if (!entryXY || !stopXY || !targetXY) return null;
 
@@ -612,10 +623,10 @@ class DrawingEngine {
     // Draw Drawings
     for (const d of this.state.drawings) {
       const pts = d.points.map(p => this.pointToXY(p)).filter(x => x);
-      if (pts.length === 0) {
-        console.warn('Drawing has no valid points:', d.type);
-        continue;
-      }
+    if (pts.length === 0 && d.type !== "riskreward") {
+      console.warn('Drawing has no valid points:', d.type);
+      continue;
+    }
 
       this.ctx.strokeStyle = d.id === this.state.selectedId ? "#fff" : (d.style.stroke || "#00a3ff");
       this.ctx.lineWidth = 2;

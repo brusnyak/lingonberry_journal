@@ -79,6 +79,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/lingonberry_journal
 Environment="PATH=/home/ubuntu/lingonberry_journal/.venv/bin"
+EnvironmentFile=/home/ubuntu/lingonberry_journal/.env
 ExecStart=/home/ubuntu/lingonberry_journal/.venv/bin/python3 bot/journal_daemon.py
 Restart=always
 RestartSec=10
@@ -98,12 +99,40 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/lingonberry_journal
 Environment="PATH=/home/ubuntu/lingonberry_journal/.venv/bin"
+EnvironmentFile=/home/ubuntu/lingonberry_journal/.env
 ExecStart=/home/ubuntu/lingonberry_journal/.venv/bin/python3 webapp/app.py
 Restart=always
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
+EOF
+
+# cTrader token refresh (monthly)
+sudo tee /etc/systemd/system/journal-ctrader-refresh.service > /dev/null << 'EOF'
+[Unit]
+Description=Refresh cTrader Access Token
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/lingonberry_journal
+Environment="PATH=/home/ubuntu/lingonberry_journal/.venv/bin"
+EnvironmentFile=/home/ubuntu/lingonberry_journal/.env
+ExecStart=/home/ubuntu/lingonberry_journal/.venv/bin/python3 scripts/refresh_ctrader_token.py
+EOF
+
+sudo tee /etc/systemd/system/journal-ctrader-refresh.timer > /dev/null << 'EOF'
+[Unit]
+Description=Monthly cTrader token refresh
+
+[Timer]
+OnCalendar=monthly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
 EOF
 
 # Nginx config
@@ -141,9 +170,10 @@ sudo netfilter-persistent save 2>/dev/null || true
 
 echo "🔄 Reloading services..."
 sudo systemctl daemon-reload
-sudo systemctl enable journal-bot journal-webapp nginx
+sudo systemctl enable journal-bot journal-webapp journal-ctrader-refresh.timer nginx
 sudo nginx -t && sudo systemctl restart nginx
 sudo systemctl restart journal-bot journal-webapp
+sudo systemctl restart journal-ctrader-refresh.timer
 
 echo ""
 echo "✅ Deployment complete!"

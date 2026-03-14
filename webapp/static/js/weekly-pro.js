@@ -40,6 +40,14 @@ class WeeklyPro {
     await this.loadWeekStats();
   }
 
+  getActiveAccountId() {
+    const idFromManager = window.accountManager?.getCurrentAccountId?.();
+    if (idFromManager) return idFromManager;
+    const stored = localStorage.getItem("currentAccountId");
+    if (stored && stored !== "null" && stored !== "undefined") return parseInt(stored, 10);
+    return 1;
+  }
+
   initChart() {
     this.chart = LightweightCharts.createChart(this.container, {
       layout: {
@@ -99,6 +107,13 @@ class WeeklyPro {
     // Filters
     this.symbolSelect.addEventListener("change", () => this.loadData());
     this.timeframeSelect.addEventListener("change", () => this.loadData());
+
+    // Account change reload
+    document.addEventListener("accountChanged", () => {
+      this.loadData();
+      this.loadWeekTrades();
+      this.loadWeekStats();
+    });
 
     // Toggle between real and perfect trades
     const toggleBtn = document.getElementById("toggleTradeSource");
@@ -257,7 +272,7 @@ class WeeklyPro {
   async loadWeekTrades() {
     try {
       const weekStart = this.currentWeekStart.toISOString().split('T')[0];
-      const accId = localStorage.getItem("selectedAccountId") || 1;
+      const accId = this.getActiveAccountId();
       const isPerfect = this.showPerfectTrades ? 'true' : 'false';
 
       const res = await fetch(`/api/trades/week?account_id=${accId}&week_start=${weekStart}&is_perfect=${isPerfect}`);
@@ -273,7 +288,7 @@ class WeeklyPro {
   async loadWeekStats() {
     try {
       const weekStart = this.currentWeekStart.toISOString().split('T')[0];
-      const accId = localStorage.getItem("selectedAccountId") || 1;
+      const accId = this.getActiveAccountId();
       const isPerfect = this.showPerfectTrades ? 'true' : 'false';
 
       const res = await fetch(`/api/trades/week/stats?account_id=${accId}&week_start=${weekStart}&is_perfect=${isPerfect}`);
@@ -303,7 +318,9 @@ class WeeklyPro {
     const defaultEndSeconds = 3600 * 4;
 
     this.tradeDrawingIds = [];
+    const activeSymbol = this.symbolSelect?.value;
     trades.forEach(trade => {
+      if (activeSymbol && trade.symbol && trade.symbol !== activeSymbol) return;
       if (!trade.ts_open) return;
       const entryTime = toEpochSeconds(trade.ts_open);
       const exitTime = toEpochSeconds(trade.ts_close);
@@ -423,9 +440,19 @@ class WeeklyPro {
     `;
   }
 
-  highlightTrade(tradeId) {
+  async highlightTrade(tradeId) {
     const trade = this.weekTrades.find(t => t.id === tradeId);
     if (!trade || !trade.ts_open) return;
+
+    // Switch chart symbol to trade symbol if needed
+    if (this.symbolSelect && trade.symbol && this.symbolSelect.value !== trade.symbol) {
+      const optionExists = Array.from(this.symbolSelect.options).some(o => o.value === trade.symbol);
+      if (optionExists) {
+        this.symbolSelect.value = trade.symbol;
+        await this.loadData();
+        this.displayTradesOnChart(this.weekTrades);
+      }
+    }
 
     // Scroll chart to trade time
     const entryTime = new Date(trade.ts_open).getTime() / 1000;
@@ -542,6 +569,10 @@ class WeeklyPro {
         this.series.setData(data);
         this.engine.setCandles(data);
         this.chart.timeScale().fitContent();
+        this.engine.redraw();
+        if (this.weekTrades && this.weekTrades.length) {
+          this.displayTradesOnChart(this.weekTrades);
+        }
 
         if (window.notify && loadingToast) {
           window.notify.dismiss(loadingToast);
@@ -550,6 +581,7 @@ class WeeklyPro {
       } else {
         this.series.setData([]);
         this.engine.setCandles([]);
+        this.engine.redraw();
 
         if (window.notify && loadingToast) {
           window.notify.dismiss(loadingToast);
