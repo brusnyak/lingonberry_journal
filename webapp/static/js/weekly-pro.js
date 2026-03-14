@@ -282,6 +282,8 @@ class WeeklyPro {
       this.displayTradesOnChart(this.weekTrades);
     } catch (err) {
       console.error("Failed to load week trades:", err);
+      // Clear stale markers on error
+      try { this.series.setMarkers([]); } catch (_) {}
     }
   }
 
@@ -301,54 +303,59 @@ class WeeklyPro {
   }
 
   displayTradesOnChart(trades) {
-    // Clear existing trade drawings
-    if (this.tradeDrawingIds && this.tradeDrawingIds.length) {
-      const remove = new Set(this.tradeDrawingIds);
-      this.engine.state.drawings = this.engine.state.drawings.filter(d => !remove.has(d.id));
-      this.tradeDrawingIds = [];
-    }
-
-    const toEpochSeconds = (value) => {
+    const toEpoch = (value) => {
       if (!value) return null;
-      if (typeof value === "number") return value;
+      if (typeof value === 'number') return value;
       const ms = Date.parse(value);
       return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
     };
 
-    const defaultEndSeconds = 3600 * 4;
-
-    this.tradeDrawingIds = [];
     const activeSymbol = this.symbolSelect?.value;
+
+    // ── Pass trade zone boxes to the DrawingEngine for canvas rendering ─────
+    // These are re-rendered each frame with fresh coordinates, so they always
+    // stay correctly aligned on pan/zoom.
+    this.engine.setTradePanes(trades, activeSymbol);
+
+    // ── Minimal native markers: small dots at entry & exit ───────────────────
+    // No verbose text — the canvas boxes carry all the visual information.
+    const markers = [];
     trades.forEach(trade => {
       if (activeSymbol && trade.symbol && trade.symbol !== activeSymbol) return;
-      if (!trade.ts_open) return;
-      const entryTime = toEpochSeconds(trade.ts_open);
-      const exitTime = toEpochSeconds(trade.ts_close);
-      const entryPrice = parseFloat(trade.entry_price);
-      const sl = parseFloat(trade.sl_price || trade.sl);
-      const tp = parseFloat(trade.tp_price || trade.tp);
+      const entryTime = toEpoch(trade.ts_open);
+      if (!entryTime) return;
 
-      if (!entryTime || !entryPrice || !sl || !tp) return;
+      const isLong = String(trade.direction || '').toUpperCase() === 'LONG';
+      const pnl    = trade.pnl_usd ?? 0;
 
-      const side = String(trade.direction || "").toLowerCase() === "short" ? "short" : "long";
-      const endTime = exitTime || (entryTime + defaultEndSeconds);
-
-      const drawing = this.engine.addDrawing({
-        type: "riskreward",
-        points: [
-          { time: entryTime, price: entryPrice },
-          { time: entryTime, price: sl },
-          { time: entryTime, price: tp },
-          { time: endTime, price: entryPrice },
-        ],
-        side,
-        source: "trade",
-        select: false,
+      // Entry dot
+      markers.push({
+        time:     entryTime,
+        position: isLong ? 'belowBar' : 'aboveBar',
+        color:    isLong ? '#22c55e' : '#ef4444',
+        shape:    isLong ? 'arrowUp' : 'arrowDown',
+        text:     '',
+        size:     0.8,
       });
 
-      if (drawing?.id) this.tradeDrawingIds.push(drawing.id);
+      // Exit dot (if closed)
+      const exitTime = toEpoch(trade.ts_close);
+      if (exitTime) {
+        markers.push({
+          time:     exitTime,
+          position: isLong ? 'aboveBar' : 'belowBar',
+          color:    pnl >= 0 ? '#22c55e' : '#f87171',
+          shape:    'circle',
+          text:     '',
+          size:     0.6,
+        });
+      }
     });
+
+    markers.sort((a, b) => a.time - b.time);
+    this.series.setMarkers(markers);
   }
+
 
   renderWeekTrades(trades) {
     const container = document.getElementById("perfectTradesList");
@@ -372,13 +379,15 @@ class WeeklyPro {
       return;
     }
 
+    const activeId = this.activeTrade;
     container.innerHTML = trades.map(trade => {
       const pnl = trade.pnl_usd || 0;
       const isWin = pnl > 0;
       const outcome = trade.outcome || 'OPEN';
+      const isActive = trade.id === activeId;
 
       return `
-        <div class="trade-item" style="cursor: pointer;" onclick="weeklyPro.highlightTrade(${trade.id})">
+        <div class="trade-item ${isActive ? 'trade-item--active' : ''}" style="cursor: pointer;" data-trade-id="${trade.id}" onclick="weeklyPro.highlightTrade(${trade.id})">
           <div class="trade-header">
             <span>${trade.direction === 'LONG' ? '🟢' : '🔴'} ${trade.symbol}</span>
             <span class="badge ${isWin ? 'success' : outcome === 'OPEN' ? 'warning' : 'danger'}">
@@ -440,28 +449,53 @@ class WeeklyPro {
     `;
   }
 
+  /** Highlight a trade in the sidebar and zoom chart to its entry time */
   async highlightTrade(tradeId) {
     const trade = this.weekTrades.find(t => t.id === tradeId);
     if (!trade || !trade.ts_open) return;
 
-    // Switch chart symbol to trade symbol if needed
+    // Highlight the active trade card in the sidebar
+    this.setActiveTrade(tradeId);
+
+    // Switch chart symbol if needed and wait for data to load
     if (this.symbolSelect && trade.symbol && this.symbolSelect.value !== trade.symbol) {
       const optionExists = Array.from(this.symbolSelect.options).some(o => o.value === trade.symbol);
       if (optionExists) {
         this.symbolSelect.value = trade.symbol;
+        // loadData will also call displayTradesOnChart after candles are set
         await this.loadData();
-        this.displayTradesOnChart(this.weekTrades);
       }
+    } else {
+      // Symbol already correct – just re-render drawings to make sure they're visible
+      this.displayTradesOnChart(this.weekTrades);
     }
 
-    // Scroll chart to trade time
-    const entryTime = new Date(trade.ts_open).getTime() / 1000;
-    this.chart.timeScale().scrollToPosition(5, true);
+    // Zoom chart to ±2h window around the trade entry
+    const entryEpoch = new Date(trade.ts_open).getTime() / 1000;
+    const closeEpoch = trade.ts_close
+      ? new Date(trade.ts_close).getTime() / 1000
+      : entryEpoch + 3600 * 4;
+    const padding = Math.max((closeEpoch - entryEpoch) * 0.5, 3600);
 
-    // Flash notification
+    this.chart.timeScale().setVisibleRange({
+      from: entryEpoch - padding,
+      to:   closeEpoch + padding,
+    });
+
+    // Info toast
     if (window.notify) {
-      window.notify.info(`${trade.symbol} ${trade.direction} @ ${trade.entry_price?.toFixed(5)}`);
+      const dir = trade.direction === 'SHORT' ? '🔴 SHORT' : '🟢 LONG';
+      window.notify.info(`${dir} ${trade.symbol} @ ${trade.entry_price?.toFixed(5)}`);
     }
+  }
+
+  /** Visually mark selected trade card in the sidebar */
+  setActiveTrade(tradeId) {
+    this.activeTrade = tradeId;
+    document.querySelectorAll('#perfectTradesList .trade-item').forEach(el => {
+      const id = parseInt(el.dataset.tradeId, 10);
+      el.classList.toggle('trade-item--active', id === tradeId);
+    });
   }
   async saveWeeklyReflection() {
     const weekStart = this.currentWeekStart.toISOString().split('T')[0];
@@ -580,6 +614,12 @@ class WeeklyPro {
         }
       } else {
         this.series.setData([]);
+        this.series.setMarkers([]);
+        // Remove SL/TP price lines
+        if (this.tradePriceLines) {
+          this.tradePriceLines.forEach(pl => { try { this.series.removePriceLine(pl); } catch (_) {} });
+          this.tradePriceLines = [];
+        }
         this.engine.setCandles([]);
         this.engine.redraw();
 

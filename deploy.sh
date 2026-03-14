@@ -10,6 +10,7 @@ echo "=========================================================="
 # Configuration
 ORACLE_IP="${ORACLE_VM_IP:-84.8.249.139}"
 ORACLE_USER="ubuntu"
+SSH_KEY_PATH="${SSH_KEY_PATH:-./ssh-key-2026-02-21.key}"
 REPO_URL="${GITHUB_JOURNAL_REPO:-https://github.com/brusnyak/lingonberry_journal.git}"
 APP_DIR="lingonberry_journal"
 
@@ -18,11 +19,12 @@ echo "📋 Configuration:"
 echo "   Oracle IP: $ORACLE_IP"
 echo "   User: $ORACLE_USER"
 echo "   Repository: $REPO_URL"
+echo "   SSH Key: $SSH_KEY_PATH"
 echo ""
 
 # Check if we can connect
 echo "🔌 Testing SSH connection..."
-if ! ssh -o ConnectTimeout=5 -o BatchMode=yes $ORACLE_USER@$ORACLE_IP exit 2>/dev/null; then
+if ! ssh -i "$SSH_KEY_PATH" -o ConnectTimeout=5 -o BatchMode=yes $ORACLE_USER@$ORACLE_IP exit 2>/dev/null; then
     echo "❌ Cannot connect to $ORACLE_IP"
     echo "   Make sure:"
     echo "   1. SSH key is added: ssh-copy-id $ORACLE_USER@$ORACLE_IP"
@@ -36,7 +38,7 @@ echo "✅ SSH connection successful"
 echo ""
 echo "📦 Deploying application..."
 
-ssh $ORACLE_USER@$ORACLE_IP << 'ENDSSH'
+ssh -tt -i "$SSH_KEY_PATH" $ORACLE_USER@$ORACLE_IP << 'ENDSSH'
 set -e
 
 echo "📥 Updating system packages..."

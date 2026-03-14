@@ -122,6 +122,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         stats = journal_db.get_stats(account_id=account["id"])
         balance = f"{account['currency']} {stats['balance']:.2f}"
 
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=WEBAPP_URL.rstrip('/') + '/mini'))],
+    ])
     await update.message.reply_text(
         "👋 Welcome back!\n\n"
         f"💼 {account['name'] if account else 'No account'} | Balance: {balance}\n\n"
@@ -132,7 +135,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/report — Open Dashboard\n"
         "/mini — Setup Mini App Button\n"
         "/import — Paste trade logs\n"
-        "/cancel — Cancel current journal flow"
+        "/cancel — Cancel current journal flow",
+        reply_markup=keyboard,
     )
 
 
@@ -543,6 +547,24 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(daily_reminder_callback, pattern="^daily_reminder:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     application.add_error_handler(error_handler)
+
+    async def _post_init(app) -> None:
+        """Register command hints with Telegram after bot starts."""
+        from telegram import BotCommand
+        await app.bot.set_my_commands([
+            BotCommand("start",   "Welcome message & dashboard"),
+            BotCommand("journal", "Log a new trade"),
+            BotCommand("stats",   "View performance statistics"),
+            BotCommand("open",    "See open positions"),
+            BotCommand("close",   "Close an open trade"),
+            BotCommand("report",  "Open the trading dashboard"),
+            BotCommand("mini",    "Add Mini App button to keyboard"),
+            BotCommand("weekly",  "Weekly performance review"),
+            BotCommand("cancel",  "Cancel current journal flow"),
+        ])
+        logger.info("Bot commands registered with Telegram.")
+
+    application.post_init = _post_init
 
     logger.info("Starting Trading Journal Bot...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

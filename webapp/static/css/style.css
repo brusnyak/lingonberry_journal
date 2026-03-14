@@ -1530,6 +1530,14 @@ body {
   box-shadow: 0 0 0 2px rgba(255, 140, 0, 0.2);
 }
 
+/* Active trade card in the weekly sidebar (highlighted via highlightTrade) */
+.trade-item--active {
+  background: rgba(99, 102, 241, 0.12) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25), inset 3px 0 0 var(--accent) !important;
+}
+
+
 .trade-item-header {
   display: flex;
   justify-content: space-between;

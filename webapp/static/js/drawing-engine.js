@@ -14,6 +14,7 @@ class DrawingEngine {
 
     this.state = {
       drawings: [],
+      tradePanes: [],  // { entryTime, endTime, entry, sl, tp, side }
       currentTool: "cursor",
       selectedId: null,
       selectedIds: [],
@@ -82,7 +83,50 @@ class DrawingEngine {
     this.state.sessionBreaks.enabled = !!enabled;
     if (opts.color) this.state.sessionBreaks.color = opts.color;
     if (opts.width) this.state.sessionBreaks.width = opts.width;
-    if (opts.dash) this.state.sessionBreaks.dash = opts.dash;
+    if (opts.dash)  this.state.sessionBreaks.dash  = opts.dash;
+    this.redraw();
+  }
+
+  /**
+   * Set trade pane overlays (logged trades).
+   * These are rendered every frame inside redraw() so coordinates are always fresh.
+   */
+  setTradePanes(trades, symbolFilter) {
+    const toEpoch = (v) => {
+      if (!v) return null;
+      if (typeof v === 'number') return v;
+      const ms = Date.parse(v);
+      return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+    };
+    this.state.tradePanes = [];
+    console.log(`[setTradePanes] Processing ${trades?.length || 0} trades for ${symbolFilter || 'all symbols'}`);
+    
+    (trades || []).forEach(trade => {
+      if (symbolFilter && trade.symbol && trade.symbol !== symbolFilter) return;
+      const entryTime = toEpoch(trade.ts_open);
+      if (!entryTime) return;
+      const endTime = toEpoch(trade.ts_close) || (entryTime + 3600 * 4);
+      
+      // Use both possible field names
+      const entry = parseFloat(trade.entry !== undefined ? trade.entry : trade.entry_price);
+      const sl    = parseFloat(trade.sl !== undefined ? trade.sl : trade.sl_price);
+      const tp    = parseFloat(trade.tp !== undefined ? trade.tp : trade.tp_price);
+      
+      if (isNaN(entry) || isNaN(sl) || isNaN(tp)) {
+        return;
+      }
+      
+      this.state.tradePanes.push({
+        id: trade.id,
+        entryTime,
+        endTime,
+        entry,
+        sl,
+        tp,
+        side: String(trade.direction || '').toUpperCase() === 'LONG' ? 'long' : 'short',
+      });
+    });
+    console.log(`[setTradePanes] Active panes successfully set: ${this.state.tradePanes.length}`);
     this.redraw();
   }
 
@@ -592,6 +636,10 @@ class DrawingEngine {
   redraw() {
     if (!this.ctx) return;
 
+    // Reset draw state to ensure visibility
+    this.ctx.globalAlpha = 1.0;
+    this.ctx.globalCompositeOperation = 'source-over';
+
     const rect = this.container.getBoundingClientRect();
 
     // Clear canvas
@@ -616,11 +664,97 @@ class DrawingEngine {
       this.ctx.restore();
     }
 
-    if (this.state.drawings.length > 0) {
-      console.log('Redrawing', this.state.drawings.length, 'drawings');
+    // ── Trade Pane Overlays ──────────────────────────────────────────────────
+    if (this.state.tradePanes.length > 0) {
+      if (Math.random() < 0.05) console.log(`[redraw] Attempting to render ${this.state.tradePanes.length} trade panes...`);
+      const vr = this.chart.timeScale().getVisibleRange();
+      this.ctx.save();
+
+      for (const pane of this.state.tradePanes) {
+        // Skip if entirely outside visible time range
+        if (vr && (pane.endTime < vr.from || pane.entryTime > vr.to)) continue;
+
+        const leftX  = this.timeToX(pane.entryTime);
+        const rightX = this.timeToX(pane.endTime);
+        
+        if (leftX === null || rightX === null) continue;
+        if (Math.abs(rightX - leftX) < 0.1) continue;
+
+        const entryY = this.series.priceToCoordinate(pane.entry);
+        const slY    = this.series.priceToCoordinate(pane.sl);
+        const tpY    = this.series.priceToCoordinate(pane.tp);
+        
+        const eY = entryY;
+        const sY = slY;
+        const tY = tpY;
+
+        if (eY === null || sY === null || tY === null) continue;
+
+        const w         = rightX - leftX;
+        const isLong    = pane.side === 'long';
+        const accentClr = isLong ? '#22c55e' : '#ef4444';
+
+        // ── TP zone (green semi-transparent fill) ────────────────────────
+        this.ctx.fillStyle = 'rgba(34, 197, 94, 0.35)'; // Increased opacity
+        this.ctx.fillRect(leftX, Math.min(eY, tY), w, Math.abs(tY - eY));
+
+        // ── SL zone (red semi-transparent fill) ──────────────────────────
+        this.ctx.fillStyle = 'rgba(239, 68, 68, 0.35)'; // Increased opacity
+        this.ctx.fillRect(leftX, Math.min(eY, sY), w, Math.abs(sY - eY));
+
+        // ── Entry line ───────────────────────────────────────────────────
+        this.ctx.strokeStyle = accentClr;
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(leftX, eY);
+        this.ctx.lineTo(rightX, eY);
+        this.ctx.stroke();
+
+        // ── TP border line (top edge) ────────────────────────────────────
+        this.ctx.strokeStyle = 'rgba(34, 197, 94, 0.8)';
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([4, 3]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(leftX, tY);
+        this.ctx.lineTo(rightX, tY);
+        this.ctx.stroke();
+
+        // ── SL border line (bottom edge) ─────────────────────────────────
+        this.ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+        this.ctx.beginPath();
+        this.ctx.moveTo(leftX, sY);
+        this.ctx.lineTo(rightX, sY);
+        this.ctx.stroke();
+
+        // ── Left-edge accent bar ─────────────────────────────────────────
+        this.ctx.strokeStyle = accentClr;
+        this.ctx.lineWidth = 4;
+        this.ctx.setLineDash([]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(leftX, Math.min(sY, tY));
+        this.ctx.lineTo(leftX, Math.max(sY, tY));
+        this.ctx.stroke();
+
+        // ── Direction label ──────────────────────────────────────────────
+        this.ctx.fillStyle = accentClr;
+        this.ctx.font = 'bold 10px Inter, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.setLineDash([]);
+        this.ctx.fillText(isLong ? '▲ LONG' : '▼ SHORT', leftX + 8, eY - 6);
+      }
+
+      this.ctx.restore();
     }
 
+    // ── Diagnostic: Draw a bright red dot in the top-left to verify canvas visibility
+    this.ctx.fillStyle = "red";
+    this.ctx.beginPath();
+    this.ctx.arc(10, 10, 5, 0, Math.PI * 2);
+    this.ctx.fill();
+
     // Draw Drawings
+
     for (const d of this.state.drawings) {
       const pts = d.points.map(p => this.pointToXY(p)).filter(x => x);
     if (pts.length === 0 && d.type !== "riskreward") {
@@ -669,22 +803,32 @@ class DrawingEngine {
         this.ctx.textAlign = "center";
         this.ctx.fillText(d.label, midX, midY - 10);
       } else if (d.type === "riskreward" && d.points.length >= 2) {
-        console.log('Drawing risk/reward box:', d.side, 'Points:', d.points.length);
+        // --- Visibility pre-check: skip if trade time range is entirely off-screen ---
+        const visibleRange = this.chart.timeScale().getVisibleRange();
+        if (visibleRange) {
+          this.ensureRiskRewardPoints(d);
+          const tradeStart = d.points[0].time;
+          const tradeEnd   = d.points[3] ? d.points[3].time : tradeStart + 3600 * 4;
+          // If trade is completely to the left or right of the visible area, skip
+          if (tradeEnd < visibleRange.from || tradeStart > visibleRange.to) continue;
+        }
 
         const rr = this.getRiskRewardXY(d);
         if (rr) {
           const { entryXY, stopXY, targetXY, endXY } = rr;
           const entryP = d.points[0];
-          const stopP = d.points[1];
+          const stopP  = d.points[1];
           const targetP = d.points[2];
 
-          const leftX = entryXY.x;
+          const leftX  = entryXY.x;
           const rightX = endXY.x;
-          const entryY = entryXY.y;
-          const stopY = stopXY.y;
-          const targetY = targetXY.y;
 
-          console.log('Drawing boxes at:', { leftX, rightX, entryY, stopY, targetY });
+          // Skip zero-width or reversed boxes (both points clamped to the same edge)
+          if (Math.abs(rightX - leftX) < 1) continue;
+
+          const entryY  = entryXY.y;
+          const stopY   = stopXY.y;
+          const targetY = targetXY.y;
 
           // Stop Zone (always RED - loss zone)
           this.ctx.fillStyle = "rgba(239, 68, 68, 0.3)";
@@ -710,12 +854,37 @@ class DrawingEngine {
           this.ctx.lineTo(rightX, entryY);
           this.ctx.stroke();
 
+          // Entry direction arrow (triangle at entry line, left edge)
+          const arrowSize = 8;
+          const isLong = d.side !== "short";
+          const arrowColor = isLong ? "#22c55e" : "#ef4444";
+          this.ctx.fillStyle = arrowColor;
+          this.ctx.beginPath();
+          if (isLong) {
+            // Upward triangle
+            this.ctx.moveTo(leftX + arrowSize, entryY);
+            this.ctx.lineTo(leftX, entryY + arrowSize * 1.4);
+            this.ctx.lineTo(leftX + arrowSize * 2, entryY + arrowSize * 1.4);
+          } else {
+            // Downward triangle
+            this.ctx.moveTo(leftX + arrowSize, entryY);
+            this.ctx.lineTo(leftX, entryY - arrowSize * 1.4);
+            this.ctx.lineTo(leftX + arrowSize * 2, entryY - arrowSize * 1.4);
+          }
+          this.ctx.closePath();
+          this.ctx.fill();
+
           // Labels
           this.ctx.fillStyle = "#fff";
-          this.ctx.font = "10px Inter";
+          this.ctx.font = "bold 10px Inter";
           this.ctx.textAlign = "left";
           const rrValue = (Math.abs(targetP.price - entryP.price) / Math.abs(entryP.price - stopP.price)).toFixed(2);
-          this.ctx.fillText(`R:R ${rrValue}`, leftX + 5, entryY - 5);
+          this.ctx.fillText(`R:R ${rrValue}`, leftX + arrowSize * 2 + 6, entryY - 4);
+
+          // Direction label
+          this.ctx.fillStyle = arrowColor;
+          this.ctx.font = "bold 9px Inter";
+          this.ctx.fillText(isLong ? "LONG" : "SHORT", leftX + arrowSize * 2 + 6, entryY + 10);
         }
       }
 
