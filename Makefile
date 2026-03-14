@@ -1,4 +1,4 @@
-SHELL := /bin/zsh
+SHELL := /bin/bash
 VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
