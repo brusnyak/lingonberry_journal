@@ -31,6 +31,8 @@ def _api_base() -> str:
     base = WEBAPP_URL.rstrip("/")
     if base.endswith("/mini"):
         base = base[:-5]
+    if not base.startswith("http"):
+        base = "http://" + base
     return base
 
 JOURNAL_STEPS = [
