@@ -27,13 +27,26 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_JOURNAL") or os.getenv("TELEGRAM_JOURAL
 AUTH_ID = int(os.getenv("TELEGRAM_JOURNAL_CHAT", "0") or "0")
 
 
+def _webapp_full_url() -> str:
+    """Return the full URL to the Web App (Mini App)."""
+    url = WEBAPP_URL.strip("/")
+    if not url.startswith("http"):
+        # Assume https for production domains, http for localhost/internal IPs
+        if any(x in url for x in ["localhost", "127.0.0.1", "10.", "192."]):
+            url = "http://" + url
+        else:
+            url = "https://" + url
+    
+    if not url.endswith("/mini"):
+        url += "/mini"
+    return url
+
 def _api_base() -> str:
-    base = WEBAPP_URL.rstrip("/")
-    if base.endswith("/mini"):
-        base = base[:-5]
-    if not base.startswith("http"):
-        base = "http://" + base
-    return base
+    """Return the base URL for API calls (without /mini)."""
+    url = _webapp_full_url()
+    if url.endswith("/mini"):
+        return url[:-5]
+    return url
 
 JOURNAL_STEPS = [
     "symbol",
@@ -125,7 +138,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         balance = f"{account['currency']} {stats['balance']:.2f}"
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))],
+        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=_webapp_full_url()))],
     ])
     await update.message.reply_text(
         "👋 Welcome back!\n\n"
@@ -569,9 +582,9 @@ def main() -> None:
         # Set persistent menu button to open Web App
         try:
             await app.bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp(text="📊 Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))
+                menu_button=MenuButtonWebApp(text="📊 Dashboard", web_app=WebAppInfo(url=_webapp_full_url()))
             )
-            logger.info("Bot menu button set to Web App.")
+            logger.info(f"Bot menu button set to {_webapp_full_url()}")
         except Exception as e:
             logger.warning(f"Failed to set menu button: {e}")
             

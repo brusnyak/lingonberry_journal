@@ -631,54 +631,6 @@ def api_trades_import_raw():
         error_trace = traceback.format_exc()
         print(f"❌ Error in api_trades_import_raw: {error_trace}")
         return jsonify({"error": "Internal server error", "details": str(e)}), 500
-def api_account_update(account_id: int):
-    body = request.get_json(force=True, silent=True) or {}
-    
-    # Update account basic info
-    conn = journal_db.get_db()
-    cursor = conn.cursor()
-    
-    updates = []
-    params = []
-    
-    if "name" in body:
-        updates.append("name = ?")
-        params.append(body["name"])
-    if "currency" in body:
-        updates.append("currency = ?")
-        params.append(body["currency"])
-    if "initial_balance" in body:
-        updates.append("initial_balance = ?")
-        params.append(float(body["initial_balance"]))
-    if "firm_name" in body:
-        updates.append("firm_name = ?")
-        params.append(body["firm_name"])
-    if "broker" in body:
-        updates.append("broker = ?")
-        params.append(body["broker"])
-    if "platform" in body:
-        updates.append("platform = ?")
-        params.append(body["platform"])
-    
-    if updates:
-        params.append(account_id)
-        cursor.execute(
-            f"UPDATE accounts SET {', '.join(updates)} WHERE id = ?",
-            params
-        )
-        conn.commit()
-    
-    # Update rules if provided
-    if any(k in body for k in ["max_daily_loss_pct", "max_total_loss_pct", "profit_target_pct", "risk_per_trade_pct"]):
-        journal_db.update_account_rules(
-            account_id=account_id,
-            max_daily_loss_pct=float(body.get("max_daily_loss_pct", 5)),
-            max_total_loss_pct=float(body.get("max_total_loss_pct", 10)),
-            profit_target_pct=float(body.get("profit_target_pct", 10)),
-            risk_per_trade_pct=float(body.get("risk_per_trade_pct", 1)),
-        )
-    
-    return jsonify({"account": journal_db.get_account(account_id)})
 
 
 @app.route("/api/accounts/<int:account_id>", methods=["PUT"])
