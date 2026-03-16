@@ -13,13 +13,23 @@ if [ ! -f ".env" ]; then
     exit 1
 fi
 
+# SSH Key
+SSH_KEY="ssh-key-2026-02-21.key"
+if [ ! -f "$SSH_KEY" ]; then
+    echo "⚠️  SSH Key ($SSH_KEY) not found in root. Trying to proceed without identity file..."
+    SSH_OPT=""
+else
+    chmod 600 "$SSH_KEY"
+    SSH_OPT="-i $SSH_KEY"
+fi
+
 # Copy .env
 echo "📤 Copying .env file..."
-scp .env $ORACLE_USER@$ORACLE_IP:lingonberry_journal/
+scp $SSH_OPT .env $ORACLE_USER@$ORACLE_IP:lingonberry_journal/
 
 # Restart services
 echo "🔄 Restarting services..."
-ssh $ORACLE_USER@$ORACLE_IP << 'ENDSSH'
+ssh $SSH_OPT $ORACLE_USER@$ORACLE_IP << 'ENDSSH'
 cd lingonberry_journal
 sudo systemctl restart journal-bot journal-webapp
 echo "✅ Services restarted"
