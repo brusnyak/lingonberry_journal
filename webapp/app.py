@@ -64,6 +64,12 @@ def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts:
             day = t["ts_close"][:10]
             calendar[day] = calendar.get(day, 0.0) + float(t.get("pnl_usd") or 0.0)
 
+    # Trigger auto-analysis of direction correctness for closed trades
+    try:
+        journal_db.analyze_direction_correctness(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+    except Exception as e:
+        print(f"⚠️ Auto-analysis failed: {e}")
+
     # Advanced Directional Analytics
     direction_stats = journal_db.get_analytics_breakdown(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     

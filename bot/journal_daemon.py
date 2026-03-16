@@ -123,18 +123,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         balance = f"{account['currency']} {stats['balance']:.2f}"
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=WEBAPP_URL.rstrip('/') + '/mini'))],
+        [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))],
     ])
     await update.message.reply_text(
         "👋 Welcome back!\n\n"
         f"💼 {account['name'] if account else 'No account'} | Balance: {balance}\n\n"
         "Commands:\n"
         "/journal — Log a new trade\n"
-        "/open — View open trades\n"
         "/stats — View performance stats\n"
         "/report — Open Dashboard\n"
         "/mini — Setup Mini App Button\n"
-        "/import — Paste trade logs\n"
+        "/dump — Paste trade logs (Prop/Platform)\n"
         "/cancel — Cancel current journal flow",
         reply_markup=keyboard,
     )
@@ -146,7 +145,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await update.message.reply_text(
         "Commands:\n"
-        "/journal, /open, /close, /stats, /report, /weekly, /import, /cancel"
+        "/journal, /stats, /report, /weekly, /dump, /cancel"
     )
 
 
@@ -166,9 +165,9 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not raw_text.strip():
         await update.message.reply_text(
-            "Paste your trade log after the command, or reply to a message with /import.\n\n"
+            "Paste your trade log after the command, or reply to a message with /dump.\n\n"
             "Example:\n"
-            "/import <paste logs>"
+            "/dump <paste logs>"
         )
         return
 
@@ -543,25 +542,37 @@ def main() -> None:
     application.add_handler(CommandHandler("open", open_command))
     application.add_handler(CommandHandler("close", close_command))
     application.add_handler(CommandHandler("weekly", weekly_command))
-    application.add_handler(CommandHandler("import", import_command))
+    application.add_handler(CommandHandler("dump", import_command))
+    application.add_handler(CommandHandler("import", import_command)) # Keep legacy for now
     application.add_handler(CallbackQueryHandler(daily_reminder_callback, pattern="^daily_reminder:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     application.add_error_handler(error_handler)
 
     async def _post_init(app) -> None:
-        """Register command hints with Telegram after bot starts."""
-        from telegram import BotCommand
+        """Register command hints and menu button with Telegram after bot starts."""
+        from telegram import BotCommand, MenuButtonWebApp
+        
+        # Register commands
         await app.bot.set_my_commands([
             BotCommand("start",   "Welcome message & dashboard"),
             BotCommand("journal", "Log a new trade"),
             BotCommand("stats",   "View performance statistics"),
-            BotCommand("open",    "See open positions"),
-            BotCommand("close",   "Close an open trade"),
             BotCommand("report",  "Open the trading dashboard"),
             BotCommand("mini",    "Add Mini App button to keyboard"),
+            BotCommand("dump",    "Import raw trade logs"),
             BotCommand("weekly",  "Weekly performance review"),
             BotCommand("cancel",  "Cancel current journal flow"),
         ])
+        
+        # Set persistent menu button to open Web App
+        try:
+            await app.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="📊 Dashboard", web_app=WebAppInfo(url=WEBAPP_URL))
+            )
+            logger.info("Bot menu button set to Web App.")
+        except Exception as e:
+            logger.warning(f"Failed to set menu button: {e}")
+            
         logger.info("Bot commands registered with Telegram.")
 
     application.post_init = _post_init

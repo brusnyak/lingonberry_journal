@@ -1226,13 +1226,10 @@ def analyze_direction_correctness(
             return {"error": f"Trade {trade_id} not found"}
     else:
         trades = get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
-        # Only analyze closed losing trades with SL and TP defined
+        # Analyze all closed trades
         trades = [
             t for t in trades 
             if t["outcome"] not in ["OPEN"] 
-            and t.get("pnl_usd", 0) < 0
-            and t.get("sl_price") is not None
-            and t.get("tp_price") is not None
         ]
     
     results = []
@@ -1275,14 +1272,37 @@ def analyze_direction_correctness(
                 })
                 continue
             
-            entry = float(trade["entry_price"])
-            tp = float(trade["tp_price"])
             direction = str(trade.get("direction", "")).upper()
             
+            # 🟢 RULE 1: If it's a win, direction was correct by definition
+            if trade.get("pnl_usd", 0) > 0 or trade.get("outcome") == "TP":
+                direction_correct = 1
+                analysis = "Win: Direction confirmed by profit"
+                
+                # Update DB
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("UPDATE trades SET direction_correct = ? WHERE id = ?", (1, trade["id"]))
+                conn.commit()
+                conn.close()
+                
+                updated_count += 1
+                results.append({"trade_id": trade["id"], "direction_correct": True, "analysis": analysis})
+                continue
+
+            # 🔴 RULE 2: For losers, check if it was a "stop-out" (direction was right but SL was too tight)
+            if not trade.get("sl_price") or not trade.get("tp_price"):
+                results.append({
+                    "trade_id": trade["id"],
+                    "direction_correct": 0,
+                    "analysis": "Loss: No SL/TP defined for stop-out check"
+                })
+                continue
+
             if not direction or direction not in ["LONG", "SHORT"]:
                 results.append({
                     "trade_id": trade["id"],
-                    "direction_correct": None,
+                    "direction_correct": 0,
                     "analysis": f"Invalid direction: {trade.get('direction')}"
                 })
                 continue
@@ -1361,6 +1381,13 @@ def get_direction_accuracy_stats(
     analyzed_trades = [t for t in closed_trades if t.get("direction_correct") is not None]
     
     if not analyzed_trades:
+        # If not analyzed, attempt to auto-analyze (minimal cost for winners)
+        analyze_direction_correctness(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+        trades = get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+        closed_trades = [t for t in trades if t["outcome"] != "OPEN"]
+        analyzed_trades = [t for t in closed_trades if t.get("direction_correct") is not None]
+
+    if not analyzed_trades:
         return {
             "overall_accuracy": 0,
             "win_accuracy": 0,
@@ -1371,7 +1398,7 @@ def get_direction_accuracy_stats(
                 "long": {"total": 0, "correct": 0, "accuracy": 0},
                 "short": {"total": 0, "correct": 0, "accuracy": 0}
             },
-            "note": "No trades analyzed yet. Run analyze_direction_correctness() first."
+            "note": "No trades analyzed. Try logging some wins or running analysis."
         }
     
     wins = [t for t in analyzed_trades if t.get("pnl_usd", 0) > 0]
