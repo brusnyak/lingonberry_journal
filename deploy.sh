@@ -2,44 +2,39 @@
 # Deployment script for Lingonberry Trading Journal
 # Usage: ./deploy.sh
 
-set -e  # Exit on error
+set -euo pipefail
 
 echo "🚀 Deploying Lingonberry Trading Journal to Oracle Cloud"
 echo "=========================================================="
 
-# Configuration
 ORACLE_IP="${ORACLE_VM_IP:-84.8.249.139}"
-ORACLE_USER="ubuntu"
+ORACLE_USER="${ORACLE_USER:-ubuntu}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-./ssh-key-2026-02-21.key}"
 REPO_URL="${GITHUB_JOURNAL_REPO:-https://github.com/brusnyak/lingonberry_journal.git}"
-APP_DIR="lingonberry_journal"
+APP_DIR="${APP_DIR:-lingonberry_journal}"
+SSH_OPTS=(-i "$SSH_KEY_PATH" -o BatchMode=yes -o ConnectTimeout=10)
 
-echo ""
+echo
 echo "📋 Configuration:"
 echo "   Oracle IP: $ORACLE_IP"
 echo "   User: $ORACLE_USER"
 echo "   Repository: $REPO_URL"
 echo "   SSH Key: $SSH_KEY_PATH"
-echo ""
+echo
 
-# Check if we can connect
 echo "🔌 Testing SSH connection..."
-if ! ssh -i "$SSH_KEY_PATH" -o ConnectTimeout=5 -o BatchMode=yes $ORACLE_USER@$ORACLE_IP exit 2>/dev/null; then
-    echo "❌ Cannot connect to $ORACLE_IP"
-    echo "   Make sure:"
-    echo "   1. SSH key is added: ssh-copy-id $ORACLE_USER@$ORACLE_IP"
-    echo "   2. Server is running"
-    echo "   3. IP address is correct"
-    exit 1
-fi
+ssh "${SSH_OPTS[@]}" "$ORACLE_USER@$ORACLE_IP" exit
 echo "✅ SSH connection successful"
 
-# Deploy
-echo ""
+echo
 echo "📦 Deploying application..."
 
-ssh -tt -i "$SSH_KEY_PATH" $ORACLE_USER@$ORACLE_IP << 'ENDSSH'
-set -e
+ssh "${SSH_OPTS[@]}" "$ORACLE_USER@$ORACLE_IP" "bash -s" <<'ENDSSH'
+set -euo pipefail
+
+APP_DIR="$HOME/lingonberry_journal"
+BACKUP_ROOT="$HOME/lingonberry_deploy_backups"
+mkdir -p "$BACKUP_ROOT"
 
 echo "📥 Updating system packages..."
 sudo apt update -qq
@@ -48,15 +43,25 @@ echo "📦 Installing dependencies..."
 sudo apt install -y python3-pip python3-venv git nginx certbot python3-certbot-nginx > /dev/null 2>&1
 
 echo "📂 Setting up application directory..."
-if [ -d "lingonberry_journal" ]; then
-    echo "   Updating existing installation..."
-    cd lingonberry_journal
-    git pull
+if [ -d "$APP_DIR/.git" ]; then
+    cd "$APP_DIR"
+    git fetch origin
 else
-    echo "   Fresh installation..."
-    git clone https://github.com/brusnyak/lingonberry_journal.git
-    cd lingonberry_journal
+    git clone https://github.com/brusnyak/lingonberry_journal.git "$APP_DIR"
+    cd "$APP_DIR"
 fi
+
+echo "🧹 Preparing runtime backup..."
+STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="$BACKUP_ROOT/$STAMP"
+mkdir -p "$BACKUP_DIR"
+if [ -f data/.ctrader_sync_state.txt ]; then
+    cp data/.ctrader_sync_state.txt "$BACKUP_DIR"/
+fi
+
+echo "📥 Updating repository..."
+git stash push --include-untracked -m "codex-deploy-$STAMP" || true
+git pull --ff-only origin main
 
 echo "🐍 Setting up Python environment..."
 if [ ! -d ".venv" ]; then
@@ -66,147 +71,51 @@ source .venv/bin/activate
 pip install -q -r requirements.txt
 
 echo "💾 Initializing database..."
-python3 -c "from bot import journal_db; journal_db.init_db()" 2>/dev/null || echo "   Database already initialized"
+python3 -c "from bot import journal_db; journal_db.init_db()"
 
-echo "⚙️  Setting up systemd services..."
-
-# Bot service
-sudo tee /etc/systemd/system/journal-bot.service > /dev/null << 'EOF'
-[Unit]
-Description=Trading Journal Telegram Bot
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/lingonberry_journal
-Environment="PATH=/home/ubuntu/lingonberry_journal/.venv/bin"
-EnvironmentFile=/home/ubuntu/lingonberry_journal/.env
-ExecStart=/home/ubuntu/lingonberry_journal/.venv/bin/python3 bot/journal_daemon.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Webapp service
-sudo tee /etc/systemd/system/journal-webapp.service > /dev/null << 'EOF'
-[Unit]
-Description=Trading Journal Web Application
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/lingonberry_journal
-Environment="PATH=/home/ubuntu/lingonberry_journal/.venv/bin"
-EnvironmentFile=/home/ubuntu/lingonberry_journal/.env
-ExecStart=/home/ubuntu/lingonberry_journal/.venv/bin/python3 webapp/app.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# cTrader token refresh (monthly)
-sudo tee /etc/systemd/system/journal-ctrader-refresh.service > /dev/null << 'EOF'
-[Unit]
-Description=Refresh cTrader Access Token
-After=network.target
-
-[Service]
-Type=oneshot
-User=ubuntu
-WorkingDirectory=/home/ubuntu/lingonberry_journal
-Environment="PATH=/home/ubuntu/lingonberry_journal/.venv/bin"
-EnvironmentFile=/home/ubuntu/lingonberry_journal/.env
-ExecStart=/home/ubuntu/lingonberry_journal/.venv/bin/python3 scripts/refresh_ctrader_token.py
-EOF
-
-sudo tee /etc/systemd/system/journal-ctrader-refresh.timer > /dev/null << 'EOF'
-[Unit]
-Description=Monthly cTrader token refresh
-
-[Timer]
-OnCalendar=monthly
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-# Nginx config
-sudo tee /etc/nginx/sites-available/journal > /dev/null << 'EOF'
-server {
-    listen 80;
-    server_name _;
-
-    location / {
-        proxy_pass http://localhost:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-EOF
-
-# Enable nginx site
-if [ ! -L "/etc/nginx/sites-enabled/journal" ]; then
-    sudo ln -s /etc/nginx/sites-available/journal /etc/nginx/sites-enabled/
+if [ -f "$BACKUP_DIR/.ctrader_sync_state.txt" ]; then
+    cp "$BACKUP_DIR/.ctrader_sync_state.txt" data/.ctrader_sync_state.txt
 fi
 
-# Remove default nginx site
-sudo rm -f /etc/nginx/sites-enabled/default
+restart_with_manage() {
+    echo "🔄 Restarting app via scripts/manage.sh..."
+    bash scripts/manage.sh restart all
+    sleep 2
+    bash scripts/manage.sh status
+}
 
-echo "🔥 Configuring firewall..."
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
-sudo netfilter-persistent save 2>/dev/null || true
+restart_with_systemd() {
+    echo "🔄 Restarting app via systemd..."
+    sudo systemctl daemon-reload
+    sudo systemctl enable journal-bot journal-webapp journal-ctrader-refresh.timer nginx >/dev/null 2>&1 || true
+    sudo nginx -t
+    sudo systemctl restart nginx journal-bot journal-webapp journal-ctrader-refresh.timer
+    sudo systemctl --no-pager --full status journal-bot journal-webapp nginx | head -20
+}
 
-echo "🔄 Reloading services..."
-sudo systemctl daemon-reload
-sudo systemctl enable journal-bot journal-webapp journal-ctrader-refresh.timer nginx
-sudo nginx -t && sudo systemctl restart nginx
-sudo systemctl restart journal-bot journal-webapp
-sudo systemctl restart journal-ctrader-refresh.timer
+if [ -f scripts/manage.sh ]; then
+    restart_with_manage
+elif systemctl list-unit-files | grep -q '^journal-webapp.service'; then
+    restart_with_systemd
+else
+    echo "⚠️ No known service manager found; app files updated but processes were not restarted."
+fi
 
-echo ""
-echo "✅ Deployment complete!"
-echo ""
-echo "📊 Service Status:"
-sudo systemctl status journal-bot --no-pager -l | head -3
-sudo systemctl status journal-webapp --no-pager -l | head -3
-sudo systemctl status nginx --no-pager -l | head -3
-
+echo "---"
+echo "HEAD $(git rev-parse --short HEAD)"
+echo "Stashes:"
+git stash list | head -3 || true
 ENDSSH
 
-echo ""
+echo
 echo "=========================================================="
-echo "✅ Deployment successful!"
-echo ""
-echo "📝 Next steps:"
-echo "   1. Copy your .env file to the server:"
-echo "      scp .env $ORACLE_USER@$ORACLE_IP:$APP_DIR/"
-echo ""
-echo "   2. Restart services:"
-echo "      ssh $ORACLE_USER@$ORACLE_IP 'sudo systemctl restart journal-bot journal-webapp'"
-echo ""
-echo "   3. Check logs:"
-echo "      ssh $ORACLE_USER@$ORACLE_IP 'sudo journalctl -u journal-bot -f'"
-echo "      ssh $ORACLE_USER@$ORACLE_IP 'sudo journalctl -u journal-webapp -f'"
-echo ""
-echo "   4. Access your app:"
-echo "      http://$ORACLE_IP/mini"
-echo ""
-echo "   5. (Optional) Setup SSL with domain:"
-echo "      ssh $ORACLE_USER@$ORACLE_IP"
-echo "      sudo certbot --nginx -d your-domain.com"
-echo ""
+echo "✅ Deployment completed"
+echo
+echo "Primary URL:"
+echo "   https://lingonberry.work.gd/mini"
+echo
+echo "If needed, verify remotely:"
+echo "   ssh -i $SSH_KEY_PATH $ORACLE_USER@$ORACLE_IP"
+echo "   cd $APP_DIR && bash scripts/manage.sh status"
+echo
 echo "=========================================================="

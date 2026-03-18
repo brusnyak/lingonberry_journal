@@ -5,8 +5,16 @@ __pycache__/
 *.pyc
 .DS_Store
 data/*.db
+data/.ctrader_sync_state.txt
+data/.bot.pid
+data/.webapp.pid
+data/.ctrader_sync.pid
+data/.sltp_poller.pid
 data/cache/
 data/exports/
+data/logs/
+data/market_data/
+data/reports/
 charts/
 .pytest_cache/
 *.key
