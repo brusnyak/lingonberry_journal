@@ -4,6 +4,40 @@ class AccountManager {
         this.currentAccount = null;
         this.accounts = [];
         this.modal = null;
+        this.ruleTemplates = {
+            plutus_lightning_50k: {
+                label: 'PTB Lightning Funded 50k',
+                initial_balance: 50000,
+                firm_name: 'Plutus Trade Base',
+                max_daily_loss_pct: 4,
+                max_total_loss_pct: 4,
+                profit_target_pct: 7,
+                risk_per_trade_pct: 1,
+                consistency_pct: 15,
+                min_trading_days: 7,
+                min_profitable_days: 7,
+                profitable_day_threshold_pct: 0.5,
+                static_drawdown_floor: 48000,
+                inactivity_limit_days: 7,
+                payout_frequency_days: 14,
+            },
+            plutus_lightning_100k: {
+                label: 'PTB Lightning Funded 100k',
+                initial_balance: 100000,
+                firm_name: 'Plutus Trade Base',
+                max_daily_loss_pct: 4,
+                max_total_loss_pct: 4,
+                profit_target_pct: 7,
+                risk_per_trade_pct: 1,
+                consistency_pct: 15,
+                min_trading_days: 7,
+                min_profitable_days: 7,
+                profitable_day_threshold_pct: 0.5,
+                static_drawdown_floor: 96000,
+                inactivity_limit_days: 7,
+                payout_frequency_days: 14,
+            }
+        };
         this.init();
         this.setupKeyboardShortcuts();
     }
@@ -212,11 +246,21 @@ class AccountManager {
                                 <select id="firmName">
                                     <option value="">Select firm...</option>
                                     <option value="FTMO">FTMO</option>
+                                    <option value="Plutus Trade Base">Plutus Trade Base</option>
                                     <option value="MyForexFunds">MyForexFunds</option>
                                     <option value="The5ers">The5ers</option>
                                     <option value="TopstepFX">TopstepFX</option>
                                     <option value="Personal">Personal Account</option>
                                     <option value="Other">Other</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Rule Template</label>
+                                <select id="ruleTemplate">
+                                    <option value="">Custom</option>
+                                    <option value="plutus_lightning_50k">PTB Lightning Funded 50k</option>
+                                    <option value="plutus_lightning_100k">PTB Lightning Funded 100k</option>
                                 </select>
                             </div>
 
@@ -248,6 +292,54 @@ class AccountManager {
                                 </div>
                             </div>
 
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Consistency %</label>
+                                    <input type="number" id="consistencyPct"
+                                           step="0.1" placeholder="15.0">
+                                </div>
+                                <div class="form-group">
+                                    <label>Static DD Floor</label>
+                                    <input type="number" id="staticDrawdownFloor"
+                                           step="0.01" placeholder="48000">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Min Trading Days</label>
+                                    <input type="number" id="minTradingDays"
+                                           step="1" placeholder="7">
+                                </div>
+                                <div class="form-group">
+                                    <label>Min Profitable Days</label>
+                                    <input type="number" id="minProfitableDays"
+                                           step="1" placeholder="7">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Profitable Day %</label>
+                                    <input type="number" id="profitableDayThresholdPct"
+                                           step="0.1" placeholder="0.5">
+                                </div>
+                                <div class="form-group">
+                                    <label>Inactivity Limit Days</label>
+                                    <input type="number" id="inactivityLimitDays"
+                                           step="1" placeholder="7">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Payout Frequency Days</label>
+                                    <input type="number" id="payoutFrequencyDays"
+                                           step="1" placeholder="14">
+                                </div>
+                                <div class="form-group"></div>
+                            </div>
+
                             <div class="form-actions">
                                 <button type="button" class="btn-secondary" 
                                         onclick="accountManager.closeModal()">Cancel</button>
@@ -261,6 +353,28 @@ class AccountManager {
 
         document.body.insertAdjacentHTML('beforeend', modalHTML);
         this.modal = document.getElementById('accountModal');
+        document.getElementById('ruleTemplate')?.addEventListener('change', (e) => {
+            this.applyRuleTemplate(e.target.value);
+        });
+    }
+
+    applyRuleTemplate(templateId) {
+        const template = this.ruleTemplates[templateId];
+        if (!template) return;
+
+        document.getElementById('initialBalance').value = template.initial_balance ?? '';
+        document.getElementById('firmName').value = template.firm_name ?? '';
+        document.getElementById('maxDailyLoss').value = template.max_daily_loss_pct ?? '';
+        document.getElementById('maxTotalLoss').value = template.max_total_loss_pct ?? '';
+        document.getElementById('profitTarget').value = template.profit_target_pct ?? '';
+        document.getElementById('riskPerTrade').value = template.risk_per_trade_pct ?? '';
+        document.getElementById('consistencyPct').value = template.consistency_pct ?? '';
+        document.getElementById('staticDrawdownFloor').value = template.static_drawdown_floor ?? '';
+        document.getElementById('minTradingDays').value = template.min_trading_days ?? '';
+        document.getElementById('minProfitableDays').value = template.min_profitable_days ?? '';
+        document.getElementById('profitableDayThresholdPct').value = template.profitable_day_threshold_pct ?? '';
+        document.getElementById('inactivityLimitDays').value = template.inactivity_limit_days ?? '';
+        document.getElementById('payoutFrequencyDays').value = template.payout_frequency_days ?? '';
     }
 
     openModal(accountId = null) {
@@ -275,16 +389,25 @@ class AccountManager {
                 document.getElementById('initialBalance').value = account.initial_balance;
                 document.getElementById('currency').value = account.currency;
                 document.getElementById('firmName').value = account.firm_name || '';
+                document.getElementById('ruleTemplate').value = account.rule_template || '';
                 document.getElementById('maxDailyLoss').value = account.max_daily_loss_pct || '';
                 document.getElementById('maxTotalLoss').value = account.max_total_loss_pct || '';
                 document.getElementById('profitTarget').value = account.profit_target_pct || '';
                 document.getElementById('riskPerTrade').value = account.risk_per_trade_pct || '';
+                document.getElementById('consistencyPct').value = account.consistency_pct || '';
+                document.getElementById('staticDrawdownFloor').value = account.static_drawdown_floor || '';
+                document.getElementById('minTradingDays').value = account.min_trading_days || '';
+                document.getElementById('minProfitableDays').value = account.min_profitable_days || '';
+                document.getElementById('profitableDayThresholdPct').value = account.profitable_day_threshold_pct || '';
+                document.getElementById('inactivityLimitDays').value = account.inactivity_limit_days || '';
+                document.getElementById('payoutFrequencyDays').value = account.payout_frequency_days || '';
                 document.getElementById('accountForm').dataset.accountId = accountId;
             }
         } else {
             // Create mode
             document.getElementById('modalTitle').textContent = 'Add Account';
             document.getElementById('accountForm').reset();
+            document.getElementById('ruleTemplate').value = '';
             delete document.getElementById('accountForm').dataset.accountId;
         }
 
@@ -306,10 +429,18 @@ class AccountManager {
             initial_balance: parseFloat(document.getElementById('initialBalance').value),
             currency: document.getElementById('currency').value,
             firm_name: document.getElementById('firmName').value || null,
+            rule_template: document.getElementById('ruleTemplate').value || null,
             max_daily_loss_pct: parseFloat(document.getElementById('maxDailyLoss').value) || null,
             max_total_loss_pct: parseFloat(document.getElementById('maxTotalLoss').value) || null,
             profit_target_pct: parseFloat(document.getElementById('profitTarget').value) || null,
             risk_per_trade_pct: parseFloat(document.getElementById('riskPerTrade').value) || null,
+            consistency_pct: parseFloat(document.getElementById('consistencyPct').value) || null,
+            static_drawdown_floor: parseFloat(document.getElementById('staticDrawdownFloor').value) || null,
+            min_trading_days: parseInt(document.getElementById('minTradingDays').value, 10) || null,
+            min_profitable_days: parseInt(document.getElementById('minProfitableDays').value, 10) || null,
+            profitable_day_threshold_pct: parseFloat(document.getElementById('profitableDayThresholdPct').value) || null,
+            inactivity_limit_days: parseInt(document.getElementById('inactivityLimitDays').value, 10) || null,
+            payout_frequency_days: parseInt(document.getElementById('payoutFrequencyDays').value, 10) || null,
         };
 
         try {

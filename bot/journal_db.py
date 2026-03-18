@@ -12,6 +12,59 @@ from typing import Any, Dict, List, Optional
 DB_PATH = os.getenv("JOURNAL_DB_PATH", "data/journal.db")
 
 
+def _normalize_session_name(session: Optional[str]) -> str:
+    if not session:
+        return "Unknown"
+    normalized = str(session).strip().upper().replace("-", "_").replace(" ", "_")
+    mapping = {
+        "ASIAN": "Asian",
+        "LONDON": "London",
+        "NY": "NY",
+        "NEW_YORK": "NY",
+        "UNKNOWN": "Unknown",
+    }
+    return mapping.get(normalized, str(session))
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def compute_rr_ratio(
+    entry_price: Any,
+    sl_price: Any,
+    tp_price: Any,
+) -> Optional[float]:
+    entry = _safe_float(entry_price)
+    sl = _safe_float(sl_price)
+    tp = _safe_float(tp_price)
+    if entry is None or sl is None or tp is None:
+        return None
+
+    risk = abs(entry - sl)
+    reward = abs(tp - entry)
+    if risk <= 0 or reward < 0:
+        return None
+    return reward / risk
+
+
 def get_connection() -> sqlite3.Connection:
     """Get database connection"""
     conn = sqlite3.connect(DB_PATH)
@@ -85,6 +138,7 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def _normalize_trade_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Return a trade row with both legacy and v2 field aliases."""
     import json
+    from bot.session_detector import detect_session
     trade = dict(row)
 
     entry_price = trade.get("entry_price", trade.get("entry"))
@@ -106,6 +160,14 @@ def _normalize_trade_row(row: Dict[str, Any]) -> Dict[str, Any]:
     trade["external_id"] = trade.get("external_id", trade.get("external_trade_id"))
     trade["provider"] = trade.get("provider", trade.get("source"))
     trade["account_id"] = trade.get("account_id", 1)
+    trade["session"] = _normalize_session_name(trade.get("session") or detect_session(trade.get("ts_open", "")))
+    trade["rr_ratio"] = trade.get("rr_ratio")
+    if trade["rr_ratio"] is None:
+        trade["rr_ratio"] = compute_rr_ratio(
+            trade.get("entry_price", trade.get("entry")),
+            trade.get("sl_price", trade.get("sl")),
+            trade.get("tp_price", trade.get("tp")),
+        )
     
     # Deserialize indicator_data if present
     if "indicator_data" in trade and trade["indicator_data"]:
@@ -137,6 +199,14 @@ def init_db() -> None:
             firm_name TEXT,
             broker TEXT,
             platform TEXT,
+            rule_template TEXT,
+            consistency_pct REAL,
+            min_trading_days INTEGER,
+            min_profitable_days INTEGER,
+            profitable_day_threshold_pct REAL,
+            static_drawdown_floor REAL,
+            inactivity_limit_days INTEGER,
+            payout_frequency_days INTEGER,
             timezone_name TEXT DEFAULT 'UTC',
             timezone TEXT DEFAULT 'UTC', -- Legacy support
             current_balance REAL DEFAULT 10000, -- Legacy support
@@ -291,6 +361,28 @@ def init_db() -> None:
         cursor.execute("ALTER TABLE trades ADD COLUMN indicator_data TEXT")
     if "direction_correct" not in trade_cols:
         cursor.execute("ALTER TABLE trades ADD COLUMN direction_correct INTEGER DEFAULT NULL")
+    if "rr_ratio" not in trade_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN rr_ratio REAL")
+    if "session" not in trade_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN session TEXT")
+
+    account_cols = _table_columns(conn, "accounts")
+    if "rule_template" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN rule_template TEXT")
+    if "consistency_pct" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN consistency_pct REAL")
+    if "min_trading_days" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN min_trading_days INTEGER")
+    if "min_profitable_days" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN min_profitable_days INTEGER")
+    if "profitable_day_threshold_pct" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN profitable_day_threshold_pct REAL")
+    if "static_drawdown_floor" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN static_drawdown_floor REAL")
+    if "inactivity_limit_days" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN inactivity_limit_days INTEGER")
+    if "payout_frequency_days" not in account_cols:
+        cursor.execute("ALTER TABLE accounts ADD COLUMN payout_frequency_days INTEGER")
     
     conn.commit()
     conn.close()
@@ -308,6 +400,14 @@ def create_account(
     firm_name: str = "",
     broker: str = "",
     platform: str = "",
+    rule_template: Optional[str] = None,
+    consistency_pct: Optional[float] = None,
+    min_trading_days: Optional[int] = None,
+    min_profitable_days: Optional[int] = None,
+    profitable_day_threshold_pct: Optional[float] = None,
+    static_drawdown_floor: Optional[float] = None,
+    inactivity_limit_days: Optional[int] = None,
+    payout_frequency_days: Optional[int] = None,
     timezone_name: str = "UTC",
 ) -> int:
     """Create a new trading account"""
@@ -319,14 +419,19 @@ def create_account(
         INSERT INTO accounts (
             name, currency, initial_balance, max_daily_loss_pct,
             max_total_loss_pct, profit_target_pct, risk_per_trade_pct,
-            firm_name, broker, platform, timezone_name,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            firm_name, broker, platform, rule_template, consistency_pct,
+            min_trading_days, min_profitable_days, profitable_day_threshold_pct,
+            static_drawdown_floor, inactivity_limit_days, payout_frequency_days,
+            timezone_name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name, currency, initial_balance, max_daily_loss_pct,
             max_total_loss_pct, profit_target_pct, risk_per_trade_pct,
-            firm_name, broker, platform, timezone_name,
+            firm_name, broker, platform, rule_template, consistency_pct,
+            min_trading_days, min_profitable_days, profitable_day_threshold_pct,
+            static_drawdown_floor, inactivity_limit_days, payout_frequency_days,
+            timezone_name,
             now, now
         ),
     )
@@ -353,7 +458,10 @@ def get_account(account_id: int) -> Optional[Dict[str, Any]]:
     cursor.execute("SELECT * FROM accounts WHERE id = ?", (account_id,))
     row = cursor.fetchone()
     conn.close()
-    return dict(row) if row else None
+    account = dict(row) if row else None
+    if account and account.get("static_drawdown_floor") is None and account.get("initial_balance") is not None and account.get("max_total_loss_pct") is not None:
+        account["static_drawdown_floor"] = float(account["initial_balance"]) * (1 - float(account["max_total_loss_pct"]) / 100.0)
+    return account
 
 
 def update_account_rules(
@@ -362,6 +470,13 @@ def update_account_rules(
     max_total_loss_pct: float,
     profit_target_pct: float,
     risk_per_trade_pct: float,
+    consistency_pct: Optional[float] = None,
+    min_trading_days: Optional[int] = None,
+    min_profitable_days: Optional[int] = None,
+    profitable_day_threshold_pct: Optional[float] = None,
+    static_drawdown_floor: Optional[float] = None,
+    inactivity_limit_days: Optional[int] = None,
+    payout_frequency_days: Optional[int] = None,
 ) -> None:
     """Update account risk rules"""
     conn = get_connection()
@@ -370,10 +485,27 @@ def update_account_rules(
         """
         UPDATE accounts
         SET max_daily_loss_pct = ?, max_total_loss_pct = ?,
-            profit_target_pct = ?, risk_per_trade_pct = ?
+            profit_target_pct = ?, risk_per_trade_pct = ?,
+            consistency_pct = ?, min_trading_days = ?,
+            min_profitable_days = ?, profitable_day_threshold_pct = ?,
+            static_drawdown_floor = ?, inactivity_limit_days = ?,
+            payout_frequency_days = ?
         WHERE id = ?
         """,
-        (max_daily_loss_pct, max_total_loss_pct, profit_target_pct, risk_per_trade_pct, account_id),
+        (
+            max_daily_loss_pct,
+            max_total_loss_pct,
+            profit_target_pct,
+            risk_per_trade_pct,
+            consistency_pct,
+            min_trading_days,
+            min_profitable_days,
+            profitable_day_threshold_pct,
+            static_drawdown_floor,
+            inactivity_limit_days,
+            payout_frequency_days,
+            account_id,
+        ),
     )
     conn.commit()
     conn.close()
@@ -400,6 +532,7 @@ def create_trade(
 ) -> int:
     """Create a new trade"""
     import json
+    from bot.session_detector import detect_session
     conn = get_connection()
     cursor = conn.cursor()
     trade_columns = _table_columns(conn, "trades")
@@ -417,7 +550,8 @@ def create_trade(
         "tp_price": tp_price if tp_price is not None else entry_price,
         "tp": tp_price if tp_price is not None else entry_price,
         "ts_open": ts_open,
-        "session": session,
+        "rr_ratio": compute_rr_ratio(entry_price, sl_price, tp_price),
+        "session": _normalize_session_name(session or detect_session(ts_open)),
         "timeframe": timeframe,
         "strategy": strategy,
         "notes": notes,
@@ -823,6 +957,7 @@ def update_trade_sl_tp(trade_id: int, sl_price: Optional[float], tp_price: Optio
     conn = get_connection()
     cursor = conn.cursor()
     trade_columns = _table_columns(conn, "trades")
+    trade = get_trade(trade_id)
     updates = {}
     if "sl_price" in trade_columns:
         updates["sl_price"] = sl_price
@@ -832,6 +967,12 @@ def update_trade_sl_tp(trade_id: int, sl_price: Optional[float], tp_price: Optio
         updates["sl"] = sl_price
     if "tp" in trade_columns:
         updates["tp"] = tp_price
+    if "rr_ratio" in trade_columns and trade:
+        updates["rr_ratio"] = compute_rr_ratio(
+            trade.get("entry_price", trade.get("entry")),
+            sl_price,
+            tp_price,
+        )
     if "updated_at" in trade_columns:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     set_pairs = [f"{col} = ?" for col in updates.keys()]
@@ -851,6 +992,151 @@ def get_trade_events(trade_id: int) -> List[Dict[str, Any]]:
     events = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return events
+
+
+def get_daily_loss_state(
+    account: Optional[Dict[str, Any]],
+    trades: List[Dict[str, Any]],
+    as_of: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Build daily-loss history from start-of-day balance and intraday realized PnL."""
+    if not account or account.get("max_daily_loss_pct") is None:
+        return {
+            "limit_usd": None,
+            "history": [],
+            "current": None,
+            "has_historical_breach": False,
+        }
+
+    initial_balance = float(account.get("initial_balance") or 0.0)
+    daily_loss_limit = initial_balance * float(account.get("max_daily_loss_pct") or 0.0) / 100.0
+    closed_trades = [t for t in trades if t.get("outcome") != "OPEN"]
+    closed_trades.sort(key=lambda t: _parse_timestamp(t.get("ts_close") or t.get("ts_open")) or datetime.min.replace(tzinfo=timezone.utc))
+
+    history_map: Dict[str, Dict[str, Any]] = {}
+    running_balance = initial_balance
+
+    for trade in closed_trades:
+        trade_ts = _parse_timestamp(trade.get("ts_close") or trade.get("ts_open"))
+        if not trade_ts:
+            continue
+        day_key = trade_ts.date().isoformat()
+        if day_key not in history_map:
+            history_map[day_key] = {
+                "date": day_key,
+                "start_balance": running_balance,
+                "end_balance": running_balance,
+                "realized_pnl": 0.0,
+                "intraday_low_pnl": 0.0,
+                "trade_count": 0,
+                "open_pnl_impact": 0.0,
+            }
+
+        bucket = history_map[day_key]
+        pnl = float(trade.get("pnl_usd") or 0.0)
+        bucket["trade_count"] += 1
+        bucket["realized_pnl"] += pnl
+        bucket["intraday_low_pnl"] = min(bucket["intraday_low_pnl"], bucket["realized_pnl"])
+        running_balance += pnl
+        bucket["end_balance"] = running_balance
+
+    today = (as_of or datetime.now(timezone.utc)).date().isoformat()
+    if today not in history_map:
+        history_map[today] = {
+            "date": today,
+            "start_balance": running_balance,
+            "end_balance": running_balance,
+            "realized_pnl": 0.0,
+            "intraday_low_pnl": 0.0,
+            "trade_count": 0,
+            "open_pnl_impact": 0.0,
+        }
+
+    history = []
+    has_historical_breach = False
+    for day_key in sorted(history_map.keys()):
+        bucket = history_map[day_key]
+        current_drawdown_usd = max(0.0, -(bucket["realized_pnl"] + bucket["open_pnl_impact"]))
+        worst_drawdown_usd = max(0.0, -bucket["intraday_low_pnl"])
+        breached = daily_loss_limit > 0 and worst_drawdown_usd >= (daily_loss_limit - 1e-9)
+        has_historical_breach = has_historical_breach or breached
+        bucket["daily_loss_limit"] = daily_loss_limit
+        bucket["daily_loss_floor"] = bucket["start_balance"] - daily_loss_limit
+        bucket["current_drawdown_usd"] = current_drawdown_usd
+        bucket["worst_drawdown_usd"] = worst_drawdown_usd
+        bucket["remaining_usd"] = daily_loss_limit - current_drawdown_usd
+        bucket["breached"] = breached
+        history.append(bucket)
+
+    current = next((bucket for bucket in history if bucket["date"] == today), history[-1] if history else None)
+    return {
+        "limit_usd": daily_loss_limit,
+        "history": history,
+        "current": current,
+        "has_historical_breach": has_historical_breach,
+    }
+
+
+def backfill_trade_metadata(account_id: Optional[int] = None) -> Dict[str, int]:
+    """One-time normalization for persisted session labels and RR ratios."""
+    from bot.session_detector import detect_session
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    trade_columns = _table_columns(conn, "trades")
+
+    query = "SELECT * FROM trades WHERE 1=1"
+    params: List[Any] = []
+    if account_id is not None and "account_id" in trade_columns:
+        query += " AND account_id = ?"
+        params.append(account_id)
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+
+    session_updates = 0
+    rr_updates = 0
+    touched = 0
+
+    for row in rows:
+        trade = dict(row)
+        updates: Dict[str, Any] = {}
+
+        if "session" in trade_columns:
+            derived_session = _normalize_session_name(trade.get("session") or detect_session(trade.get("ts_open", "")))
+            if trade.get("session") != derived_session:
+                updates["session"] = derived_session
+                session_updates += 1
+
+        if "rr_ratio" in trade_columns:
+            rr_ratio = compute_rr_ratio(
+                trade.get("entry_price", trade.get("entry")),
+                trade.get("sl_price", trade.get("sl")),
+                trade.get("tp_price", trade.get("tp")),
+            )
+            existing_rr = _safe_float(trade.get("rr_ratio"))
+            if rr_ratio is not None and (existing_rr is None or abs(existing_rr - rr_ratio) > 1e-9):
+                updates["rr_ratio"] = rr_ratio
+                rr_updates += 1
+
+        if updates:
+            if "updated_at" in trade_columns:
+                updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+            set_clause = ", ".join(f"{column} = ?" for column in updates.keys())
+            cursor.execute(
+                f"UPDATE trades SET {set_clause} WHERE id = ?",
+                list(updates.values()) + [trade["id"]],
+            )
+            touched += 1
+
+    conn.commit()
+    conn.close()
+    return {
+        "checked": len(rows),
+        "updated": touched,
+        "session_updates": session_updates,
+        "rr_updates": rr_updates,
+    }
 
 
 def set_trade_chart_paths(trade_id: int, chart_paths: List[str]) -> None:
@@ -895,10 +1181,23 @@ def get_stats(
             "wins": 0,
             "losses": 0,
             "expectancy": 0,
+            "daily_pnl": 0,
         }
     
     wins = [t for t in closed_trades if (t.get("pnl_usd") or 0) > 0]
     losses = [t for t in closed_trades if (t.get("pnl_usd") or 0) < 0]
+    today_utc = datetime.now(timezone.utc).date()
+    daily_pnl = 0.0
+    for t in closed_trades:
+        ts_value = t.get("ts_close") or t.get("ts_open")
+        if not ts_value:
+            continue
+        try:
+            trade_date = datetime.fromisoformat(str(ts_value).replace("Z", "+00:00")).date()
+        except ValueError:
+            continue
+        if trade_date == today_utc:
+            daily_pnl += float(t.get("pnl_usd", 0) or 0)
     
     total_pnl = sum(t.get("pnl_usd", 0) for t in closed_trades)
     # Fix: Filter out None values for accurate profit factor calculation
@@ -952,6 +1251,7 @@ def get_stats(
         "wins": len(wins),
         "losses": len(losses),
         "expectancy": (total_pnl / len(closed_trades)) if closed_trades else 0,
+        "daily_pnl": daily_pnl,
     }
 
 

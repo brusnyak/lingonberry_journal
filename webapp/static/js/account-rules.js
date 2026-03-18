@@ -4,12 +4,14 @@ class AccountRulesDisplay {
         this.containerId = containerId;
         this.account = null;
         this.stats = null;
+        this.ruleProgress = null;
         this.isExpanded = false; // Hidden by default
     }
 
-    update(account, stats) {
+    update(account, stats, ruleProgress = null) {
         this.account = account;
         this.stats = stats;
+        this.ruleProgress = ruleProgress;
         this.render();
     }
 
@@ -28,6 +30,7 @@ class AccountRulesDisplay {
 
         // Calculate rule violations
         const rules = this.calculateRules();
+        const progress = this.ruleProgress || {};
 
         const accountName = this.account.firm_name || 'Account';
         
@@ -135,6 +138,91 @@ class AccountRulesDisplay {
                             </div>
                         </div>
                         ` : ''}
+
+                        ${progress.min_trading_days ? `
+                        <div class="rule-item">
+                            <div class="rule-label">
+                                <span>Trading Days</span>
+                                <span class="rule-value">
+                                    ${progress.trading_days || 0} / ${progress.min_trading_days}
+                                </span>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${progress.min_profitable_days ? `
+                        <div class="rule-item">
+                            <div class="rule-label">
+                                <span>Profitable Days</span>
+                                <span class="rule-value">
+                                    ${progress.profitable_days || 0} / ${progress.min_profitable_days}
+                                </span>
+                            </div>
+                            <div class="progress-label">
+                                <span>Threshold: ${(progress.profitable_day_threshold_pct || 0).toFixed(1)}%</span>
+                                <span>${(progress.profitable_day_threshold_usd || 0).toFixed(2)} ${this.account.currency}</span>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${progress.consistency_pct ? `
+                        <div class="rule-item">
+                            <div class="rule-label">
+                                <span>Consistency Rule</span>
+                                <span class="rule-value">
+                                    ${(progress.consistency_pct || 0).toFixed(1)}%
+                                </span>
+                            </div>
+                            <div class="progress-label">
+                                <span>Best day: ${(progress.best_day_profit || 0).toFixed(2)} ${this.account.currency}</span>
+                                <span>Min profit: ${(progress.minimum_required_profit || 0).toFixed(2)} ${this.account.currency}</span>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${progress.static_drawdown_floor ? `
+                        <div class="rule-item">
+                            <div class="rule-label">
+                                <span>Static DD Floor</span>
+                                <span class="rule-value">
+                                    ${(progress.static_drawdown_floor || 0).toFixed(2)} ${this.account.currency}
+                                </span>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${progress.inactivity_limit_days ? `
+                        <div class="rule-item">
+                            <div class="rule-label">
+                                <span>Inactivity Limit</span>
+                                <span class="rule-value">
+                                    ${progress.inactive_days ?? 0} / ${progress.inactivity_limit_days} days
+                                </span>
+                            </div>
+                        </div>
+                        ` : ''}
+
+                        ${progress.is_ptb_lightning_funded ? `
+                        <div class="rule-item ${progress.payout_readiness?.eligible ? 'achieved' : 'warning'}">
+                            <div class="rule-label">
+                                <span>Payout Readiness</span>
+                                <span class="rule-value ${progress.payout_readiness?.eligible ? 'positive' : 'negative'}">
+                                    ${progress.payout_readiness?.eligible ? 'Eligible' : 'Not eligible'}
+                                </span>
+                            </div>
+                            <div class="progress-label">
+                                <span>${progress.current_profit?.toFixed(2) || '0.00'} ${this.account.currency} profit</span>
+                                <span>${progress.payout_progress_pct?.toFixed(0) || 0}% to target</span>
+                            </div>
+                            ${progress.payout_readiness?.missing_requirements?.length ? `
+                            <div class="progress-label" style="display: block; margin-top: 8px;">
+                                ${progress.payout_readiness.missing_requirements.map(item => `
+                                    <div style="color: var(--danger, #ef4444); margin-top: 4px;">• ${item}</div>
+                                `).join('')}
+                            </div>
+                            ` : ''}
+                        </div>
+                        ` : ''}
                     </div>
 
                     ${rules.violations.length > 0 ? `
@@ -165,21 +253,19 @@ class AccountRulesDisplay {
         const balance = this.stats?.balance || this.account.initial_balance;
         const initialBalance = this.account.initial_balance;
         const growth = ((balance - initialBalance) / initialBalance) * 100;
+        const progress = this.ruleProgress || {};
 
         const violations = [];
         let overallStatus = 'safe';
 
-        // Daily loss calculation (simplified - would need today's trades)
-        const dailyPnl = this.stats?.daily_pnl || 0;
-        const dailyLossPct = (dailyPnl / initialBalance) * 100;
-        const dailyLossUsed = Math.abs(Math.min(dailyLossPct, 0));
+        const dailyLossUsed = progress.daily_loss_used_account_pct || 0;
         const dailyLossRemaining = (this.account.max_daily_loss_pct || 0) - dailyLossUsed;
         const dailyLossPercentage = this.account.max_daily_loss_pct
             ? (dailyLossUsed / this.account.max_daily_loss_pct) * 100
             : 0;
 
         let dailyLossStatus = 'safe';
-        if (dailyLossPercentage >= 100) {
+        if (progress.historical_daily_loss_breached || dailyLossPercentage >= 100) {
             dailyLossStatus = 'danger';
             violations.push('Daily loss limit exceeded');
             overallStatus = 'danger';
@@ -196,7 +282,7 @@ class AccountRulesDisplay {
             : 0;
 
         let totalLossStatus = 'safe';
-        if (totalLossPercentage >= 100) {
+        if (progress.static_drawdown_breached || totalLossPercentage >= 100) {
             totalLossStatus = 'danger';
             violations.push('Maximum drawdown exceeded');
             overallStatus = 'danger';

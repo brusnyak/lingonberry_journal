@@ -19,6 +19,170 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)  # Enable CORS for all routes
 
 
+def _safe_ts(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_ptb_lightning_funded(account: Optional[dict]) -> bool:
+    if not account:
+        return False
+    template = str(account.get("rule_template") or "").lower()
+    return template.startswith("plutus_lightning_")
+
+
+def _build_rule_progress(account: Optional[dict], trades: list[dict], stats: dict) -> dict:
+    if not account:
+        return {}
+
+    initial_balance = float(account.get("initial_balance") or 0.0)
+    closed_trades = [t for t in trades if t.get("outcome") != "OPEN"]
+    closed_trades.sort(key=lambda trade: _safe_ts(trade.get("ts_close") or trade.get("ts_open")) or datetime.min.replace(tzinfo=timezone.utc))
+    by_day = {}
+    current_balance = initial_balance
+    lowest_balance = initial_balance
+    for trade in closed_trades:
+        pnl_usd = float(trade.get("pnl_usd") or 0.0)
+        ts_value = trade.get("ts_close") or trade.get("ts_open")
+        ts_dt = _safe_ts(ts_value)
+        if not ts_dt:
+            current_balance += pnl_usd
+            lowest_balance = min(lowest_balance, current_balance)
+            continue
+        day_key = ts_dt.date().isoformat()
+        bucket = by_day.setdefault(day_key, {"pnl": 0.0, "count": 0})
+        bucket["pnl"] += pnl_usd
+        bucket["count"] += 1
+        current_balance += pnl_usd
+        lowest_balance = min(lowest_balance, current_balance)
+
+    trading_days = len([day for day in by_day.values() if day["count"] > 0])
+    profitable_day_threshold_pct = float(account.get("profitable_day_threshold_pct") or 0.0)
+    profitable_day_threshold_usd = initial_balance * profitable_day_threshold_pct / 100.0
+    profitable_days = len([day for day in by_day.values() if day["pnl"] >= profitable_day_threshold_usd])
+    best_day_profit = max((day["pnl"] for day in by_day.values()), default=0.0)
+    consistency_pct = float(account.get("consistency_pct") or 0.0)
+    minimum_required_profit = 0.0
+    if consistency_pct > 0 and best_day_profit > 0:
+        minimum_required_profit = best_day_profit / (consistency_pct / 100.0)
+
+    static_drawdown_floor = account.get("static_drawdown_floor")
+    if static_drawdown_floor is None and initial_balance and account.get("max_total_loss_pct") is not None:
+        static_drawdown_floor = initial_balance * (1 - float(account.get("max_total_loss_pct")) / 100.0)
+    static_drawdown_breached = bool(
+        static_drawdown_floor is not None and lowest_balance < (float(static_drawdown_floor) - 1e-9)
+    )
+
+    daily_loss_state = journal_db.get_daily_loss_state(account, trades)
+    current_daily = daily_loss_state.get("current") or {}
+    daily_loss_limit = daily_loss_state.get("limit_usd")
+    daily_loss_floor = current_daily.get("daily_loss_floor")
+    daily_loss_start_balance = current_daily.get("start_balance")
+    daily_realized_pnl = current_daily.get("realized_pnl", 0.0)
+    daily_loss_used_usd = current_daily.get("current_drawdown_usd", 0.0)
+    daily_loss_used_pct = (daily_loss_used_usd / daily_loss_limit * 100.0) if daily_loss_limit else 0.0
+    daily_loss_used_account_pct = (daily_loss_used_usd / initial_balance * 100.0) if initial_balance else 0.0
+    daily_loss_remaining = current_daily.get("remaining_usd")
+    daily_loss_breached = bool(current_daily.get("breached"))
+    historical_daily_loss_breached = bool(daily_loss_state.get("has_historical_breach"))
+
+    payout_target_pct = float(account.get("profit_target_pct") or 0.0)
+    payout_target_balance = initial_balance * (1 + payout_target_pct / 100.0) if payout_target_pct else None
+    current_profit = current_balance - initial_balance
+    payout_target_profit = (payout_target_balance - initial_balance) if payout_target_balance is not None else None
+    payout_progress_pct = (
+        max(0.0, min(100.0, current_profit / payout_target_profit * 100.0))
+        if payout_target_profit and payout_target_profit > 0
+        else 0.0
+    )
+    inactivity_limit_days = int(account.get("inactivity_limit_days") or 0)
+    last_trade_dt = max((_safe_ts(t.get("ts_close") or t.get("ts_open")) for t in closed_trades), default=None)
+    inactive_days = (datetime.now(timezone.utc).date() - last_trade_dt.date()).days if last_trade_dt else None
+    inactivity_remaining_days = (
+        max(0, inactivity_limit_days - (inactive_days or 0))
+        if inactivity_limit_days
+        else None
+    )
+
+    consistency_met = minimum_required_profit <= 0 or current_profit >= (minimum_required_profit - 1e-9)
+
+    payout_missing_requirements = []
+    if _is_ptb_lightning_funded(account):
+        if trading_days < 7:
+            payout_missing_requirements.append(f"Need {7 - trading_days} more trading day(s)")
+        if profitable_days < 7:
+            payout_missing_requirements.append(f"Need {7 - profitable_days} more profitable day(s) above 0.5%")
+        if payout_target_balance is not None and current_balance < payout_target_balance:
+            payout_missing_requirements.append(
+                f"Need {(payout_target_balance - current_balance):.2f} more {account.get('currency') or 'USD'} to reach 7% target"
+            )
+        if not consistency_met:
+            payout_missing_requirements.append(
+                f"Consistency rule still needs {(minimum_required_profit - current_profit):.2f} more {account.get('currency') or 'USD'}"
+            )
+        if static_drawdown_breached:
+            payout_missing_requirements.append("Static drawdown floor was breached")
+        if historical_daily_loss_breached:
+            payout_missing_requirements.append("Daily loss floor was breached")
+        if inactivity_limit_days and inactive_days is not None and inactive_days > inactivity_limit_days:
+            payout_missing_requirements.append("Inactivity limit exceeded")
+
+    is_ptb_lightning = _is_ptb_lightning_funded(account)
+    payout_ready = is_ptb_lightning and not payout_missing_requirements
+
+    return {
+        "template": account.get("rule_template"),
+        "is_ptb_lightning_funded": is_ptb_lightning,
+        "currency": account.get("currency") or "USD",
+        "trading_days": trading_days,
+        "min_trading_days": int(account.get("min_trading_days") or 0),
+        "trading_days_remaining": max(0, int(account.get("min_trading_days") or 0) - trading_days),
+        "profitable_days": profitable_days,
+        "min_profitable_days": int(account.get("min_profitable_days") or 0),
+        "profitable_days_remaining": max(0, int(account.get("min_profitable_days") or 0) - profitable_days),
+        "profitable_day_threshold_pct": profitable_day_threshold_pct,
+        "profitable_day_threshold_usd": profitable_day_threshold_usd,
+        "best_day_profit": best_day_profit,
+        "best_profitable_day": best_day_profit,
+        "consistency_pct": consistency_pct,
+        "minimum_required_profit": minimum_required_profit,
+        "consistency_met": consistency_met,
+        "payout_target_pct": payout_target_pct,
+        "payout_target_balance": payout_target_balance,
+        "payout_target_profit": payout_target_profit,
+        "payout_progress_pct": payout_progress_pct,
+        "static_drawdown_floor": static_drawdown_floor,
+        "static_drawdown_breached": static_drawdown_breached,
+        "static_drawdown_remaining": (current_balance - static_drawdown_floor) if static_drawdown_floor is not None else None,
+        "daily_loss_limit": daily_loss_limit,
+        "daily_loss_floor": daily_loss_floor,
+        "daily_loss_start_balance": daily_loss_start_balance,
+        "daily_realized_pnl": daily_realized_pnl,
+        "daily_loss_used_usd": daily_loss_used_usd,
+        "daily_loss_used_pct": daily_loss_used_pct,
+        "daily_loss_used_account_pct": daily_loss_used_account_pct,
+        "daily_loss_remaining": daily_loss_remaining,
+        "daily_loss_breached": daily_loss_breached,
+        "historical_daily_loss_breached": historical_daily_loss_breached,
+        "daily_loss_history": daily_loss_state.get("history", []),
+        "inactive_days": inactive_days,
+        "inactivity_limit_days": inactivity_limit_days,
+        "inactivity_remaining_days": inactivity_remaining_days,
+        "current_balance": current_balance,
+        "current_profit": current_profit,
+        "daily_pnl": float(stats.get("daily_pnl") or 0.0),
+        "payout_readiness": {
+            "eligible": payout_ready if is_ptb_lightning else None,
+            "status": "Eligible" if payout_ready else ("Not eligible" if is_ptb_lightning else "Not applicable"),
+            "missing_requirements": payout_missing_requirements if is_ptb_lightning else [],
+        },
+    }
+
+
 def _parse_account_id(value: Optional[str]) -> Optional[int]:
     if not value:
         return None
@@ -35,8 +199,10 @@ def _default_week_start_iso() -> str:
 
 
 def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts: Optional[str]) -> dict:
+    account = journal_db.get_account(account_id) if account_id else None
     stats = journal_db.get_stats(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     trades = journal_db.get_all_trades(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
+    rule_trades = journal_db.get_all_trades(account_id=account_id) if account_id else trades
     open_trades = [t for t in trades if t["outcome"] == "OPEN"]
     closed = [t for t in trades if t["outcome"] != "OPEN"]
 
@@ -51,7 +217,7 @@ def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts:
     by_symbol = {}
     by_outcome = {"TP": 0, "SL": 0, "MANUAL": 0}
     for t in closed:
-        session = t.get("session") or "unknown"
+        session = t.get("session") or "Unknown"
         by_session[session] = by_session.get(session, 0) + 1
         symbol = t["symbol"]
         by_symbol[symbol] = by_symbol.get(symbol, 0) + (t.get("pnl_pct") or 0)
@@ -64,17 +230,8 @@ def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts:
             day = t["ts_close"][:10]
             calendar[day] = calendar.get(day, 0.0) + float(t.get("pnl_usd") or 0.0)
 
-    # Trigger auto-analysis of direction correctness for closed trades
-    try:
-        journal_db.analyze_direction_correctness(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
-    except Exception as e:
-        print(f"⚠️ Auto-analysis failed: {e}")
-
     # Advanced Directional Analytics
     direction_stats = journal_db.get_analytics_breakdown(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
-    
-    # Direction Accuracy Stats
-    direction_accuracy = journal_db.get_direction_accuracy_stats(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     
     monte_carlo = journal_db.get_monte_carlo_stats(account_id=account_id, from_ts=from_ts, to_ts=to_ts)
     results = monte_carlo.get("results") or {}
@@ -88,8 +245,8 @@ def _dashboard_payload(account_id: Optional[int], from_ts: Optional[str], to_ts:
         "trades": sorted(trades, key=lambda x: x["ts_open"], reverse=True),
         "calendar": calendar,
         "analytics": direction_stats,
-        "direction_accuracy": direction_accuracy,
         "monte_carlo": monte_carlo,
+        "rule_progress": _build_rule_progress(account, rule_trades, stats),
         "distributions": {
             "session": by_session,
             "symbol_pnl": by_symbol,
@@ -188,6 +345,14 @@ def api_accounts_create():
         firm_name=body.get("firm_name", ""),
         broker=body.get("broker", ""),
         platform=body.get("platform", ""),
+        rule_template=body.get("rule_template"),
+        consistency_pct=float(body["consistency_pct"]) if body.get("consistency_pct") is not None else None,
+        min_trading_days=int(body["min_trading_days"]) if body.get("min_trading_days") is not None else None,
+        min_profitable_days=int(body["min_profitable_days"]) if body.get("min_profitable_days") is not None else None,
+        profitable_day_threshold_pct=float(body["profitable_day_threshold_pct"]) if body.get("profitable_day_threshold_pct") is not None else None,
+        static_drawdown_floor=float(body["static_drawdown_floor"]) if body.get("static_drawdown_floor") is not None else None,
+        inactivity_limit_days=int(body["inactivity_limit_days"]) if body.get("inactivity_limit_days") is not None else None,
+        payout_frequency_days=int(body["payout_frequency_days"]) if body.get("payout_frequency_days") is not None else None,
         timezone_name=body.get("timezone", "UTC"),
     )
     return jsonify({"account_id": account_id, "account": journal_db.get_account(account_id)}), 201
@@ -662,6 +827,30 @@ def api_account_update(account_id: int):
     if "platform" in body:
         updates.append("platform = ?")
         params.append(body["platform"])
+    if "rule_template" in body:
+        updates.append("rule_template = ?")
+        params.append(body["rule_template"])
+    if "consistency_pct" in body:
+        updates.append("consistency_pct = ?")
+        params.append(float(body["consistency_pct"]) if body["consistency_pct"] is not None else None)
+    if "min_trading_days" in body:
+        updates.append("min_trading_days = ?")
+        params.append(int(body["min_trading_days"]) if body["min_trading_days"] is not None else None)
+    if "min_profitable_days" in body:
+        updates.append("min_profitable_days = ?")
+        params.append(int(body["min_profitable_days"]) if body["min_profitable_days"] is not None else None)
+    if "profitable_day_threshold_pct" in body:
+        updates.append("profitable_day_threshold_pct = ?")
+        params.append(float(body["profitable_day_threshold_pct"]) if body["profitable_day_threshold_pct"] is not None else None)
+    if "static_drawdown_floor" in body:
+        updates.append("static_drawdown_floor = ?")
+        params.append(float(body["static_drawdown_floor"]) if body["static_drawdown_floor"] is not None else None)
+    if "inactivity_limit_days" in body:
+        updates.append("inactivity_limit_days = ?")
+        params.append(int(body["inactivity_limit_days"]) if body["inactivity_limit_days"] is not None else None)
+    if "payout_frequency_days" in body:
+        updates.append("payout_frequency_days = ?")
+        params.append(int(body["payout_frequency_days"]) if body["payout_frequency_days"] is not None else None)
     
     if updates:
         params.append(account_id)
@@ -672,13 +861,32 @@ def api_account_update(account_id: int):
         conn.commit()
     
     # Update rules if provided
-    if any(k in body for k in ["max_daily_loss_pct", "max_total_loss_pct", "profit_target_pct", "risk_per_trade_pct"]):
+    if any(k in body for k in [
+        "max_daily_loss_pct",
+        "max_total_loss_pct",
+        "profit_target_pct",
+        "risk_per_trade_pct",
+        "consistency_pct",
+        "min_trading_days",
+        "min_profitable_days",
+        "profitable_day_threshold_pct",
+        "static_drawdown_floor",
+        "inactivity_limit_days",
+        "payout_frequency_days",
+    ]):
         journal_db.update_account_rules(
             account_id=account_id,
             max_daily_loss_pct=float(body.get("max_daily_loss_pct", 5)),
             max_total_loss_pct=float(body.get("max_total_loss_pct", 10)),
             profit_target_pct=float(body.get("profit_target_pct", 10)),
             risk_per_trade_pct=float(body.get("risk_per_trade_pct", 1)),
+            consistency_pct=float(body["consistency_pct"]) if body.get("consistency_pct") is not None else None,
+            min_trading_days=int(body["min_trading_days"]) if body.get("min_trading_days") is not None else None,
+            min_profitable_days=int(body["min_profitable_days"]) if body.get("min_profitable_days") is not None else None,
+            profitable_day_threshold_pct=float(body["profitable_day_threshold_pct"]) if body.get("profitable_day_threshold_pct") is not None else None,
+            static_drawdown_floor=float(body["static_drawdown_floor"]) if body.get("static_drawdown_floor") is not None else None,
+            inactivity_limit_days=int(body["inactivity_limit_days"]) if body.get("inactivity_limit_days") is not None else None,
+            payout_frequency_days=int(body["payout_frequency_days"]) if body.get("payout_frequency_days") is not None else None,
         )
     
     conn.close()
@@ -734,7 +942,13 @@ def api_dashboard():
 @app.route("/api/trades")
 def api_trades():
     account_id = _parse_account_id(request.args.get("account_id"))
-    return jsonify(journal_db.get_all_trades(account_id=account_id))
+    return jsonify(
+        journal_db.get_all_trades(
+            account_id=account_id,
+            from_ts=request.args.get("from"),
+            to_ts=request.args.get("to"),
+        )
+    )
 
 
 @app.route("/api/trades/<int:trade_id>")

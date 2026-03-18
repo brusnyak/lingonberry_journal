@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Trading Session Detector
-Detects trading sessions (Asian, London, New York) based on timestamp
+Detects trading sessions (Asian, London, New York) based on timestamp.
 """
 from datetime import datetime, timezone
 from typing import Optional
@@ -25,16 +25,16 @@ def detect_session(ts: str) -> str:
         
         # Determine session based on hour
         if 0 <= hour < 8:
-            return "ASIAN"
+            return "Asian"
         elif 8 <= hour < 13:
-            return "LONDON"
+            return "London"
         elif 13 <= hour < 22:
-            return "NEW_YORK"
+            return "NY"
         else:
-            return "ASIAN"
+            return "Asian"
             
     except Exception:
-        return "UNKNOWN"
+        return "Unknown"
 
 
 def get_session_overlap(ts: str) -> Optional[str]:
@@ -53,9 +53,9 @@ def get_session_overlap(ts: str) -> Optional[str]:
         hour = dt.hour
         
         if 13 <= hour < 17:
-            return "LONDON_NY"
+            return "London/NY"
         elif 8 <= hour < 9:
-            return "ASIAN_LONDON"
+            return "Asian/London"
         else:
             return None
             

@@ -117,7 +117,7 @@
 
     .chart-container {
       position: relative;
-      height: 220px;
+      height: 300px;
       margin: 12px 0;
     }
 
@@ -162,6 +162,115 @@
       font-size: 10px;
       color: var(--text-muted);
       margin-top: 4px;
+    }
+
+    .funded-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .funded-card {
+      background: var(--panel-light);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      min-width: 0;
+    }
+
+    .funded-card.span-2 {
+      grid-column: span 2;
+    }
+
+    .funded-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+
+    .funded-value {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.05;
+      word-break: break-word;
+    }
+
+    .funded-value.sm {
+      font-size: 22px;
+    }
+
+    .funded-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+
+    .funded-progress {
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .funded-progress > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #38bdf8 0%, #6366f1 100%);
+    }
+
+    @media (max-width: 720px) {
+      .funded-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .funded-card.span-2 {
+        grid-column: span 1;
+      }
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .status-badge.eligible {
+      color: #052e16;
+      background: #6ee7b7;
+    }
+
+    .status-badge.ineligible {
+      color: #fee2e2;
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+
+    .blocker-list {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .blocker-item {
+      font-size: 12px;
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.18);
+      border-radius: 8px;
+      padding: 8px 10px;
     }
 
     .trade-notes {
@@ -543,6 +652,7 @@
           accountRulesDisplay.update(
             accountManager.currentAccount,
             data.stats,
+            data.rule_progress || {},
           );
         }
       } catch (err) {
@@ -591,6 +701,7 @@
       const analytics = data.analytics || {};
       const distributions = data.distributions || {};
       const openTrades = data.open_trades || [];
+      const ruleProgress = data.rule_progress || {};
 
       const netPnl = (stats.balance || 0) - (stats.initial_balance || 0);
       const netPnlClass = netPnl >= 0 ? "positive" : "negative";
@@ -723,6 +834,8 @@
                     </div>
                 </div>
 
+                ${renderFundedProgressCard(ruleProgress, stats)}
+
                 <!-- Equity Curve -->
                 <div class="card">
                     <div class="card-title">📊 Equity Curve</div>
@@ -749,7 +862,24 @@
                 </div>
             `;
 
-      createEquityChart("equityChart", equity);
+      const equityOverlays = [];
+      if (ruleProgress.payout_target_balance != null) {
+        equityOverlays.push({ label: "Payout Target", value: ruleProgress.payout_target_balance, color: "#38bdf8" });
+      }
+      if (ruleProgress.static_drawdown_floor != null) {
+        equityOverlays.push({ label: "Static DD Floor", value: ruleProgress.static_drawdown_floor, color: "#ef4444" });
+      }
+      if (ruleProgress.daily_loss_floor != null) {
+        equityOverlays.push({ label: "Daily Loss Floor", value: ruleProgress.daily_loss_floor, color: "#fb7185" });
+      }
+      if (ruleProgress.minimum_required_profit != null && ruleProgress.minimum_required_profit > 0) {
+        equityOverlays.push({
+          label: "Consistency Threshold",
+          value: (stats.initial_balance || 0) + ruleProgress.minimum_required_profit,
+          color: "#f59e0b"
+        });
+      }
+      createEquityChart("equityChart", equity, equityOverlays);
 
       if (openTrades.length > 0) {
         renderOpenTrades(openTrades);
@@ -760,6 +890,132 @@
       if (Object.keys(distributions.session || {}).length > 0) {
         renderSessionStats(distributions.session);
       }
+    }
+
+    function formatMoney(value) {
+      return Number(value || 0).toFixed(2);
+    }
+
+    function renderMetricCard(label, valueText, pct, metaText, extraClass = "", spanTwo = false) {
+      return `
+        <div class="funded-card ${spanTwo ? "span-2" : ""}">
+          <div class="funded-label">${label}</div>
+          <div class="funded-value ${extraClass}">${valueText}</div>
+          ${metaText ? `<div class="funded-meta">${metaText}</div>` : ""}
+          <div class="funded-progress"><span style="width: ${Math.max(0, Math.min(100, pct || 0))}%"></span></div>
+        </div>
+      `;
+    }
+
+    function renderFundedProgressCard(ruleProgress, stats) {
+      if (!ruleProgress?.is_ptb_lightning_funded) {
+        return "";
+      }
+
+      const readiness = ruleProgress.payout_readiness || {};
+      const currency = ruleProgress.currency || "USD";
+      const payoutPct = ruleProgress.payout_progress_pct || 0;
+      const staticDdBudget = Math.max(0, (stats.initial_balance || 0) - (ruleProgress.static_drawdown_floor || 0));
+      const staticBufferPct = staticDdBudget > 0
+        ? ((ruleProgress.current_balance || 0) - (ruleProgress.static_drawdown_floor || 0)) / staticDdBudget * 100
+        : 0;
+      const tradingDaysPct = ruleProgress.min_trading_days
+        ? ((ruleProgress.trading_days || 0) / ruleProgress.min_trading_days) * 100
+        : 0;
+      const profitableDaysPct = ruleProgress.min_profitable_days
+        ? ((ruleProgress.profitable_days || 0) / ruleProgress.min_profitable_days) * 100
+        : 0;
+      const consistencyPct = ruleProgress.minimum_required_profit > 0
+        ? ((ruleProgress.current_profit || 0) / ruleProgress.minimum_required_profit) * 100
+        : 100;
+      const inactivityPct = ruleProgress.inactivity_limit_days
+        ? ((ruleProgress.inactivity_remaining_days || 0) / ruleProgress.inactivity_limit_days) * 100
+        : 0;
+      const badgeClass = readiness.eligible ? "eligible" : "ineligible";
+      const blockers = readiness.missing_requirements || [];
+
+      return `
+        <div class="card">
+          <div class="card-title" style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+            <span>⚡ PTB Funded Progress</span>
+            <span class="status-badge ${badgeClass}">${readiness.status || (readiness.eligible ? "Eligible" : "Not eligible")}</span>
+          </div>
+          <div class="funded-grid">
+            ${renderMetricCard(
+              "Trading days",
+              `${ruleProgress.trading_days || 0} / ${ruleProgress.min_trading_days || 0}`,
+              tradingDaysPct,
+              `${ruleProgress.trading_days_remaining || 0} remaining`
+            )}
+            ${renderMetricCard(
+              "Profitable days",
+              `${ruleProgress.profitable_days || 0} / ${ruleProgress.min_profitable_days || 0}`,
+              profitableDaysPct,
+              `Threshold ${Number(ruleProgress.profitable_day_threshold_pct || 0).toFixed(1)}% (${formatMoney(ruleProgress.profitable_day_threshold_usd)} ${currency})`
+            )}
+            ${renderMetricCard(
+              "Payout target",
+              `${formatMoney(ruleProgress.current_profit)} / ${formatMoney(ruleProgress.payout_target_profit)} ${currency}`,
+              payoutPct,
+              `Balance ${formatMoney(ruleProgress.current_balance)} / ${formatMoney(ruleProgress.payout_target_balance)}`
+            )}
+            ${renderMetricCard(
+              "Consistency",
+              `${formatMoney(ruleProgress.best_profitable_day)} ${currency}`,
+              consistencyPct,
+              `Need at least ${formatMoney(ruleProgress.minimum_required_profit)} total profit`
+            )}
+            ${renderMetricCard(
+              "Inactivity countdown",
+              `${ruleProgress.inactivity_remaining_days ?? 0} day(s) left`,
+              inactivityPct,
+              `${ruleProgress.inactive_days ?? 0} / ${ruleProgress.inactivity_limit_days || 0} days idle`
+            )}
+            ${renderMetricCard(
+              "Static DD Floor",
+              `${formatMoney(ruleProgress.static_drawdown_floor)} ${currency}`,
+              staticBufferPct,
+              `Buffer ${formatMoney(ruleProgress.static_drawdown_remaining)} ${currency}`,
+              ruleProgress.static_drawdown_breached ? "negative sm" : "sm"
+            )}
+            ${renderMetricCard(
+              "Daily Loss Floor",
+              `${formatMoney(ruleProgress.daily_loss_floor)} ${currency}`,
+              100 - Number(ruleProgress.daily_loss_used_pct || 0),
+              `Day start ${formatMoney(ruleProgress.daily_loss_start_balance)} ${currency}`,
+              ruleProgress.daily_loss_breached ? "negative sm" : "sm"
+            )}
+            ${renderMetricCard(
+              "Best Profitable Day",
+              `${formatMoney(ruleProgress.best_profitable_day)} ${currency}`,
+              consistencyPct,
+              "Largest qualifying day so far",
+              "positive sm"
+            )}
+            ${renderMetricCard(
+              "Daily Loss Used",
+              `${formatMoney(ruleProgress.daily_loss_used_usd)} ${currency}`,
+              Number(ruleProgress.daily_loss_used_pct || 0),
+              `${Number(ruleProgress.daily_loss_used_pct || 0).toFixed(1)}% of daily limit`,
+              ruleProgress.daily_realized_pnl < 0 ? "negative sm" : "sm"
+            )}
+            ${blockers.length > 0 ? `
+              <div class="funded-card span-2">
+                <div class="funded-label">Blocking Rules</div>
+                <div class="blocker-list" style="margin-top: 0;">
+                  ${blockers.map((item) => `<div class="blocker-item">${item}</div>`).join("")}
+                </div>
+              </div>
+            ` : `
+              <div class="funded-card span-2">
+                <div class="funded-label">Readiness</div>
+                <div class="funded-value positive sm">All payout conditions met</div>
+                <div class="funded-meta">No remaining PTB blockers on the current account state.</div>
+              </div>
+            `}
+          </div>
+        </div>
+      `;
     }
 
     // Show trade detail modal

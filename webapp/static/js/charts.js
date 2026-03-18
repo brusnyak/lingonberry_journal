@@ -18,35 +18,90 @@ const CHART_COLORS = {
 /**
  * Create equity curve chart
  */
-function createEquityChart(canvasId, equityData) {
+function createEquityChart(canvasId, equityData, overlayLines = []) {
     const ctx = document.getElementById(canvasId);
     if (!ctx) return null;
 
-    const gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 220);
-    gradient.addColorStop(0, 'rgba(16, 185, 129, 0.3)');
+    const chart = Chart.getChart(ctx);
+    if (chart) {
+        chart.destroy();
+    }
+
+    const renderingContext = ctx.getContext('2d');
+    const gradient = renderingContext.createLinearGradient(0, 0, 0, 320);
+    gradient.addColorStop(0, 'rgba(16, 185, 129, 0.34)');
     gradient.addColorStop(1, 'rgba(16, 185, 129, 0)');
+
+    const labels = equityData.map((point, index) => {
+        if (!point.ts) return 'Start';
+        const date = new Date(point.ts);
+        if (Number.isNaN(date.getTime())) {
+            return point.ts.slice(5, 10);
+        }
+        return date.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric'
+        });
+    });
+
+    const balanceValues = equityData.map(p => Number(p.balance || 0));
+    const overlayValues = overlayLines
+        .filter(line => line?.value != null)
+        .map(line => Number(line.value));
+    const allValues = [...balanceValues, ...overlayValues].filter(value => Number.isFinite(value));
+    const minValue = allValues.length ? Math.min(...allValues) : 0;
+    const maxValue = allValues.length ? Math.max(...allValues) : 0;
+    const range = Math.max(1, maxValue - minValue);
+    const yPadding = Math.max(range * 0.12, Math.abs(maxValue) * 0.01, 50);
+
+    const datasets = [{
+        label: 'Balance',
+        data: balanceValues,
+        borderColor: CHART_COLORS.green,
+        backgroundColor: gradient,
+        borderWidth: 3,
+        fill: true,
+        tension: 0.25,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHitRadius: 18
+    }];
+
+    overlayLines.forEach((line) => {
+        if (line?.value == null) return;
+        datasets.push({
+            label: line.label,
+            data: labels.map(() => line.value),
+            borderColor: line.color || CHART_COLORS.accent,
+            borderWidth: line.width || 1.25,
+            borderDash: line.dash || [5, 5],
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            fill: false,
+            tension: 0
+        });
+    });
 
     return new Chart(ctx, {
         type: 'line',
         data: {
-            labels: equityData.map(p => p.ts ? p.ts.slice(5, 10) : 'Start'),
-            datasets: [{
-                label: 'Balance',
-                data: equityData.map(p => p.balance),
-                borderColor: CHART_COLORS.green,
-                backgroundColor: gradient,
-                borderWidth: 2,
-                fill: true,
-                tension: 0.4,
-                pointRadius: 0,
-                pointHoverRadius: 4
-            }]
+            labels,
+            datasets
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: { display: false },
+                legend: {
+                    display: datasets.length > 1,
+                    labels: {
+                        color: CHART_COLORS.textMuted,
+                        boxWidth: 18,
+                        boxHeight: 8,
+                        padding: 16,
+                        font: { size: 11 }
+                    }
+                },
                 tooltip: {
                     mode: 'index',
                     intersect: false,
@@ -56,7 +111,9 @@ function createEquityChart(canvasId, equityData) {
                     borderColor: CHART_COLORS.border,
                     borderWidth: 1,
                     padding: 12,
-                    displayColors: false
+                    callbacks: {
+                        label: (context) => `${context.dataset.label}: ${Number(context.parsed.y || 0).toLocaleString()}`
+                    }
                 }
             },
             scales: {
@@ -64,18 +121,21 @@ function createEquityChart(canvasId, equityData) {
                     grid: { display: false },
                     ticks: {
                         color: CHART_COLORS.textMuted,
-                        maxTicksLimit: 6,
+                        maxTicksLimit: 5,
                         font: { size: 11 }
                     }
                 },
                 y: {
+                    min: minValue - yPadding,
+                    max: maxValue + yPadding,
                     grid: {
                         color: CHART_COLORS.grid,
                         drawBorder: false
                     },
                     ticks: {
                         color: CHART_COLORS.textMuted,
-                        font: { size: 11 }
+                        font: { size: 11 },
+                        callback: (value) => Number(value).toLocaleString()
                     }
                 }
             },
@@ -83,6 +143,11 @@ function createEquityChart(canvasId, equityData) {
                 mode: 'nearest',
                 axis: 'x',
                 intersect: false
+            },
+            elements: {
+                line: {
+                    capBezierPoints: true
+                }
             }
         }
     });

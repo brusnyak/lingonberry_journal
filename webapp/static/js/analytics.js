@@ -4,7 +4,7 @@
  */
 
 let dateFilter;
-let currentDateRange = { from_ts: null, to_ts: null };
+let currentDateRange = {};
 let currentAccountId = null;
 
 // Listen for account changes
@@ -83,8 +83,6 @@ function renderAnalyticsPage(data, trades) {
     const stats = data.stats || {};
     const analytics = data.analytics || {};
     const distributions = data.distributions || {};
-    const directionAccuracy = data.direction_accuracy || {};
-
     document.getElementById('content').innerHTML = `
         <!-- Date Filter -->
         <div id="analyticsDateFilter"></div>
@@ -108,81 +106,6 @@ function renderAnalyticsPage(data, trades) {
                 </div>
             </div>
         </div>
-
-        <!-- Direction Accuracy Stats -->
-        ${directionAccuracy.total_analyzed > 0 ? `
-        <div class="panel">
-            <div class="panel-title">🎯 Direction Accuracy Analysis</div>
-            <div class="panel-subtitle">How often your market direction prediction was correct</div>
-            <div class="grid grid-3" style="margin-top: 15px;">
-                <div style="text-align: center;">
-                    <div style="color: var(--muted); font-size: 0.9em; margin-bottom: 5px;">Overall Accuracy</div>
-                    <div class="stat-value ${directionAccuracy.overall_accuracy >= 60 ? 'positive' : 'negative'}">
-                        ${directionAccuracy.overall_accuracy.toFixed(1)}%
-                    </div>
-                    <div style="color: var(--muted); font-size: 0.85em; margin-top: 5px;">
-                        ${directionAccuracy.correct_direction} / ${directionAccuracy.total_analyzed} trades
-                    </div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="color: var(--muted); font-size: 0.9em; margin-bottom: 5px;">Winning Trades</div>
-                    <div class="stat-value positive">
-                        ${directionAccuracy.win_accuracy.toFixed(1)}%
-                    </div>
-                    <div style="color: var(--muted); font-size: 0.85em; margin-top: 5px;">Direction correct on wins</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="color: var(--muted); font-size: 0.9em; margin-bottom: 5px;">Losing Trades</div>
-                    <div class="stat-value ${directionAccuracy.loss_accuracy >= 40 ? 'warning' : 'negative'}">
-                        ${directionAccuracy.loss_accuracy.toFixed(1)}%
-                    </div>
-                    <div style="color: var(--muted); font-size: 0.85em; margin-top: 5px;">
-                        ${directionAccuracy.loss_accuracy >= 40 ? 'Execution issue - direction was right!' : 'Direction prediction needs work'}
-                    </div>
-                </div>
-            </div>
-            <div style="margin-top: 15px; padding: 10px; background: var(--bg-secondary); border-radius: 6px;">
-                <div style="display: flex; justify-content: space-around; text-align: center;">
-                    <div>
-                        <div style="color: var(--muted); font-size: 0.85em;">LONG Accuracy</div>
-                        <div style="font-size: 1.1em; margin-top: 3px;">
-                            ${directionAccuracy.by_direction.long.accuracy.toFixed(1)}%
-                        </div>
-                        <div style="color: var(--muted); font-size: 0.8em;">
-                            (${directionAccuracy.by_direction.long.correct}/${directionAccuracy.by_direction.long.total})
-                        </div>
-                    </div>
-                    <div>
-                        <div style="color: var(--muted); font-size: 0.85em;">SHORT Accuracy</div>
-                        <div style="font-size: 1.1em; margin-top: 3px;">
-                            ${directionAccuracy.by_direction.short.accuracy.toFixed(1)}%
-                        </div>
-                        <div style="color: var(--muted); font-size: 0.8em;">
-                            (${directionAccuracy.by_direction.short.correct}/${directionAccuracy.by_direction.short.total})
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div style="margin-top: 10px; text-align: center;">
-                <button onclick="analyzeDirectionForAllTrades()" class="btn-secondary" style="padding: 8px 16px;">
-                    🔄 Analyze Recent Trades
-                </button>
-            </div>
-        </div>
-        ` : `
-        <div class="panel">
-            <div class="panel-title">🎯 Direction Accuracy Analysis</div>
-            <div class="panel-subtitle">Analyze if your market direction predictions were correct</div>
-            <div style="text-align: center; padding: 30px;">
-                <p style="color: var(--muted); margin-bottom: 15px;">
-                    No trades have been analyzed yet. Click below to analyze your losing trades and see if the direction was correct.
-                </p>
-                <button onclick="analyzeDirectionForAllTrades()" class="btn-primary" style="padding: 10px 20px;">
-                    🔍 Analyze Direction Accuracy
-                </button>
-            </div>
-        </div>
-        `}
 
         <!-- Time Heatmap -->
         <div class="panel">
@@ -414,6 +337,17 @@ function renderRRDistribution(trades) {
         return;
     }
 
+    const calculateRR = (trade) => {
+        const entry = parseFloat(trade.entry_price ?? trade.entry);
+        const sl = parseFloat(trade.sl_price ?? trade.sl);
+        const tp = parseFloat(trade.tp_price ?? trade.tp);
+        if (!Number.isFinite(entry) || !Number.isFinite(sl) || !Number.isFinite(tp)) return null;
+        const risk = Math.abs(entry - sl);
+        const reward = Math.abs(tp - entry);
+        if (risk <= 0 || reward <= 0) return null;
+        return reward / risk;
+    };
+
     // Calculate RR buckets
     const buckets = {
         '<1': 0,
@@ -432,7 +366,8 @@ function renderRRDistribution(trades) {
     };
 
     trades.forEach(trade => {
-        const rr = trade.rr_ratio || 0;
+        const rr = calculateRR(trade);
+        if (rr == null) return;
         const isWin = (trade.pnl_usd || 0) > 0;
 
         if (rr < 1) {
@@ -819,60 +754,5 @@ async function renderMonteCarloProjections() {
     } catch (err) {
         console.error('Error loading Monte Carlo:', err);
         container.innerHTML = '<p style="color: var(--red); text-align: center; padding: 20px;">Error loading Monte Carlo projections. Check console for details.</p>';
-    }
-}
-
-/**
- * Analyze direction correctness for all trades
- */
-async function analyzeDirectionForAllTrades() {
-    try {
-        const button = event.target;
-        button.disabled = true;
-        button.innerHTML = '⏳ Analyzing...';
-
-        const params = new URLSearchParams();
-        if (currentAccountId) {
-            params.append('account_id', currentAccountId);
-        }
-        if (currentDateRange.from) {
-            params.append('from', currentDateRange.from);
-        }
-        if (currentDateRange.to) {
-            params.append('to', currentDateRange.to);
-        }
-
-        const response = await fetch('/api/analytics/analyze-direction', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                account_id: currentAccountId,
-                from: currentDateRange.from,
-                to: currentDateRange.to,
-            }),
-        });
-
-        const result = await response.json();
-
-        if (result.error) {
-            alert('Error: ' + result.error);
-            button.disabled = false;
-            button.innerHTML = '🔄 Analyze Recent Trades';
-            return;
-        }
-
-        // Show success message
-        alert(`✅ Analysis complete!\n\nAnalyzed: ${result.analyzed} trades\nUpdated: ${result.updated} trades`);
-
-        // Reload analytics to show updated stats
-        loadAnalytics(currentDateRange);
-
-    } catch (err) {
-        console.error('Error analyzing direction:', err);
-        alert('Error analyzing trades. Check console for details.');
-        button.disabled = false;
-        button.innerHTML = '🔄 Analyze Recent Trades';
     }
 }
