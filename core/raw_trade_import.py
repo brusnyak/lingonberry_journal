@@ -21,8 +21,8 @@ PLATFORM_PATTERN = re.compile(
     r"(?P<side>Buy|Sell)\s+"
     r"(?P<amount>[\d.]+)\s+"
     r"(?P<entry>[\d,\.]+)\s+"
-    r"(?P<sl>[\d,\.]+)\s+"
-    r"(?P<tp>[\d,\.]+)\s+"
+    r"(?P<sl>[\d,\.\-]+)\s+"
+    r"(?P<tp>[\d,\.\-]+)\s+"
     r"(?P<exit_dt>\d{4}[/-]\d{2}[/-]\d{2}\s+\d{2}:\d{2}:\d{2})\s+"
     r"(?P<exit>[\d,\.]+)\s+"
     r"(?P<fee>[-$\d,\.]+)\s+"
@@ -43,7 +43,7 @@ def _parse_price(value: str) -> Optional[float]:
     if value is None:
         return None
     v = value.replace(",", "").replace("$", "").strip()
-    if not v:
+    if not v or v == "-":
         return None
     try:
         return float(v)

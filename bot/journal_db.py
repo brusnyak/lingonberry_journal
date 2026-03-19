@@ -536,6 +536,16 @@ def create_trade(
     conn = get_connection()
     cursor = conn.cursor()
     trade_columns = _table_columns(conn, "trades")
+    if external_id:
+        cursor.execute(
+            "SELECT id FROM trades WHERE account_id = ? AND external_id = ?",
+            (account_id, external_id)
+        )
+        existing = cursor.fetchone()
+        if existing:
+            conn.close()
+            return None
+
     row = {
         "account_id": account_id,
         "symbol": symbol,

@@ -731,13 +731,24 @@ def api_trades_import_raw():
         if not raw_text.strip():
             return jsonify({"error": "Missing raw trade text"}), 400
 
-        account_id = _parse_account_id(request.args.get("account_id"))
-        if not account_id:
-            account_id = int(body.get("account_id", 1))
+        account_ids = body.get("account_ids", [])
+        if not account_ids: # If account_ids list is empty, try single account_id
+            single_account_id = _parse_account_id(request.args.get("account_id"))
+            if not single_account_id:
+                single_account_id = int(body.get("account_id", 1))
+            account_ids = [single_account_id]
+        
+        # Filter out None values and ensure all are integers
+        account_ids = [int(aid) for aid in account_ids if aid is not None]
+        
+        if not account_ids:
+            return jsonify({"error": "No account_id(s) provided"}), 400
 
-        account = journal_db.get_account(account_id)
-        if not account:
-            return jsonify({"error": "Account not found", "account_id": account_id}), 404
+        # Verify all accounts exist
+        for aid in account_ids:
+            account = journal_db.get_account(aid)
+            if not account:
+                return jsonify({"error": f"Account not found: {aid}"}), 404
 
         tz_offset = int(body.get("timezone_offset_hours", 2))
         timeframe = body.get("timeframe", "M30")
@@ -748,46 +759,56 @@ def api_trades_import_raw():
 
         imported = []
         skipped = 0
-        for t in trades:
-            try:
-                trade_id = journal_db.create_trade(
-                    account_id=account_id,
-                    symbol=t["symbol"],
-                    direction=t["direction"],
-                    entry_price=t["entry_price"],
-                    position_size=t.get("lots", 0.1),
-                    ts_open=t["ts_open"],
-                    sl_price=t.get("sl"),
-                    tp_price=t.get("tp"),
-                    timeframe=timeframe,
-                    notes=t.get("notes"),
-                    external_id=t.get("external_id"),
-                    provider="import_api",
-                )
+        already_existed = 0
+        
+        for aid in account_ids:
+            for t in trades:
+                try:
+                    trade_id = journal_db.create_trade(
+                        account_id=aid,
+                        symbol=t["symbol"],
+                        direction=t["direction"],
+                        entry_price=t["entry_price"],
+                        position_size=t.get("lots", 0.1),
+                        ts_open=t["ts_open"],
+                        sl_price=t.get("sl"),
+                        tp_price=t.get("tp"),
+                        timeframe=timeframe,
+                        notes=t.get("notes"),
+                        external_id=t.get("external_id"),
+                        provider="import_api",
+                    )
 
-                journal_db.close_trade(
-                    trade_id=trade_id,
-                    exit_price=t["exit_price"],
-                    outcome=t.get("outcome", "MANUAL"),
-                    event_type="import",
-                    provider="import_api",
-                    payload=t,
-                    ts_close=t.get("ts_close"),
-                    pnl_usd_override=t.get("pnl_usd"),
-                )
+                    if trade_id is None:
+                        already_existed += 1
+                        continue
 
-                imported.append({
-                    "trade_id": trade_id,
-                    "symbol": t["symbol"],
-                    "ts_open": t["ts_open"],
-                })
-            except Exception:
-                skipped += 1
+                    journal_db.close_trade(
+                        trade_id=trade_id,
+                        exit_price=t["exit_price"],
+                        outcome=t.get("outcome", "MANUAL"),
+                        event_type="import",
+                        provider="import_api",
+                        payload=t,
+                        ts_close=t.get("ts_close"),
+                        pnl_usd_override=t.get("pnl_usd"),
+                    )
+
+                    imported.append({
+                        "trade_id": trade_id,
+                        "account_id": aid,
+                        "symbol": t["symbol"],
+                        "ts_open": t["ts_open"],
+                    })
+                except Exception as e:
+                    print(f"⚠️ Error importing trade: {e}")
+                    skipped += 1
 
         return jsonify({
             "imported": imported,
             "imported_count": len(imported),
             "skipped": skipped,
+            "already_existed": already_existed,
         })
     except Exception as e:
         import traceback

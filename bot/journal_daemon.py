@@ -86,9 +86,26 @@ def _parse_float(value: str) -> Optional[float]:
         return None
 
 
-def _current_account() -> Optional[Dict[str, Any]]:
+def _get_selected_account_ids(context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> list[int]:
+    """Get IDs of currently selected accounts for the bot."""
+    if context and "selected_account_ids" in context.user_data:
+        s_ids = context.user_data["selected_account_ids"]
+        if s_ids:
+            return s_ids
+            
     accounts = journal_db.get_accounts()
-    return accounts[0] if accounts else None
+    if not accounts:
+        return []
+        
+    # Default to the first account if none selected
+    return [accounts[0]["id"]]
+
+def _current_account(context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> Optional[Dict[str, Any]]:
+    """Legacy helper for single-account operations. Returns the first selected account."""
+    ids = _get_selected_account_ids(context)
+    if not ids:
+        return None
+    return journal_db.get_account(ids[0])
 
 
 def _journal_prompt(step: str, data: Dict[str, Any]) -> str:
@@ -131,24 +148,34 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
 
-    account = _current_account()
-    balance = "N/A"
-    if account:
-        stats = journal_db.get_stats(account_id=account["id"])
-        balance = f"{account['currency']} {stats['balance']:.2f}"
+    ids = _get_selected_account_ids(context)
+    active_names = []
+    total_balance = 0.0
+    currency = "USD"
+    
+    for aid in ids:
+        acc = journal_db.get_account(aid)
+        if acc:
+            active_names.append(acc["name"])
+            stats = journal_db.get_stats(account_id=aid)
+            total_balance += stats["balance"]
+            currency = acc["currency"]
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=_webapp_full_url()))],
+        [InlineKeyboardButton("🔄 Switch / Select Accounts", callback_data="select_accounts:init")],
     ])
     await update.message.reply_text(
         "👋 Welcome back!\n\n"
-        f"💼 {account['name'] if account else 'No account'} | Balance: {balance}\n\n"
+        f"💼 {', '.join(active_names) if active_names else 'No account selected'}\n"
+        f"💰 Total Balance: {currency} {total_balance:.2f}\n\n"
         "Commands:\n"
         "/journal — Log a new trade\n"
         "/stats — View performance stats\n"
         "/report — Open Dashboard\n"
         "/mini — Setup Mini App Button\n"
         "/dump — Paste trade logs (Prop/Platform)\n"
+        "/select — Select active accounts\n"
         "/cancel — Cancel current journal flow",
         reply_markup=keyboard,
     )
@@ -186,21 +213,21 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    account = _current_account()
-    if not account:
+    account_ids = _get_selected_account_ids(context)
+    if not account_ids:
         await update.message.reply_text("❌ No account found to import into.")
         return
 
     payload = {
         "text": raw_text,
-        "account_id": account["id"],
+        "account_ids": account_ids,
         "timezone_offset_hours": 2,
         "timeframe": "M30",
     }
 
     try:
-        url = f"{_api_base()}/api/trades/import_raw?account_id={account['id']}"
-        logger.info(f"Importing raw trades to {url}")
+        url = f"{_api_base()}/api/trades/import_raw"
+        logger.info(f"Importing raw trades for accounts {account_ids} to {url}")
         req = urlrequest.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
@@ -215,17 +242,17 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         data = json.loads(body) if body else {}
         imported = data.get("imported_count", 0)
         skipped = data.get("skipped", 0)
+        existed = data.get("already_existed", 0)
         
-        if imported > 0:
-            await update.message.reply_text(
-                f"✅ Imported {imported} trades into {account['name']}.\n"
-                f"Skipped: {skipped}"
-            )
-        else:
-            await update.message.reply_text(
-                f"⚠️ No new trades were imported.\n"
-                f"Check the logs for detail. (Skipped: {skipped})"
-            )
+        account_names = [journal_db.get_account(aid)["name"] for aid in account_ids]
+        
+        msg = f"✅ Processed {len(account_ids)} accounts: {', '.join(account_names)}\n\n"
+        msg += f"📥 Imported: {imported}\n"
+        if existed > 0:
+            msg += f"🔁 Already existed: {existed}\n"
+        msg += f"⏭️ Skipped (errors): {skipped}"
+        
+        await update.message.reply_text(msg)
             
     except HTTPError as exc:
         details = exc.read().decode("utf-8") if exc.fp else ""
@@ -529,6 +556,63 @@ async def daily_reminder_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             "👋 See you tomorrow! Trade safe."
         )
+    elif callback_data == "select_accounts:init":
+        await _send_account_selection(update, context, is_edit=True)
+    elif callback_data.startswith("select_acc:"):
+        await _handle_account_selection_callback(update, context)
+
+async def select_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ You are not authorized to use this bot.")
+        return
+    await _send_account_selection(update, context)
+
+async def _send_account_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, is_edit: bool = False):
+    accounts = journal_db.get_accounts()
+    if not accounts:
+        msg = "No accounts found."
+        if is_edit: await update.callback_query.edit_message_text(msg)
+        else: await update.message.reply_text(msg)
+        return
+
+    selected_ids = _get_selected_account_ids(context)
+    buttons = []
+    for acc in accounts:
+        is_selected = acc["id"] in selected_ids
+        status = "✅ " if is_selected else ""
+        buttons.append([InlineKeyboardButton(f"{status}{acc['name']} ({acc['currency']})", callback_data=f"select_acc:{acc['id']}")])
+    
+    buttons.append([InlineKeyboardButton("Done", callback_data="select_acc:done")])
+    
+    msg = "Select accounts for trade logging (multiple allowed for /dump):"
+    reply_markup = InlineKeyboardMarkup(buttons)
+    
+    if is_edit:
+        await update.callback_query.edit_message_text(msg, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(msg, reply_markup=reply_markup)
+
+async def _handle_account_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    
+    action = query.data.split(":")[1]
+    if action == "done":
+        ids = _get_selected_account_ids(context)
+        names = [journal_db.get_account(aid)["name"] for aid in ids]
+        await query.edit_message_text(f"✅ Accounts updated: {', '.join(names)}")
+        return
+        
+    acc_id = int(action)
+    selected_ids = list(_get_selected_account_ids(context))
+    if acc_id in selected_ids:
+        if len(selected_ids) > 1:
+            selected_ids.remove(acc_id)
+    else:
+        selected_ids.append(acc_id)
+        
+    context.user_data["selected_account_ids"] = selected_ids
+    await _send_account_selection(update, context, is_edit=True)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -554,8 +638,9 @@ def main() -> None:
     application.add_handler(CommandHandler("close", close_command))
     application.add_handler(CommandHandler("weekly", weekly_command))
     application.add_handler(CommandHandler("dump", import_command))
-    application.add_handler(CommandHandler("import", import_command)) # Keep legacy for now
-    application.add_handler(CallbackQueryHandler(daily_reminder_callback, pattern="^daily_reminder:"))
+    application.add_handler(CommandHandler("import", import_command)) 
+    application.add_handler(CommandHandler("select", select_command))
+    application.add_handler(CallbackQueryHandler(daily_reminder_callback, pattern="^(daily_reminder:|select_accounts:|select_acc:)"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     application.add_error_handler(error_handler)
 
@@ -571,6 +656,7 @@ def main() -> None:
             BotCommand("report",  "Open the trading dashboard"),
             BotCommand("mini",    "Add Mini App button to keyboard"),
             BotCommand("dump",    "Import raw trade logs"),
+            BotCommand("select",  "Select active accounts"),
             BotCommand("weekly",  "Weekly performance review"),
             BotCommand("cancel",  "Cancel current journal flow"),
         ])
