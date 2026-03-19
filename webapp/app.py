@@ -8,7 +8,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_from_dir
 from flask_cors import CORS
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from bot import journal_db, chart_generator
+from bot import journal_db
 from core.exporter import export_ml_dataset
 from core.raw_trade_import import parse_raw_trades
 from infra.market_data import get_timeframe_for_asset, load_ohlcv_with_cache, replay_window
@@ -691,8 +691,6 @@ def api_trades_manual():
                 
                 chart_paths = [filepath]
                 
-                # Update trade with chart path
-                journal_db.update_trade_chart_path(trade_id, filename)
                 print(f"✅ Screenshot saved for trade {trade_id}: {filename} ({len(screenshot_data)} bytes)")
                 
             except Exception as e:
