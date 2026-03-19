@@ -198,29 +198,45 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "timeframe": "M30",
     }
 
-    url = f"{_api_base()}/api/trades/import_raw?account_id={account['id']}"
-    req = urlrequest.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
     try:
+        url = f"{_api_base()}/api/trades/import_raw?account_id={account['id']}"
+        logger.info(f"Importing raw trades to {url}")
+        req = urlrequest.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
         with urlrequest.urlopen(req, timeout=25) as resp:
             body = resp.read().decode("utf-8")
+        
+        logger.info(f"Import response: {body}")
         data = json.loads(body) if body else {}
         imported = data.get("imported_count", 0)
         skipped = data.get("skipped", 0)
-        await update.message.reply_text(
-            f"✅ Imported {imported} trades into {account['name']}.\n"
-            f"Skipped: {skipped}"
-        )
+        
+        if imported > 0:
+            await update.message.reply_text(
+                f"✅ Imported {imported} trades into {account['name']}.\n"
+                f"Skipped: {skipped}"
+            )
+        else:
+            await update.message.reply_text(
+                f"⚠️ No new trades were imported.\n"
+                f"Check the logs for detail. (Skipped: {skipped})"
+            )
+            
     except HTTPError as exc:
         details = exc.read().decode("utf-8") if exc.fp else ""
+        logger.error(f"Import HTTP error {exc.code}: {details}")
         await update.message.reply_text(f"❌ Import failed: {exc.code}\n{details}")
     except URLError as exc:
-        await update.message.reply_text(f"❌ Import failed: {exc}")
+        logger.error(f"Import URL error: {exc}")
+        await update.message.reply_text(f"❌ Import failed: Connection error. Make sure the webapp is running.")
+    except Exception as exc:
+        logger.exception("Unexpected error during import")
+        await update.message.reply_text(f"❌ An unexpected error occurred: {exc}")
 
 
 async def journal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

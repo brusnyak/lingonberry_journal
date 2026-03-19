@@ -1225,10 +1225,25 @@
 
       // Listen for account changes
       window.addEventListener("accountChanged", () => {
+        console.log("📊 Account changed event received, reloading dashboard...");
         loadDashboard(false, currentDashboardDateRange);
       });
 
-      showPage(initialPage);
+      // Special handling for initial load: wait for accountManager to find current account
+      const checkAccountReady = setInterval(() => {
+        if (window.accountManager && window.accountManager.currentAccount) {
+          clearInterval(checkAccountReady);
+          console.log("✅ AccountManager ready, showing initial page:", initialPage);
+          showPage(initialPage);
+        } else if (window.accountManager && window.accountManager.accounts.length === 0) {
+          // No accounts at all, show page anyway (it will show empty state)
+          clearInterval(checkAccountReady);
+          showPage(initialPage);
+        }
+      }, 100);
+      
+      // Safety timeout
+      setTimeout(() => clearInterval(checkAccountReady), 5000);
     });
 
     // Auto-refresh every 30 seconds if in Telegram
