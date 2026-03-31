@@ -80,6 +80,7 @@ cleanup_legacy_processes() {
     echo "Cleaning up legacy processes..."
     pkill -f "python3 bot/journal_daemon.py" || true
     pkill -f "python3 webapp/app.py" || true
+    pkill -f "gunicorn .*webapp.app:app" || true
     pkill -f "python3 jobs/ctrader_sync.py continuous" || true
     pkill -f "python3 jobs/sltp_poller.py continuous" || true
     screen -S journal_bot -X quit || true

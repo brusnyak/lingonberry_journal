@@ -111,7 +111,7 @@ python3 -c "from bot import journal_db; journal_db.init_db()"
 
 ## Step 5: Setup as System Service
 
-Do not run the app with `nohup`, `screen`, or manual `python ... &` on the server. That creates duplicate pollers and fake restarts. Install the bundled systemd units instead:
+Do not run the app with `nohup`, `screen`, or manual `python ... &` on the server. That creates duplicate pollers and fake restarts. Install the bundled systemd units instead. The web service runs under `gunicorn`, not Flask's development server:
 
 ```bash
 bash scripts/install_systemd.sh --enable --restart

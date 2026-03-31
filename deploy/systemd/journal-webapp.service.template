@@ -9,8 +9,9 @@ User=@APP_USER@
 Group=@APP_USER@
 WorkingDirectory=@APP_DIR@
 Environment=PYTHONUNBUFFERED=1
+Environment=WEBAPP_PORT=5000
 EnvironmentFile=-@APP_DIR@/.env
-ExecStart=@APP_DIR@/.venv/bin/python3 webapp/app.py
+ExecStart=@APP_DIR@/.venv/bin/gunicorn --workers 2 --threads 4 --timeout 120 --bind 0.0.0.0:${WEBAPP_PORT} webapp.app:app
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
