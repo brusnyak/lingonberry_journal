@@ -107,85 +107,30 @@ nano .env
 
 # 5. Initialize database
 python3 -c "from bot import journal_db; journal_db.init_db()"
-
-# 6. Test it works
-python3 webapp/app.py &
-python3 bot/journal_daemon.py &
-# Visit: http://YOUR_IP:5000/mini
-# Should see dashboard
-
-# Kill test processes
-pkill -f "python3 webapp/app.py"
-pkill -f "python3 bot/journal_daemon.py"
 ```
 
 ## Step 5: Setup as System Service
 
-Create systemd services for auto-start and restart:
-
-### Bot Service:
+Do not run the app with `nohup`, `screen`, or manual `python ... &` on the server. That creates duplicate pollers and fake restarts. Install the bundled systemd units instead:
 
 ```bash
-sudo nano /etc/systemd/system/journal-bot.service
-```
-
-```ini
-[Unit]
-Description=Trading Journal Telegram Bot
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/lingonberry_journal
-Environment="PATH=/home/ubuntu/lingonberry_journal/.venv/bin"
-ExecStart=/home/ubuntu/lingonberry_journal/.venv/bin/python3 bot/journal_daemon.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Webapp Service:
-
-```bash
-sudo nano /etc/systemd/system/journal-webapp.service
-```
-
-```ini
-[Unit]
-Description=Trading Journal Web Application
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/lingonberry_journal
-Environment="PATH=/home/ubuntu/lingonberry_journal/.venv/bin"
-ExecStart=/home/ubuntu/lingonberry_journal/.venv/bin/python3 webapp/app.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Enable and start services:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable journal-bot journal-webapp
-sudo systemctl start journal-bot journal-webapp
+bash scripts/install_systemd.sh --enable --restart
 
 # Check status
-sudo systemctl status journal-bot
-sudo systemctl status journal-webapp
+bash scripts/manage.sh status
 
 # View logs
-sudo journalctl -u journal-bot -f
-sudo journalctl -u journal-webapp -f
+bash scripts/manage.sh logs bot
+bash scripts/manage.sh logs webapp
 ```
+
+This installs and manages:
+- `journal-bot.service`
+- `journal-webapp.service`
+- `journal-ctrader-sync.service`
+- `journal-sltp-poller.service`
+
+After that, `bash scripts/manage.sh ...` automatically delegates to `systemd` on the server.
 
 ## Step 6: Setup Nginx Reverse Proxy (Optional but Recommended)
 
@@ -245,7 +190,7 @@ WEBAPP_URL=https://journal.yourdomain.com/mini
 
 Then restart bot:
 ```bash
-sudo systemctl restart journal-bot
+bash scripts/manage.sh restart bot
 ```
 
 ## Step 9: Test Everything
@@ -257,6 +202,18 @@ sudo systemctl restart journal-bot
 5. **Check dashboard**: Should see your trade in the Mini App
 
 ## Maintenance
+
+For future updates:
+
+```bash
+cd ~/lingonberry_journal
+git pull --ff-only origin main
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 -c "from bot import journal_db; journal_db.init_db()"
+bash scripts/install_systemd.sh --enable --restart
+bash scripts/manage.sh status
+```
 
 ### Update code:
 

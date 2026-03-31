@@ -31,8 +31,10 @@ make run-bot
 make run-all
 bash scripts/manage.sh status
 # stop when done:
-bash scripts/manage.sh stop-all
+bash scripts/manage.sh stop all
 ```
+
+On Linux servers with installed journal systemd units, the same `manage.sh` commands automatically use `systemd` instead of local `nohup` processes.
 
 ## 6) Trigger SL/TP poll check manually
 

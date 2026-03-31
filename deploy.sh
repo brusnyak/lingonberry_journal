@@ -86,17 +86,21 @@ restart_with_manage() {
 
 restart_with_systemd() {
     echo "🔄 Restarting app via systemd..."
-    sudo systemctl daemon-reload
-    sudo systemctl enable journal-bot journal-webapp journal-ctrader-refresh.timer nginx >/dev/null 2>&1 || true
+    bash scripts/install_systemd.sh --enable --restart
     sudo nginx -t
-    sudo systemctl restart nginx journal-bot journal-webapp journal-ctrader-refresh.timer
-    sudo systemctl --no-pager --full status journal-bot journal-webapp nginx | head -20
+    sudo systemctl restart nginx
+    sudo systemctl --no-pager --full status \
+        journal-bot.service \
+        journal-webapp.service \
+        journal-ctrader-sync.service \
+        journal-sltp-poller.service \
+        nginx | head -40
 }
 
-if [ -f scripts/manage.sh ]; then
-    restart_with_manage
-elif systemctl list-unit-files | grep -q '^journal-webapp.service'; then
+if command -v systemctl >/dev/null 2>&1 && [ -f scripts/install_systemd.sh ]; then
     restart_with_systemd
+elif [ -f scripts/manage.sh ]; then
+    restart_with_manage
 else
     echo "⚠️ No known service manager found; app files updated but processes were not restarted."
 fi
