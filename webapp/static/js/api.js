@@ -49,7 +49,7 @@ class APIClient {
      */
     async fetch(endpoint, options = {}) {
         const useCache = options.cache !== false;
-        const cacheKey = endpoint;
+        const cacheKey = options.cacheKey || endpoint;
 
         // Try cache first
         if (useCache) {
@@ -88,7 +88,6 @@ class APIClient {
     async getDashboard(params = {}) {
         const query = new URLSearchParams(params).toString();
         const endpoint = `/dashboard${query ? '?' + query : ''}`;
-        // Include account_id in cache key to avoid showing wrong account data
         const cacheKey = endpoint;
         return this.fetch(endpoint, { cacheKey });
     }
@@ -99,7 +98,6 @@ class APIClient {
     async getTrades(params = {}) {
         const query = new URLSearchParams(params).toString();
         const endpoint = `/trades${query ? '?' + query : ''}`;
-        // Include account_id in cache key
         const cacheKey = endpoint;
         return this.fetch(endpoint, { cacheKey });
     }

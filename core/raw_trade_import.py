@@ -39,6 +39,10 @@ def _clean_text(text: str) -> str:
     return text.replace("\u00a0", " ").replace("\t", " ")
 
 
+def _strip_leading_command(text: str) -> str:
+    return re.sub(r"^\s*/(?:dump|import)\b", "", text.strip(), flags=re.IGNORECASE)
+
+
 def _parse_price(value: str) -> Optional[float]:
     if value is None:
         return None
@@ -88,11 +92,13 @@ def _infer_outcome(trade_type: str, direction: str, entry: float, exit_price: fl
 
 
 def parse_trade_platform(text: str, tz_offset_hours: int) -> List[Dict]:
-    cleaned = _clean_text(text)
+    cleaned = _strip_leading_command(_clean_text(text))
     lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
-    lines = [ln for ln in lines if ln.lower() != "currency flag"]
+    ignored_lines = {"currency flag", "actions"}
+    lines = [ln for ln in lines if ln.lower() not in ignored_lines]
     joined = " ".join(lines)
-    joined = re.sub(r"Instrument\s+Entry\s+Time.*?Position\s+ID", "", joined, flags=re.IGNORECASE)
+    joined = re.sub(r"\b[nN]?strument\s+Entry\s+Time.*?Position\s+ID", "", joined, flags=re.IGNORECASE)
+    joined = re.sub(r"\s+", " ", joined).strip()
 
     trades = []
     for match in PLATFORM_PATTERN.finditer(joined):
@@ -132,13 +138,13 @@ def parse_trade_platform(text: str, tz_offset_hours: int) -> List[Dict]:
 
 
 def parse_prop_firm(text: str, tz_offset_hours: int) -> List[Dict]:
-    cleaned = _clean_text(text)
+    cleaned = _strip_leading_command(_clean_text(text))
     lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
     filtered = []
     for ln in lines:
         if ln.upper() in PROP_HEADERS:
             continue
-        if ln.lower() == "currency flag":
+        if ln.lower() in {"currency flag", "actions"}:
             continue
         filtered.append(ln)
 
@@ -198,4 +204,5 @@ def parse_raw_trades(text: str, tz_offset_hours: int = 2) -> List[Dict]:
         seen.add(key)
         combined.append(t)
 
+    combined.sort(key=lambda trade: trade.get("ts_open") or "", reverse=True)
     return combined

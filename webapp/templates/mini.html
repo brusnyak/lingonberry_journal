@@ -462,10 +462,157 @@
     .skeleton-stat {
       height: 80px;
     }
+
+    .dashboard-shell {
+      display: grid;
+      gap: 16px;
+    }
+
+    .hero-card {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(16, 185, 129, 0.06));
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+      gap: 16px;
+    }
+
+    .hero-kpis,
+    .compact-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .hero-kpis {
+      margin-top: 14px;
+    }
+
+    .hero-stat,
+    .compact-stat {
+      background: var(--panel-light);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      min-width: 0;
+    }
+
+    .hero-meta,
+    .stack {
+      display: grid;
+      gap: 16px;
+      min-width: 0;
+      align-content: start;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .section-head .card-title {
+      margin-bottom: 0;
+    }
+
+    .section-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .toggle-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--panel-light);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 7px 12px;
+      text-transform: uppercase;
+    }
+
+    .trade-list.compact {
+      gap: 10px;
+    }
+
+    .scroll-card {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .trade-scroll-wrap {
+      overflow-y: auto;
+      max-height: 560px;
+      padding-right: 4px;
+    }
+
+    .trade-scroll-wrap::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .trade-scroll-wrap::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+    }
+
+    .trade-item.compact {
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .trade-item.compact .trade-symbol {
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .trade-list[hidden] {
+      display: none;
+    }
+
+    @media (max-width: 1100px) {
+      .hero-grid,
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-kpis,
+      .compact-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      .hero-kpis,
+      .compact-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .trade-scroll-wrap {
+        max-height: 420px;
+      }
+    }
   </style>
 </head>
 
-<body class="theme-lingonberry">
+<body class="theme-ftmo">
   <nav class="main-nav">
     <div class="nav-left">
       <a href="/" class="nav-brand">
@@ -626,10 +773,11 @@
         const accountId = accountManager?.getCurrentAccountId();
         const params = { ...dateRange };
         if (accountId) params.account_id = accountId;
+        const cacheKey = `/dashboard${new URLSearchParams(params).toString() ? `?${new URLSearchParams(params).toString()}` : ""}`;
 
         // Try cache first
         if (useCache && Object.keys(dateRange).length === 0) {
-          const cached = api.getCached("/dashboard");
+          const cached = api.getCached(cacheKey);
           if (cached) {
             renderDashboard(cached);
             document.getElementById("lastUpdate").textContent =
@@ -659,7 +807,11 @@
         console.error("Error loading dashboard:", err);
 
         // Try to show cached data on error
-        const cached = api.getCached("/dashboard");
+        const accountId = accountManager?.getCurrentAccountId();
+        const params = { ...currentDashboardDateRange };
+        if (accountId) params.account_id = accountId;
+        const cacheKey = `/dashboard${new URLSearchParams(params).toString() ? `?${new URLSearchParams(params).toString()}` : ""}`;
+        const cached = api.getCached(cacheKey);
         if (cached) {
           renderDashboard(cached);
           document.getElementById("lastUpdate").textContent =
@@ -729,138 +881,144 @@
       };
 
       document.getElementById("dashboardContent").innerHTML = `
-                <!-- Account Summary -->
-                <div class="card">
-                    <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
-                        <span>💼 Account Performance</span>
-                        <button class="refresh-btn" onclick="loadDashboard(false, currentDashboardDateRange)">
-                            🔄 Refresh
-                        </button>
-                    </div>
-                    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr);">
-                        <div class="stat-box">
-                            <div class="stat-label">Balance</div>
-                            <div class="stat-value">${stats.balance?.toFixed(2) || "0.00"}</div>
-                            <div class="stat-sublabel">Initial: ${stats.initial_balance?.toFixed(2) || "0.00"}</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-label">Net P&L</div>
-                            <div class="stat-value ${netPnlClass}">
-                                ${netPnl >= 0 ? "+" : ""}${netPnl.toFixed(2)}
-                            </div>
-                            <div class="stat-sublabel ${netPnlClass}">
-                                ${stats.growth_pct >= 0 ? "+" : ""}${(stats.growth_pct || 0).toFixed(2)}%
-                            </div>
-                        </div>
-                    </div>
+        <div class="dashboard-shell">
+          <div class="card hero-card">
+            <div class="section-head">
+              <div>
+                <div class="card-title">Performance Snapshot</div>
+                <div class="section-meta">Less stretch, more signal</div>
+              </div>
+              <button class="refresh-btn" onclick="loadDashboard(false, currentDashboardDateRange)">
+                🔄 Refresh
+              </button>
+            </div>
+            <div class="hero-grid">
+              <div>
+                <div class="hero-stat">
+                  <div class="stat-label">Balance</div>
+                  <div class="stat-value">${stats.balance?.toFixed(2) || "0.00"}</div>
+                  <div class="stat-sublabel">Initial ${stats.initial_balance?.toFixed(2) || "0.00"} • ${stats.total_trades || 0} trades</div>
                 </div>
-
-                <!-- Key Metrics -->
-                <div class="card">
-                    <div class="card-title">📈 Key Metrics</div>
-                    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr);">
-                        <div class="stat-box">
-                            <div class="stat-label">Win Rate</div>
-                            <div class="stat-value">${winRate.toFixed(1)}%</div>
-                            <div class="stat-sublabel">${stats.wins || 0}W / ${stats.losses || 0}L</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-label">Profit Factor</div>
-                            <div class="stat-value ${profitFactor >= 1.5 ? "positive" : profitFactor >= 1 ? "" : "negative"}">
-                                ${profitFactor === Infinity ? '∞' : profitFactor.toFixed(2)}
-                            </div>
-                            <div class="stat-sublabel">${profitFactor === Infinity ? "Perfect!" : profitFactor >= 1.5 ? "Excellent" : profitFactor >= 1 ? "Good" : "Poor"}</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-label">Avg Win</div>
-                            <div class="stat-value positive">+${avgWin.toFixed(2)}</div>
-                            <div class="stat-sublabel">Per winning trade</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-label">Avg Loss</div>
-                            <div class="stat-value negative">-${avgLoss.toFixed(2)}</div>
-                            <div class="stat-sublabel">Per losing trade</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-label">Expectancy</div>
-                            <div class="stat-value ${expectancy >= 0 ? "positive" : "negative"}">
-                                ${expectancy >= 0 ? "+" : ""}${expectancy.toFixed(2)}
-                            </div>
-                            <div class="stat-sublabel">Per trade</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-label">Max Drawdown</div>
-                            <div class="stat-value ${maxDD > 10 ? "negative" : ""}">
-                                ${maxDD.toFixed(2)}%
-                            </div>
-                            <div class="stat-sublabel">${maxDD > 10 ? "High risk" : "Controlled"}</div>
-                        </div>
-                    </div>
+                <div class="hero-kpis">
+                  <div class="hero-stat">
+                    <div class="stat-label">Net P&L</div>
+                    <div class="stat-value ${netPnlClass}">${netPnl >= 0 ? "+" : ""}${netPnl.toFixed(2)}</div>
+                    <div class="stat-sublabel">${stats.growth_pct >= 0 ? "+" : ""}${(stats.growth_pct || 0).toFixed(2)}%</div>
+                  </div>
+                  <div class="hero-stat">
+                    <div class="stat-label">Win Rate</div>
+                    <div class="stat-value">${winRate.toFixed(1)}%</div>
+                    <div class="stat-sublabel">${stats.wins || 0}W / ${stats.losses || 0}L</div>
+                  </div>
+                  <div class="hero-stat">
+                    <div class="stat-label">Profit Factor</div>
+                    <div class="stat-value ${profitFactor >= 1.5 ? "positive" : profitFactor >= 1 ? "" : "negative"}">${profitFactor === Infinity ? "∞" : profitFactor.toFixed(2)}</div>
+                    <div class="stat-sublabel">${profitFactor === Infinity ? "Perfect" : profitFactor >= 1 ? "Healthy" : "Below 1.0"}</div>
+                  </div>
+                  <div class="hero-stat">
+                    <div class="stat-label">Max Drawdown</div>
+                    <div class="stat-value ${maxDD > 10 ? "negative" : ""}">${maxDD.toFixed(2)}%</div>
+                    <div class="stat-sublabel">${maxDD > 10 ? "Needs tightening" : "Controlled"}</div>
+                  </div>
                 </div>
+              </div>
+              <div class="hero-meta">
+                <div class="compact-stat">
+                  <div class="stat-label">Expectancy</div>
+                  <div class="stat-value ${expectancy >= 0 ? "positive" : "negative"}">${expectancy >= 0 ? "+" : ""}${expectancy.toFixed(2)}</div>
+                  <div class="stat-sublabel">Average edge per trade</div>
+                </div>
+                <div class="compact-stat">
+                  <div class="stat-label">Avg Win / Loss</div>
+                  <div class="stat-value">${avgWin.toFixed(2)} / ${avgLoss.toFixed(2)}</div>
+                  <div class="stat-sublabel">Payout efficiency</div>
+                </div>
+              </div>
+            </div>
+          </div>
 
-                <!-- Session Distribution -->
-                ${Object.keys(distributions.session || {}).length > 0
-          ? `
-                <div class="card">
-                    <div class="card-title">🌍 Session Distribution</div>
+          <div class="compact-grid">
+            <div class="compact-stat">
+              <div class="stat-label">Long Book</div>
+              <div class="stat-value ${longStats.total_pnl >= 0 ? "positive" : "negative"}">${longStats.total_pnl >= 0 ? "+" : ""}${(longStats.total_pnl || 0).toFixed(2)}</div>
+              <div class="stat-sublabel">${longStats.count || 0} trades • ${(longStats.win_rate || 0).toFixed(1)}% WR</div>
+            </div>
+            <div class="compact-stat">
+              <div class="stat-label">Short Book</div>
+              <div class="stat-value ${shortStats.total_pnl >= 0 ? "positive" : "negative"}">${shortStats.total_pnl >= 0 ? "+" : ""}${(shortStats.total_pnl || 0).toFixed(2)}</div>
+              <div class="stat-sublabel">${shortStats.count || 0} trades • ${(shortStats.win_rate || 0).toFixed(1)}% WR</div>
+            </div>
+            <div class="compact-stat">
+              <div class="stat-label">Sharpe</div>
+              <div class="stat-value">${sharpe.toFixed(2)}</div>
+              <div class="stat-sublabel">Return quality</div>
+            </div>
+            <div class="compact-stat">
+              <div class="stat-label">Session Mix</div>
+              <div class="stat-value">${Object.keys(distributions.session || {}).length}</div>
+              <div class="stat-sublabel">Tracked sessions</div>
+            </div>
+          </div>
+
+          <div class="dashboard-grid">
+            <div class="stack" id="dashboardLeftColumn">
+              <div class="card">
+                <div class="section-head">
+                  <div>
+                    <div class="card-title">Equity Curve</div>
+                    <div class="section-meta">Balance path with rule overlays</div>
+                  </div>
+                </div>
+                <div class="chart-container">
+                  <canvas id="equityChart"></canvas>
+                </div>
+              </div>
+              ${renderFundedProgressCard(ruleProgress, stats)}
+              ${Object.keys(distributions.session || {}).length > 0
+                ? `
+                  <div class="card">
+                    <div class="section-head">
+                      <div>
+                        <div class="card-title">Session Distribution</div>
+                        <div class="section-meta">Where your trades actually happen</div>
+                      </div>
+                    </div>
                     <div id="sessionStats"></div>
-                </div>
+                  </div>
                 `
-          : ""
-        }
+                : ""
+              }
+            </div>
 
-                <!-- Directional Breakdown -->
-                <div class="card">
-                    <div class="card-title">🎯 Directional Analysis</div>
-                    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr);">
-                        <div class="stat-box" style="border-left: 3px solid var(--green);">
-                            <div class="stat-label">� LONG</div>
-                            <div class="stat-value ${longStats.total_pnl >= 0 ? "positive" : "negative"}">
-                                ${longStats.total_pnl >= 0 ? "+" : ""}${(longStats.total_pnl || 0).toFixed(2)}
-                            </div>
-                            <div class="stat-sublabel">
-                                ${longStats.count || 0} trades • ${(longStats.win_rate || 0).toFixed(1)}% WR
-                            </div>
-                        </div>
-                        <div class="stat-box" style="border-left: 3px solid var(--red);">
-                            <div class="stat-label">🔴 SHORT</div>
-                            <div class="stat-value ${shortStats.total_pnl >= 0 ? "positive" : "negative"}">
-                                ${shortStats.total_pnl >= 0 ? "+" : ""}${(shortStats.total_pnl || 0).toFixed(2)}
-                            </div>
-                            <div class="stat-sublabel">
-                                ${shortStats.count || 0} trades • ${(shortStats.win_rate || 0).toFixed(1)}% WR
-                            </div>
-                        </div>
+            <div class="stack" id="dashboardRightColumn">
+              ${openTrades.length > 0
+                ? `
+                  <div class="card">
+                    <div class="section-head">
+                      <div>
+                        <div class="card-title">Open Positions</div>
+                        <div class="section-meta">${openTrades.length} position(s) active</div>
+                      </div>
                     </div>
-                </div>
-
-                ${renderFundedProgressCard(ruleProgress, stats)}
-
-                <!-- Equity Curve -->
-                <div class="card">
-                    <div class="card-title">📊 Equity Curve</div>
-                    <div class="chart-container">
-                        <canvas id="equityChart"></canvas>
-                    </div>
-                </div>
-
-                <!-- Open Positions -->
-                ${openTrades.length > 0
-          ? `
-                <div class="card">
-                    <div class="card-title">🔓 Open Positions (${openTrades.length})</div>
                     <div id="openTradesList"></div>
-                </div>
+                  </div>
                 `
-          : ""
-        }
-
-                <!-- Recent Trades -->
-                <div class="card">
-                    <div class="card-title">📋 Recent Trades (${trades.length})</div>
-                    <div id="tradesList"></div>
+                : ""
+              }
+              <div class="card scroll-card" id="recentTradesCard">
+                <div class="section-head">
+                  <div>
+                    <div class="card-title">Recent Trades</div>
+                    <div class="section-meta">${trades.length} latest entries</div>
+                  </div>
+                  <button class="toggle-chip" onclick="toggleTradeList()">Toggle list</button>
                 </div>
-            `;
+                <div id="tradesList" class="trade-scroll-wrap"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
 
       const equityOverlays = [];
       if (ruleProgress.payout_target_balance != null) {
@@ -886,9 +1044,40 @@
       }
 
       renderTrades(trades);
+      syncRecentTradesHeight();
 
       if (Object.keys(distributions.session || {}).length > 0) {
         renderSessionStats(distributions.session);
+        syncRecentTradesHeight();
+      }
+    }
+
+    function toggleTradeList() {
+      const list = document.getElementById("tradeListBody");
+      if (!list) return;
+      list.hidden = !list.hidden;
+      syncRecentTradesHeight();
+    }
+
+    function syncRecentTradesHeight() {
+      const leftColumn = document.getElementById("dashboardLeftColumn");
+      const rightColumn = document.getElementById("dashboardRightColumn");
+      const recentTradesCard = document.getElementById("recentTradesCard");
+      const scrollWrap = document.getElementById("tradesList");
+      if (!leftColumn || !rightColumn || !recentTradesCard || !scrollWrap) return;
+
+      scrollWrap.style.maxHeight = "";
+
+      if (window.innerWidth <= 1100) {
+        return;
+      }
+
+      const leftHeight = leftColumn.getBoundingClientRect().height;
+      const rightTop = recentTradesCard.offsetTop;
+      const available = Math.floor(leftHeight - rightTop);
+
+      if (available > 220) {
+        scrollWrap.style.maxHeight = `${available}px`;
       }
     }
 
@@ -1041,7 +1230,7 @@
       }
 
       container.innerHTML = `
-                <div class="trade-list">
+                <div class="trade-list compact" id="tradeListBody">
                     ${trades
           .map((t) => {
             const pnl = t.pnl_usd || 0;
@@ -1083,7 +1272,7 @@
                     : "";
 
             return `
-                    <div class="trade-item" style="cursor: pointer;" onclick="showTradeDetail(${t.id})">
+                    <div class="trade-item compact" style="cursor: pointer;" onclick="showTradeDetail(${t.id})">
                         <div class="trade-info">
                             <div class="trade-symbol">
                                 ${directionEmoji} ${t.symbol} ${direction} ${outcomeEmoji}
@@ -1112,7 +1301,7 @@
       if (!container) return;
 
       container.innerHTML = `
-                <div class="trade-list">
+                <div class="trade-list compact">
                     ${trades
           .map((t) => {
             const direction = String(
@@ -1131,7 +1320,7 @@
               .replace("T", " ");
 
             return `
-                    <div class="trade-item" style="border-left: 3px solid var(--accent);">
+                    <div class="trade-item compact" style="border-left: 3px solid var(--accent);">
                         <div class="trade-info">
                             <div class="trade-symbol">
                                 ${directionEmoji} ${t.symbol} ${direction} 🔓
@@ -1244,6 +1433,10 @@
       
       // Safety timeout
       setTimeout(() => clearInterval(checkAccountReady), 5000);
+    });
+
+    window.addEventListener("resize", () => {
+      syncRecentTradesHeight();
     });
 
     // Auto-refresh every 30 seconds if in Telegram

@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Trading Journal Telegram Bot."""
-import json
 import logging
 import os
 import sys
-from urllib import request as urlrequest
-from urllib.error import HTTPError, URLError
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -18,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bot import journal_db
 from bot.session_detector import detect_session
+from core.raw_trade_import import parse_raw_trades
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -89,8 +87,9 @@ def _parse_float(value: str) -> Optional[float]:
 def _get_selected_account_ids(context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> list[int]:
     """Get IDs of currently selected accounts for the bot."""
     if context and "selected_account_ids" in context.user_data:
-        s_ids = context.user_data["selected_account_ids"]
+        s_ids = [aid for aid in context.user_data["selected_account_ids"] if journal_db.get_account(aid)]
         if s_ids:
+            context.user_data["selected_account_ids"] = s_ids
             return s_ids
             
     accounts = journal_db.get_accounts()
@@ -206,45 +205,78 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         raw_text = update.message.reply_to_message.text or ""
 
     if not raw_text.strip():
+        context.user_data["awaiting_import"] = True
         await update.message.reply_text(
-            "Paste your trade log after the command, or reply to a message with /dump.\n\n"
-            "Example:\n"
-            "/dump <paste logs>"
+            "📥 Import mode enabled.\n\n"
+            "Paste the raw trade export in your next message.\n"
+            "You can also reply to an export message with /dump.\n\n"
+            "Use /cancel to leave import mode."
         )
         return
+
+    await _process_import(update, context, raw_text)
+
+
+async def _process_import(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text: str) -> None:
+    context.user_data.pop("awaiting_import", None)
 
     account_ids = _get_selected_account_ids(context)
     if not account_ids:
         await update.message.reply_text("❌ No account found to import into.")
         return
 
-    payload = {
-        "text": raw_text,
-        "account_ids": account_ids,
-        "timezone_offset_hours": 2,
-        "timeframe": "M30",
-    }
-
     try:
-        url = f"{_api_base()}/api/trades/import_raw"
-        logger.info(f"Importing raw trades for accounts {account_ids} to {url}")
-        req = urlrequest.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        account_ids = [aid for aid in account_ids if journal_db.get_account(aid)]
+        if not account_ids:
+            await update.message.reply_text("❌ No valid selected account found for import.")
+            return
 
-        with urlrequest.urlopen(req, timeout=25) as resp:
-            body = resp.read().decode("utf-8")
-        
-        logger.info(f"Import response: {body}")
-        data = json.loads(body) if body else {}
-        imported = data.get("imported_count", 0)
-        skipped = data.get("skipped", 0)
-        existed = data.get("already_existed", 0)
-        
-        account_names = [journal_db.get_account(aid)["name"] for aid in account_ids]
+        trades = parse_raw_trades(raw_text, tz_offset_hours=2)
+        if not trades:
+            await update.message.reply_text("❌ No trades parsed from input.")
+            return
+
+        imported = 0
+        skipped = 0
+        existed = 0
+        for aid in account_ids:
+            for trade in trades:
+                try:
+                    trade_id = journal_db.create_trade(
+                        account_id=aid,
+                        symbol=trade["symbol"],
+                        direction=trade["direction"],
+                        entry_price=trade["entry_price"],
+                        position_size=trade.get("lots", 0.1),
+                        ts_open=trade["ts_open"],
+                        sl_price=trade.get("sl"),
+                        tp_price=trade.get("tp"),
+                        timeframe="M30",
+                        notes=trade.get("notes"),
+                        external_id=trade.get("external_id"),
+                        provider="import_bot",
+                    )
+
+                    if trade_id is None:
+                        existed += 1
+                        continue
+
+                    journal_db.close_trade(
+                        trade_id=trade_id,
+                        exit_price=trade["exit_price"],
+                        outcome=trade.get("outcome", "MANUAL"),
+                        event_type="import",
+                        provider="import_bot",
+                        payload=trade,
+                        ts_close=trade.get("ts_close"),
+                        pnl_usd_override=trade.get("pnl_usd"),
+                    )
+                    imported += 1
+                except Exception:
+                    logger.exception("Failed to import raw trade for account %s", aid)
+                    skipped += 1
+
+        account_names = [journal_db.get_account(aid)["name"] for aid in account_ids if journal_db.get_account(aid)]
         
         msg = f"✅ Processed {len(account_ids)} accounts: {', '.join(account_names)}\n\n"
         msg += f"📥 Imported: {imported}\n"
@@ -253,16 +285,8 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         msg += f"⏭️ Skipped (errors): {skipped}"
         
         await update.message.reply_text(msg)
-            
-    except HTTPError as exc:
-        details = exc.read().decode("utf-8") if exc.fp else ""
-        logger.error(f"Import HTTP error {exc.code}: {details}")
-        await update.message.reply_text(f"❌ Import failed: {exc.code}\n{details}")
-    except URLError as exc:
-        logger.error(f"Import URL error: {exc}")
-        await update.message.reply_text(f"❌ Import failed: Connection error. Make sure the webapp is running.")
     except Exception as exc:
-        logger.exception("Unexpected error during import")
+        logger.exception("Unexpected local error during import")
         await update.message.reply_text(f"❌ An unexpected error occurred: {exc}")
 
 
@@ -275,11 +299,12 @@ async def journal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop("journal", None)
-    await update.message.reply_text("🛑 Journal flow cancelled.")
+    context.user_data.pop("awaiting_import", None)
+    await update.message.reply_text("🛑 Current flow cancelled.")
 
 
 async def _finalize_trade(update: Update, context: ContextTypes.DEFAULT_TYPE, data: Dict[str, Any]) -> None:
-    account = _current_account()
+    account = _current_account(context)
     if not account:
         await update.message.reply_text("❌ No account found. Create one from the dashboard first.")
         return
@@ -330,6 +355,12 @@ async def _finalize_trade(update: Update, context: ContextTypes.DEFAULT_TYPE, da
 
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data.get("awaiting_import"):
+        if not update.message or not update.message.text:
+            return
+        await _process_import(update, context, update.message.text)
+        return
+
     flow = context.user_data.get("journal")
     if not flow:
         return
@@ -434,7 +465,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     try:
         journal_db.init_db()
-        account = _current_account()
+        account = _current_account(context)
         if not account:
             await update.message.reply_text("No trading accounts found. Create one in dashboard.")
             return
@@ -460,7 +491,8 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     try:
-        open_trades = journal_db.get_open_trades(account_id=_current_account()["id"] if _current_account() else None)
+        current_account = _current_account(context)
+        open_trades = journal_db.get_open_trades(account_id=current_account["id"] if current_account else None)
         if not open_trades:
             await update.message.reply_text("📭 No open positions.")
             return
@@ -496,7 +528,7 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     try:
-        account = _current_account()
+        account = _current_account(context)
         if not account:
             await update.message.reply_text("No trading accounts found.")
             return

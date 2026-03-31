@@ -365,6 +365,14 @@ def init_db() -> None:
         cursor.execute("ALTER TABLE trades ADD COLUMN rr_ratio REAL")
     if "session" not in trade_cols:
         cursor.execute("ALTER TABLE trades ADD COLUMN session TEXT")
+    if "external_id" not in trade_cols and "external_trade_id" not in trade_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN external_id TEXT")
+        trade_cols.add("external_id")
+    elif "external_id" not in trade_cols and "external_trade_id" in trade_cols:
+        trade_cols.add("external_trade_id")
+    if "provider" not in trade_cols and "source" not in trade_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN provider TEXT")
+        trade_cols.add("provider")
 
     account_cols = _table_columns(conn, "accounts")
     if "rule_template" not in account_cols:
@@ -537,14 +545,16 @@ def create_trade(
     cursor = conn.cursor()
     trade_columns = _table_columns(conn, "trades")
     if external_id:
-        cursor.execute(
-            "SELECT id FROM trades WHERE account_id = ? AND external_id = ?",
-            (account_id, external_id)
-        )
-        existing = cursor.fetchone()
-        if existing:
-            conn.close()
-            return None
+        ext_col = "external_id" if "external_id" in trade_columns else ("external_trade_id" if "external_trade_id" in trade_columns else None)
+        if ext_col:
+            cursor.execute(
+                f"SELECT id FROM trades WHERE account_id = ? AND {ext_col} = ?",
+                (account_id, external_id)
+            )
+            existing = cursor.fetchone()
+            if existing:
+                conn.close()
+                return None
 
     row = {
         "account_id": account_id,
@@ -650,7 +660,7 @@ def add_manual_trade(
             rr_ratio = reward / risk
     
     # Detect trading session based on UTC timestamp
-    session = detect_session(ts_open)
+    session = _normalize_session_name(detect_session(ts_open))
 
     cursor.execute(
         """
