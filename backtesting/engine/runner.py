@@ -301,6 +301,8 @@ def run(
                         pnl=pnl,
                         r_multiple=_r_mult(pos, fill, close_lots, costs),
                         label=pos.label if hasattr(pos, "label") else "",
+                        sl=pos.original_sl,
+                        tp1=pos.tp1 or 0.0,
                     )
                     closed_trades.append(ct)
                     strategy.on_partial(ct, _make_state(equity, initial_equity, remaining, closed_trades, i))
@@ -334,6 +336,8 @@ def run(
                         pnl=pnl,
                         r_multiple=_r_mult(pos, fill, close_lots, costs),
                         label=pos.label if hasattr(pos, "label") else "",
+                        sl=pos.original_sl,
+                        tp1=pos.tp1 or 0.0,
                     )
                     closed_trades.append(ct)
                     strategy.on_partial(ct, _make_state(equity, initial_equity, remaining, closed_trades, i))
@@ -363,6 +367,8 @@ def run(
                         pnl=pnl,
                         r_multiple=_r_mult(pos, fill, close_lots, costs),
                         label=pos.label if hasattr(pos, "label") else "",
+                        sl=pos.original_sl,
+                        tp1=pos.tp1 or 0.0,
                     )
                     closed_trades.append(ct)
                     strategy.on_close(ct, _make_state(equity, initial_equity, remaining, closed_trades, i))
@@ -409,6 +415,8 @@ def run(
             pnl=pnl,
             r_multiple=_r_mult(pos, fill, pos.lots_remaining, costs),
             label=pos.label if hasattr(pos, "label") else "",
+            sl=pos.original_sl,
+            tp1=pos.tp1 or 0.0,
         ))
 
     elapsed = time.perf_counter() - t0

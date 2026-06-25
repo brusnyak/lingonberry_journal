@@ -65,6 +65,7 @@ class Position:
 
     # Mutable state
     lots_remaining: float = field(init=False)
+    original_sl: float = field(init=False)   # SL at entry (sl may move to BE later)
     entry_commission: float = 0.0  # round-trip comm paid at entry; netted into trade.pnl
     tp1_hit: bool = False
     tp2_hit: bool = False
@@ -73,6 +74,7 @@ class Position:
 
     def __post_init__(self):
         self.lots_remaining = self.lots
+        self.original_sl = self.sl
 
     @property
     def runner_frac(self) -> float:
@@ -93,3 +95,5 @@ class ClosedTrade:
     pnl: float          # in account currency, after costs
     r_multiple: float   # pnl / initial_risk
     label: str = ""
+    sl: float = 0.0     # original stop loss at entry
+    tp1: float = 0.0    # first take-profit level
