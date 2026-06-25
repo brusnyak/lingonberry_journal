@@ -11,12 +11,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from infra.market_data import load_ohlcv_with_cache
 
-# Symbols that need data - all forex/commodities should work with cTrader
+# Symbols that need data — forex/commodities via TradeLocker
 SYMBOLS = [
     ("USDJPY", "forex"),
-    ("XAUUSD", "forex"),  # Try as forex since cTrader has it
-    ("XAGUSD", "forex"),  # Try as forex since cTrader has it
-    ("US100", "forex"),   # Try as forex since cTrader has it
+    ("XAUUSD", "forex"),
+    ("XAGUSD", "forex"),
+    ("US100", "forex"),
 ]
 
 TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4"]

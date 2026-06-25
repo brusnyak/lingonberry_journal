@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PineReview Analytics</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="top-left">
+          <div class="logo">
+            <i data-lucide="bar-chart-3"></i>
+            <span>PineReview</span>
+          </div>
+          <button id="openReviewBtn" class="btn-secondary">Backtesting</button>
+          <select id="sessionSelect"></select>
+          <button id="refreshBtn" class="btn-icon" title="Refresh">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+        <div class="top-right">
+          <button id="openSessionBtn" class="btn-primary">Open Session In Review</button>
+        </div>
+      </header>
+
+      <main class="analytics-layout">
+        <section class="analytics-cards" id="cards"></section>
+
+        <section class="analytics-table-wrap">
+          <h3>Strategy vs Manual Comparison</h3>
+          <table class="analytics-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Strategy Trade</th>
+                <th>Manual Adjustment</th>
+                <th>Diff</th>
+                <th>Status</th>
+                <th>Outcome</th>
+              </tr>
+            </thead>
+            <tbody id="compareBody"></tbody>
+          </table>
+        </section>
+        <section class="analytics-table-wrap">
+          <h3>Session Artifacts</h3>
+          <div id="artifactGallery" class="artifact-gallery"></div>
+        </section>
+        <section class="analytics-table-wrap">
+          <h3>Artifact Replay</h3>
+          <div id="replayMeta" class="muted">Select a screenshot to replay chart state + drawings.</div>
+          <div class="analytics-replay-wrap">
+            <img id="replaySnapshot" class="replay-snapshot hidden" alt="Captured screenshot" />
+            <div id="replayChartContainer"></div>
+            <canvas id="replayDrawLayer"></canvas>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/analytics.js"></script>
+    <script>
+      lucide.createIcons();
+    </script>
+  </body>
+</html>

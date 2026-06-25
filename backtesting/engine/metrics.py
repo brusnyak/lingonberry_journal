@@ -1,0 +1,165 @@
+"""
+Performance metrics computed from a list of ClosedTrade.
+
+All functions are pure — no side effects.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Sequence
+
+from .orders import ClosedTrade, ExitReason
+
+
+def compute(trades: Sequence[ClosedTrade], initial_equity: float = 10_000.0) -> dict:
+    """
+    Compute full performance report from a list of closed trades.
+
+    Returns a flat dict suitable for printing or DataFrame insertion.
+    """
+    if not trades:
+        return _empty_report()
+
+    pnls = [t.pnl for t in trades]
+    r_multiples = [t.r_multiple for t in trades]
+
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p <= 0]
+    n = len(trades)
+
+    win_rate = len(wins) / n if n else 0.0
+    avg_win = sum(wins) / len(wins) if wins else 0.0
+    avg_loss = sum(losses) / len(losses) if losses else 0.0
+    profit_factor = sum(wins) / abs(sum(losses)) if losses else float("inf")
+    expectancy = sum(pnls) / n if n else 0.0
+    total_pnl = sum(pnls)
+    avg_r = sum(r_multiples) / n if n else 0.0
+
+    # Equity curve and drawdown
+    equity_curve = _equity_curve(pnls, initial_equity)
+    max_dd, max_dd_pct = _max_drawdown(equity_curve)
+
+    # Exit breakdown
+    exit_counts: dict[str, int] = {}
+    for t in trades:
+        key = t.exit_reason.value if hasattr(t.exit_reason, "value") else str(t.exit_reason)
+        exit_counts[key] = exit_counts.get(key, 0) + 1
+
+    # Consecutive stats
+    max_consec_wins = _max_consecutive(pnls, positive=True)
+    max_consec_losses = _max_consecutive(pnls, positive=False)
+
+    # Sharpe (daily grouping, approximate)
+    sharpe = _sharpe(trades)
+
+    return {
+        "trades": n,
+        "win_rate": round(win_rate, 4),
+        "profit_factor": round(profit_factor, 3),
+        "expectancy": round(expectancy, 2),
+        "total_pnl": round(total_pnl, 2),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "avg_r": round(avg_r, 3),
+        "max_drawdown": round(max_dd, 2),
+        "max_drawdown_pct": round(max_dd_pct, 4),
+        "sharpe": round(sharpe, 3),
+        "max_consec_wins": max_consec_wins,
+        "max_consec_losses": max_consec_losses,
+        "exit_counts": exit_counts,
+        "equity_curve": equity_curve,
+    }
+
+
+def _empty_report() -> dict:
+    return {
+        "trades": 0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "expectancy": 0.0,
+        "total_pnl": 0.0,
+        "avg_win": 0.0,
+        "avg_loss": 0.0,
+        "avg_r": 0.0,
+        "max_drawdown": 0.0,
+        "max_drawdown_pct": 0.0,
+        "sharpe": 0.0,
+        "max_consec_wins": 0,
+        "max_consec_losses": 0,
+        "exit_counts": {},
+        "equity_curve": [],
+    }
+
+
+def _equity_curve(pnls: list[float], initial: float) -> list[float]:
+    curve = [initial]
+    for p in pnls:
+        curve.append(curve[-1] + p)
+    return curve
+
+
+def _max_drawdown(equity_curve: list[float]) -> tuple[float, float]:
+    """Returns (max_dd_abs, max_dd_pct)."""
+    if len(equity_curve) < 2:
+        return 0.0, 0.0
+    peak = equity_curve[0]
+    max_dd = 0.0
+    max_dd_pct = 0.0
+    for val in equity_curve:
+        if val > peak:
+            peak = val
+        dd = peak - val
+        dd_pct = dd / peak if peak > 0 else 0.0
+        if dd > max_dd:
+            max_dd = dd
+        if dd_pct > max_dd_pct:
+            max_dd_pct = dd_pct
+    return max_dd, max_dd_pct
+
+
+def _max_consecutive(pnls: list[float], positive: bool) -> int:
+    best = 0
+    current = 0
+    for p in pnls:
+        if (p > 0) == positive:
+            current += 1
+            best = max(best, current)
+        else:
+            current = 0
+    return best
+
+
+def _sharpe(trades: Sequence[ClosedTrade], risk_free: float = 0.0) -> float:
+    """
+    Approximate annualized Sharpe using per-trade R-multiples.
+    Assumes ~252 trades/year for annualization (rough).
+    """
+    if len(trades) < 2:
+        return 0.0
+    rs = [t.r_multiple for t in trades]
+    mean_r = sum(rs) / len(rs)
+    variance = sum((r - mean_r) ** 2 for r in rs) / (len(rs) - 1)
+    std_r = math.sqrt(variance) if variance > 0 else 0.0
+    if std_r == 0:
+        return 0.0
+    return (mean_r - risk_free) / std_r * math.sqrt(252)
+
+
+def summary_str(report: dict) -> str:
+    """Human-readable one-page summary."""
+    ec = report.get("equity_curve", [])
+    final_eq = ec[-1] if ec else 0.0
+    lines = [
+        f"Trades:      {report['trades']}",
+        f"Win rate:    {report['win_rate']:.1%}",
+        f"Profit factor: {report['profit_factor']:.2f}",
+        f"Expectancy:  ${report['expectancy']:.2f} / trade",
+        f"Total PnL:   ${report['total_pnl']:.2f}  (final equity: ${final_eq:.2f})",
+        f"Avg R:       {report['avg_r']:.2f}R",
+        f"Max DD:      ${report['max_drawdown']:.2f} ({report['max_drawdown_pct']:.1%})",
+        f"Sharpe:      {report['sharpe']:.2f}",
+        f"Consec W/L:  {report['max_consec_wins']} / {report['max_consec_losses']}",
+        f"Exits:       {report['exit_counts']}",
+    ]
+    return "\n".join(lines)

@@ -1,0 +1,23 @@
+[Unit]
+Description=Mean Reversion Bot — 100k 1-Step Challenge (#2165807)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-@APP_DIR@/.env
+Environment=TL_ACC_NUM=2165807
+Environment=BOT_RISK_PCT=0.005
+Environment=BOT_PAIRS=AUDCHF,GBPAUD,GBPCHF
+Environment=BOT_POLL_DELAY=35
+ExecStart=@APP_DIR@/.venv/bin/python3 bot/mean_reversion_bot.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

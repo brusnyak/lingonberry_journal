@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pine Signals</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="top-left">
+          <div class="logo">
+            <i data-lucide="radar"></i>
+            <span>PineSignals</span>
+          </div>
+          <div class="controls-group">
+            <select id="signalsBacktestSelect"></select>
+            <label class="inline-check"><input type="checkbox" id="signalsShowTech" checked /> EMA/VWAP</label>
+          </div>
+          <button id="signalsRefreshBtn" class="btn-secondary">Reload</button>
+        </div>
+        <div class="top-right">
+          <button id="openReviewFromSignalsBtn" class="btn-secondary">Open In Review</button>
+          <button id="openAnalyticsFromSignalsBtn" class="btn-primary">Analytics</button>
+        </div>
+      </header>
+
+      <main class="signals-layout">
+        <section class="signals-chart-panel">
+          <div class="signals-summary" id="signalsSummary"></div>
+          <div class="chart-area">
+            <div id="signalsChartContainer"></div>
+            <canvas id="signalsDrawLayer"></canvas>
+          </div>
+        </section>
+        <aside class="signals-trade-panel">
+          <div class="panel-header">
+            <h3>Strategy Trades</h3>
+            <span id="signalsTradeCount" class="badge">0</span>
+          </div>
+          <div id="signalsTradeList" class="trade-list"></div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/static/signals.js"></script>
+    <script>
+      lucide.createIcons();
+    </script>
+  </body>
+</html>

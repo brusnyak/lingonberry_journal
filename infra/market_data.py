@@ -9,21 +9,19 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
-import threading
 
 import pandas as pd
 import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from infra.ctrader_client import CTraderClient
+from infra.tradelocker_client import (
+    TradeLockerError,
+    fetch_historical_bars as _fetch_bars_tradelocker,
+)
 
 CACHE_DIR = Path("data/cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 LOCAL_MARKET_DIR = Path("data/market_data")
-
-# Connection pool for cTrader - reuse connections for speed
-_ctrader_connection_pool = {}
-_ctrader_pool_lock = threading.Lock()
 
 
 def get_timeframe_for_asset(asset_type: str) -> str:
@@ -117,75 +115,6 @@ def _fetch_ohlcv_yfinance(
     except Exception:
         return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
-
-def _fetch_ohlcv_ctrader(
-    symbol: str,
-    timeframe: str,
-    start: datetime,
-    end: datetime,
-) -> pd.DataFrame:
-    tf = timeframe.upper()
-    tf_map = {
-        "M1": "M1",
-        "M5": "M5",
-        "M15": "M15",
-        "M30": "M30",
-        "H1": "H1",
-        "H4": "H4",
-        "D": "D1",
-    }
-    period = tf_map.get(tf, "M15")
-    
-    try:
-        # Map common symbols for cTrader
-        ctr_symbol = symbol.upper()
-        if ctr_symbol == "US100":
-            ctr_symbol = "NAS100"
-        elif ctr_symbol == "SPX500":
-            ctr_symbol = "US500"
-
-        # Use connection pool for speed
-        with _ctrader_pool_lock:
-            pool_key = "default"
-            if pool_key not in _ctrader_connection_pool:
-                client = CTraderClient()
-                if client.connect():
-                    _ctrader_connection_pool[pool_key] = client
-                else:
-                    return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
-            client = _ctrader_connection_pool[pool_key]
-        
-        # Fetch bars using pooled connection
-        bars = client.get_trendbars(symbol=ctr_symbol, timeframe=period, from_ts=start, to_ts=end, count=2000)
-        
-        if not bars:
-            return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
-        
-        df = pd.DataFrame(bars)
-        # cTrader payload keys can differ by endpoint/account; normalize defensively.
-        ts_col = "timestamp" if "timestamp" in df.columns else "time"
-        df["ts"] = pd.to_datetime(df[ts_col], unit="ms", utc=True, errors="coerce")
-        col_map = {
-            "open": "open",
-            "high": "high",
-            "low": "low",
-            "close": "close",
-            "volume": "volume",
-            "openPrice": "open",
-            "highPrice": "high",
-            "lowPrice": "low",
-            "closePrice": "close",
-        }
-        for src, dst in col_map.items():
-            if src in df.columns and dst not in df.columns:
-                df[dst] = df[src]
-        if "volume" not in df.columns:
-            df["volume"] = 0.0
-        out = df[["ts", "open", "high", "low", "close", "volume"]].dropna(subset=["ts"])
-        return out.sort_values("ts").reset_index(drop=True)
-    except Exception as e:
-        print(f"⚠️ cTrader fetch failed for {symbol}: {e}")
-        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
 
 def _resample_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
@@ -397,16 +326,19 @@ def _fetch_ohlcv(
 ) -> pd.DataFrame:
     """Fetch OHLCV data from data source with fallback chain."""
     # Priority:
-    # 1) cTrader (forex/commodities/indices - when credentials + SDK are available)
+    # 1) TradeLocker (forex, commodities — live data)
     # 2) local csv
     # 3) yfinance fallback
     
-    # Try cTrader first for all symbols (it has forex, gold, silver, indices)
-    ctr = _fetch_ohlcv_ctrader(symbol=symbol, timeframe=timeframe, start=start, end=end)
-    if not ctr.empty:
-        # Save to market_data folder for offline access
-        _save_to_market_data(ctr, symbol, asset_type, timeframe)
-        return ctr
+    # Try TradeLocker first for forex and commodities (fast, live)
+    if asset_type in ("forex", "commodity"):
+        try:
+            tl_df = _fetch_ohlcv_tradelocker(symbol=symbol, timeframe=timeframe, start=start, end=end)
+            if not tl_df.empty:
+                _save_to_market_data(tl_df, symbol, asset_type, timeframe)
+                return tl_df
+        except TradeLockerError as e:
+            print(f"TradeLocker fetch failed: {e}")
     
     # Fallback to local CSV
     local = _fetch_ohlcv_local_csv(symbol=symbol, asset_type=asset_type, timeframe=timeframe, start=start, end=end)
@@ -418,6 +350,31 @@ def _fetch_ohlcv(
     if not yf_data.empty:
         _save_to_market_data(yf_data, symbol, asset_type, timeframe)
     return yf_data
+
+
+def _fetch_ohlcv_tradelocker(
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+) -> pd.DataFrame:
+    """Fetch OHLCV from TradeLocker and filter by date range."""
+    try:
+        # Fetch enough bars to cover the date range
+        duration = (end - start).total_seconds()
+        days = max(int(duration / 86400) + 1, 5)
+        limit = max(500, days * 96)  # approx 96 15m bars per day
+        
+        df = _fetch_bars_tradelocker(symbol=symbol, timeframe=timeframe, limit=limit)
+        
+        if df.empty:
+            return df
+        
+        # Filter by date range
+        mask = (df["ts"] >= start) & (df["ts"] <= end)
+        return df[mask].reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
 
 def _save_to_market_data(df: pd.DataFrame, symbol: str, asset_type: str, timeframe: str) -> None:

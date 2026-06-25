@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
@@ -13,7 +14,22 @@ from core.exporter import export_ml_dataset
 from core.raw_trade_import import parse_raw_trades
 from infra.market_data import get_timeframe_for_asset, load_ohlcv_with_cache, replay_window
 from infra.pine_bridge import process_pine_payload
-from jobs.sltp_poller import SLTPPoller
+from infra.tradelocker_client import get_quote as tl_get_quote, fetch_historical_bars as tl_fetch_bars, subscribe_quotes, TradeLockerError
+
+# ---------------------------------------------------------------------------
+# Market structure analysis (imported from pine)
+# ---------------------------------------------------------------------------
+
+import pandas as _pd
+_PINE_SRC = str(Path(__file__).resolve().parent.parent.parent / "pine" / "backend" / "src")
+sys.path.insert(0, _PINE_SRC)
+
+try:
+    from features.market_structure import analyze_market_structure as _analyze_structure
+    _HAS_STRUCTURE = True
+except ImportError:
+    _HAS_STRUCTURE = False
+# from jobs.sltp_poller import SLTPPoller  # archived
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)  # Enable CORS for all routes
@@ -306,6 +322,12 @@ def serve_chart(filename):
     return send_from_directory(charts_dir, filename)
 
 
+@app.route("/backtest")
+def backtest_page():
+    """Structure analysis backtest page"""
+    return render_template("backtest.html")
+
+
 @app.route("/reports")
 def reports_page():
     journal_db.init_db()
@@ -439,6 +461,292 @@ def api_market_data():
     return api_candles()
 
 
+# ---------------------------------------------------------------------------
+# TradeLocker endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/tradelocker/quote")
+def api_tl_quote():
+    """Get live quote for a symbol from TradeLocker."""
+    symbol = request.args.get("symbol", "EURUSD")
+    try:
+        quote = tl_get_quote(symbol)
+        return jsonify({"status": "ok", "symbol": symbol, **quote})
+    except TradeLockerError as e:
+        return jsonify({"status": "error", "error": str(e)}), 502
+
+
+@app.route("/api/tradelocker/bars")
+def api_tl_bars():
+    """Fetch historical bars from TradeLocker."""
+    symbol = request.args.get("symbol", "EURUSD")
+    timeframe = request.args.get("timeframe", "M15")
+    limit = request.args.get("limit", 100, type=int)
+    try:
+        df = tl_fetch_bars(symbol=symbol, timeframe=timeframe, limit=limit)
+        if df.empty:
+            return jsonify([])
+        bars = []
+        for _, row in df.iterrows():
+            bars.append({
+                "time": int(row["ts"].timestamp()),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            })
+        return jsonify(bars)
+    except TradeLockerError as e:
+        return jsonify({"status": "error", "error": str(e)}), 502
+
+
+@app.route("/api/tradelocker/stream")
+def api_tl_stream():
+    """SSE endpoint for live TradeLocker quotes.
+
+    Streams quote updates via Server-Sent Events.
+    Uses the background poller — connects when a client subscribes.
+    """
+    symbol = request.args.get("symbol", "EURUSD")
+
+    def generate():
+        import queue
+        q: queue.Queue = queue.Queue(maxsize=10)
+
+        def on_quote(quote):
+            try:
+                q.put_nowait(quote)
+            except queue.Full:
+                pass
+
+        subscribe_quotes(symbol, on_quote)
+
+        yield f"data: {{\"status\": \"connected\", \"symbol\": \"{symbol}\"}}\n\n"
+
+        while True:
+            try:
+                quote = q.get(timeout=30)
+                yield f"data: {json.dumps(quote)}\n\n"
+            except queue.Empty:
+                yield f": keepalive\n\n"
+
+    return app.response_class(generate(), mimetype="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Market structure analysis
+# ---------------------------------------------------------------------------
+
+
+def _df_from_candle_api(symbol: str, asset_type: str, timeframe: str, start: datetime, end: datetime) -> _pd.DataFrame:
+    """Load OHLC data and return as DataFrame with DatetimeIndex (for structure analysis)."""
+    df = load_ohlcv_with_cache(symbol, asset_type, timeframe, start, end, ttl_seconds=0)
+    if df.empty:
+        return df
+    df = df.copy()
+    df["ts"] = _pd.to_datetime(df["ts"], utc=True)
+    df = df.set_index("ts")
+    df.index.name = None
+    df.columns = [c.lower() for c in df.columns]
+    df.index = _pd.to_datetime(df.index)
+    return df
+
+
+@app.route("/api/analysis/structure")
+def api_structure_analysis():
+    """Run market structure analysis on OHLC data.
+
+    Query params:
+        symbol (str): Symbol (EURUSD, XAUUSD)
+        timeframe (str): M5, M15, H1, H4
+        days (int): Lookback days (default 7)
+    """
+    if not _HAS_STRUCTURE:
+        return jsonify({"error": "Market structure module not available (pine backend not found)"}), 503
+
+    symbol = request.args.get("symbol", "EURUSD")
+    asset_type = request.args.get("asset_type", "forex")
+    timeframe = request.args.get("timeframe", "M5")
+    lookback_days = request.args.get("days", 7, type=int)
+    swing_period = request.args.get("swing_period", 5, type=int)
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=lookback_days)
+
+    df = _df_from_candle_api(symbol, asset_type, timeframe, start, end)
+    if df.empty:
+        return jsonify({"error": f"No data for {symbol} {timeframe}"}), 404
+
+    try:
+        structure = _analyze_structure(
+            df,
+            swing_period=swing_period,
+            break_type="body",
+            fvg_mitigation="partial",
+            fvg_mitigation_threshold=0.382,
+            fvg_min_gap_pct=0.5,
+            fvg_min_gap_atr=0.3,
+            volume_filter=False,
+            detect_amd=False,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Analysis failed: {e}"}), 500
+
+    # Convert structure components to serializable format
+    result = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "bar_count": len(df),
+        "date_range": {
+            "start": df.index[0].isoformat(),
+            "end": df.index[-1].isoformat(),
+        },
+        "swing_highs": [
+            {"time": int(s.time.timestamp()), "price": s.price, "index": s.index}
+            for s in structure.get("swing_highs", [])
+        ],
+        "swing_lows": [
+            {"time": int(s.time.timestamp()), "price": s.price, "index": s.index}
+            for s in structure.get("swing_lows", [])
+        ],
+        "structure_labels": [],
+        "structure_breaks": [],
+        "fvgs": [],
+        "order_blocks": [],
+        "liquidity_levels": [],
+        "liquidity_sweeps": [],
+    }
+
+    # Structure labels (HH/HL/LL/LH)
+    for label in structure.get("structure_labels", []):
+        result["structure_labels"].append({
+            "time": int(label.time.timestamp()),
+            "price": label.price,
+            "label": label.label,
+            "type": label.type,
+        })
+
+    # Structure breaks (BOS/CHOCH)
+    for brk in structure.get("structure_breaks", []):
+        result["structure_breaks"].append({
+            "time": int(brk.time.timestamp()),
+            "price": brk.price,
+            "type": brk.type,
+            "direction": brk.direction,
+        })
+
+    # FVGs
+    for fvg in structure.get("fvgs", []):
+        result["fvgs"].append({
+            "type": fvg.type,
+            "top": fvg.top,
+            "bottom": fvg.bottom,
+            "start_time": int(fvg.start_time.timestamp()) if hasattr(fvg, "start_time") else None,
+            "end_time": int(fvg.end_time.timestamp()) if hasattr(fvg, "end_time") else None,
+            "mitigated": fvg.mitigated,
+        })
+
+    # Order blocks
+    for ob in structure.get("order_blocks", []):
+        result["order_blocks"].append({
+            "type": ob.type,
+            "top": ob.top,
+            "bottom": ob.bottom,
+            "time": int(ob.time.timestamp()) if hasattr(ob, "time") else None,
+            "mitigated": ob.mitigated,
+        })
+
+    # Liquidity levels
+    for liq in structure.get("liquidity_levels", []):
+        result["liquidity_levels"].append({
+            "type": liq.type,
+            "price": liq.price,
+            "time": int(liq.time.timestamp()) if hasattr(liq, "time") else None,
+            "swept": liq.swept,
+        })
+
+    # Liquidity sweeps
+    for swp in structure.get("liquidity_sweeps", []):
+        result["liquidity_sweeps"].append({
+            "time": int(swp.sweep_time.timestamp()) if hasattr(swp, "sweep_time") else None,
+            "price": swp.price,
+            "type": swp.type,
+            "reclaim": swp.reclaim,
+            "wick_only": swp.wick_only,
+        })
+
+    return jsonify(result)
+
+
+@app.route("/api/analysis/structure/visualize")
+def api_structure_visualize():
+    """Return structure data and the candle data in one call (for chart rendering)."""
+    symbol = request.args.get("symbol", "EURUSD")
+    asset_type = request.args.get("asset_type", "forex")
+    timeframe = request.args.get("timeframe", "M5")
+    lookback_days = request.args.get("days", 3, type=int)
+    swing_period = request.args.get("swing_period", 5, type=int)
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=lookback_days)
+
+    # Get candles
+    df = _df_from_candle_api(symbol, asset_type, timeframe, start, end)
+    if df.empty:
+        return jsonify({"error": f"No data for {symbol} {timeframe}"}), 404
+
+    candles = []
+    for ts, row in df.iterrows():
+        candles.append({
+            "time": int(ts.timestamp()),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row["volume"]),
+        })
+
+    # Run structure analysis
+    try:
+        structure = _analyze_structure(
+            df,
+            swing_period=swing_period,
+            break_type="body",
+            fvg_mitigation="partial",
+            fvg_mitigation_threshold=0.382,
+            fvg_min_gap_pct=0.5,
+            fvg_min_gap_atr=0.3,
+            volume_filter=False,
+            detect_amd=False,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Analysis failed: {e}"}), 500
+
+    # Serialise
+    def _ts(obj, attr):
+        v = getattr(obj, attr, None)
+        return int(v.timestamp()) if v is not None else None
+
+    result = {
+        "candles": candles,
+        "swing_highs": [{"time": _ts(s, "time"), "price": s.price} for s in structure.get("swing_highs", [])],
+        "swing_lows": [{"time": _ts(s, "time"), "price": s.price} for s in structure.get("swing_lows", [])],
+        "structure_labels": [{"time": _ts(l, "time"), "price": l.price, "label": l.label, "type": l.type} for l in structure.get("structure_labels", [])],
+        "structure_breaks": [{"time": _ts(b, "time"), "price": b.price, "type": b.type, "direction": b.direction} for b in structure.get("structure_breaks", [])],
+        "fvgs": [{"type": f.type, "top": f.top, "bottom": f.bottom, "start_time": _ts(f, "start_time"), "end_time": _ts(f, "end_time"), "mitigated": f.mitigated} for f in structure.get("fvgs", [])],
+        "order_blocks": [{"type": ob.type, "top": ob.top, "bottom": ob.bottom, "time": _ts(ob, "time"), "mitigated": ob.mitigated} for ob in structure.get("order_blocks", [])],
+        "liquidity_levels": [{"type": liq.type, "price": liq.price, "time": _ts(liq, "time"), "swept": liq.swept} for liq in structure.get("liquidity_levels", [])],
+        "liquidity_sweeps": [{"time": _ts(sw, "sweep_time"), "price": sw.price, "type": sw.type, "reclaim": sw.reclaim, "wick_only": sw.wick_only} for sw in structure.get("liquidity_sweeps", [])],
+    }
+
+    return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+
+
 @app.route("/api/trades/manual", methods=["POST"])
 def api_trades_manual():
     """Manual trade entry with comprehensive error handling"""
@@ -546,7 +854,6 @@ def api_trades_manual():
         
         # Auto-calculate week_start if not provided
         if not week_start:
-            from datetime import datetime, timedelta
             ts_open_dt = datetime.fromisoformat(ts_open.replace('Z', '+00:00'))
             day_of_week = ts_open_dt.weekday()  # Monday = 0, Sunday = 6
             days_since_monday = day_of_week
@@ -1164,13 +1471,13 @@ def api_replay(trade_id: int):
     )
 
 
-@app.route("/api/jobs/sltp-check", methods=["POST"])
-def api_sltp_check():
-    body = request.get_json(force=True, silent=True) or {}
-    account_id = body.get("account_id")
-    poller = SLTPPoller()
-    result = poller.run_once(account_id=int(account_id) if account_id is not None else None)
-    return jsonify({"closed": result, "count": len(result)})
+# @app.route("/api/jobs/sltp-check", methods=["POST"])
+# def api_sltp_check():
+#     body = request.get_json(force=True, silent=True) or {}
+#     account_id = body.get("account_id")
+#     poller = SLTPPoller()
+#     result = poller.run_once(account_id=int(account_id) if account_id is not None else None)
+#     return jsonify({"closed": result, "count": len(result)})
 
 
 @app.route("/api/pine/webhook", methods=["POST"])
@@ -1336,13 +1643,8 @@ def api_trade_playback(trade_id: int):
     if not trade:
         abort(404, description="Trade not found")
     
-    from infra.ctrader_ingest import get_trade_replay_data
-    candles = get_trade_replay_data(
-        symbol=trade["symbol"],
-        timeframe=trade.get("timeframe", "H1"),
-        from_ts=trade["ts_open"],
-        to_ts=trade.get("ts_close") or datetime.now(timezone.utc).isoformat()
-    )
+    # TODO: wire TradeLocker or local cache for candle fetch
+    candles = []
     return jsonify({"trade": trade, "candles": candles})
 
 

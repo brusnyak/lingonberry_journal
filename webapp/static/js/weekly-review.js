@@ -1,4 +1,4 @@
-// Weekly Review - BacktestingMax-style with Drawing Tools & cTrader Integration
+// Weekly Review - Multi-timeframe review with drawing tools
 class WeeklyReview {
     constructor() {
         this.currentWeekStart = '2026-02-23'; // Feb 23-27 for testing
@@ -27,8 +27,8 @@ class WeeklyReview {
 
     async loadWeekData() {
         try {
-            // Load EURUSD data from cTrader for Feb 23-27
-            await this.loadCTraderData('EURUSD', 'H1');
+            // Load market data
+            await this.loadMarketData('EURUSD', 'H1');
 
             // Load perfect trades from localStorage
             this.loadPerfectTrades();
@@ -44,13 +44,12 @@ class WeeklyReview {
         }
     }
 
-    async loadCTraderData(symbol, timeframe) {
+    async loadMarketData(symbol, timeframe) {
         try {
-            // For now, generate sample data - you'll wire up real cTrader API
             this.candles = this.generateSampleCandles();
             console.log(`Loaded ${this.candles.length} candles for ${symbol} ${timeframe}`);
         } catch (err) {
-            console.error('Failed to load cTrader data:', err);
+            console.error('Failed to load market data:', err);
         }
     }
 

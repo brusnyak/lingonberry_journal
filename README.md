@@ -1,13 +1,13 @@
 # Trading Journal Bot 📊
 
-A comprehensive trading journal system with Telegram bot integration, web dashboard, and cTrader API support.
+A comprehensive trading journal system with Telegram bot integration, web dashboard, and TradeLocker market data.
 
 ## Features
 
 - 📱 **Telegram Bot** - Conversational trade logging with guided flow
 - 🌐 **Web Dashboard** - Analytics, charts, and performance tracking
 - 📈 **Chart Generation** - Automatic candlestick charts with entry/SL/TP markers
-- 🔄 **cTrader Integration** - Automatic trade import from cTrader accounts
+- 🔄 **TradeLocker Integration** - Live forex data and quotes
 - 📊 **Advanced Analytics** - Win rate, expectancy, Sharpe ratio, Monte Carlo simulation
 - 🎯 **Weekly Goals** - Track adherence to trading plans
 - 🧠 **Psychology Tracking** - Mood, stress, confidence metrics
@@ -40,7 +40,7 @@ cp .env.example .env
 # - TELEGRAM_JOURAL (bot token from @BotFather)
 # - TELEGRAM_JOURNAL_CHAT (your chat ID)
 # - WEBAPP_URL (public URL for mini app)
-# - CTRADER_* credentials (optional - see QUICKSTART_CTRADER.md)
+# - TL_* credentials (see .env.example)
 ```
 
 ### 3. Run
@@ -56,35 +56,15 @@ make webapp
 make test
 ```
 
-## cTrader Integration (NEW!)
+## TradeLocker Integration
 
-Automatically fetch trades and generate charts from your cTrader account.
-
-**Quick Start:**
-```bash
-# 1. Get API credentials (5 min) - see QUICKSTART_CTRADER.md
-# 2. Add to .env
-# 3. Test connection
-make ctrader-test
-
-# 4. Fetch trades to CSV/Parquet
-make ctrader-fetch
-
-# 5. Generate 3-timeframe charts
-make ctrader-viz
-```
+Live forex data via TradeLocker (Goat Funded Trader).
 
 **What you get:**
-- ✅ Historical trades exported to CSV/Parquet
-- ✅ Multi-timeframe charts (4H, 30M, 5M)
-- ✅ Long/Short position markers
-- ✅ Entry, Exit, SL, TP visualization
-- ✅ Automatic data caching
-
-**Documentation:**
-- [Quick Start Guide](QUICKSTART_CTRADER.md) - 5-minute setup
-- [Detailed Testing Guide](docs/CTRADER_TESTING.md) - Complete reference
-- [Implementation Summary](CTRADER_INTEGRATION_SUMMARY.md) - Technical details
+- ✅ Live OHLC data for forex and commodities
+- ✅ Real-time bid/ask quotes
+- ✅ Symbol resolution (.X suffix)
+- ✅ Local market data caching
 
 ## Telegram Bot Commands
 
@@ -137,59 +117,68 @@ WEBAPP_URL=https://your-domain.com
 make deploy
 ```
 
-## cTrader Integration
+## Data Sources
 
-### Setup
+| Source | Asset Class | Status |
+|--------|-------------|--------|
+| TradeLocker | Forex, Commodities | ✅ Live |
+| Broker CSV | NAS100 (USATECHIDXUSD) | ✅ Live |
+| yFinance | Stocks, Crypto | ✅ Fallback |
+| Local CSV/Parquet | All | ✅ Cached |
 
-1. Register at [cTrader Open API](https://openapi.ctrader.com/)
-2. Create an application and get credentials
-3. Add to `.env`:
-   ```
-   CTRADER_CLIENT_ID=your_client_id
-   CTRADER_CLIENT_SECRET=your_client_secret
-   CTRADER_ACCOUNT_ID=your_account_id
-   CTRADER_ACCESS_TOKEN=your_access_token
-   CTRADER_REFRESH_TOKEN=your_refresh_token
-   ```
+## Backtesting
 
-### Test Connection
+### Forex V1 (ICT/SMC)
+Multi-timeframe structure strategy using 4H/1H/15m/1m with sweep + MSS + FVG retest. See `backtesting/forex_v1.py`.
 
-```bash
-python infra/ctrader_client.py
-```
-
-### Sync Trades
+### NAS100 Test
+Multi-strategy backtest for NAS100 index data. Tests EMA crossover, RSI mean reversion, SMA pullback, and breakout strategies across timeframes and RR settings. See `backtesting/nas100_test.py`.
 
 ```bash
-python jobs/ctrader_sync.py
+make nas100         # 30-day single run
+make nas100-sweep   # full config sweep
+make nas100-monthly # rolling monthly validation
 ```
+
+## Architecture
+
+| App | Port | Role |
+|-----|------|------|
+| **trading-journal** (this) | 5000 | Trade logging, dashboard, backtesting |
+| **pine review** (`pine-review/`) | 8000 | Market structure analysis, trade review |
+| **vibe-trading** (`../vibe-trading/`) | CLI | Exchange connectors, execution |
 
 ## Project Structure
 
 ```
 trading-journal/
+├── backtesting/            # Strategy backtesting
+│   ├── forex_v1.py        # ICT/SMC structure strategy
+│   ├── nas100_test.py     # NAS100 multi-strategy test
+│   ├── rolling_analysis.py# Walk-forward analysis
+│   ├── visualize.py       # Interactive structure viz
+│   └── structure_lib/     # Shared ICT/SMC engine
 ├── bot/                    # Telegram bot
-│   ├── journal_daemon.py   # Main bot logic
-│   ├── journal_db.py       # Database operations
-│   ├── chart_generator.py  # Chart generation
-│   └── session_detector.py # Trading session detection
+│   ├── journal_daemon.py  # Main bot logic
+│   ├── journal_db.py      # Database operations
+│   ├── mean_reversion_bot.py # V1 MR bot
+│   └── session_detector.py # Session detection
 ├── webapp/                 # Flask web app
-│   ├── app.py             # Main app
+│   ├── app.py             # Main app (30+ API routes)
 │   ├── templates/         # HTML templates
-│   └── static/            # CSS/JS assets
-├── infra/                 # Infrastructure
-│   ├── ctrader_client.py  # cTrader API client
-│   ├── ctrader_ingest.py  # Trade import
-│   └── market_data.py     # Market data fetching
-├── core/                  # Core logic
-│   ├── exporter.py        # ML dataset export
-│   └── monte_carlo.py     # Monte Carlo simulation
-├── jobs/                  # Background jobs
-│   ├── ctrader_sync.py    # Auto-sync trades
-│   └── sltp_poller.py     # SL/TP monitoring
-├── scripts/               # Utility scripts
-├── tests/                 # Test suite
-└── data/                  # Database and cache
+│   └── static/js/         # Frontend JS
+├── infra/                  # Infrastructure
+│   ├── tradelocker_client.py  # TradeLocker client
+│   ├── market_data.py         # Market data fetching
+│   └── pine_bridge.py         # TradingView webhook
+├── core/                   # Core logic
+│   ├── exporter.py         # ML dataset export
+│   └── monte_carlo.py      # Monte Carlo simulation
+├── backtesting_config/     # GFT account rules
+├── scripts/                # Utility scripts
+├── docs/                   # Documentation
+├── data/                   # Database and market data
+└── pine-review/            # Structure analysis app
 ```
 
 ## Database Schema
@@ -269,7 +258,7 @@ ssh ubuntu@YOUR_VM_IP
 # Clone and setup
 git clone https://github.com/YOUR_USERNAME/trading-journal.git
 cd trading-journal
-./scripts/setup_ctrader.sh
+./scripts/setup_daily_reminder.sh
 ```
 
 ## Troubleshooting
@@ -284,10 +273,9 @@ cd trading-journal
 - Check `data/cache/` directory permissions
 - Fallback to simple charts if data unavailable
 
-### cTrader sync failing
-- Test connection: `python infra/ctrader_client.py`
-- Refresh access token if expired
-- Check cTrader API status
+### TradeLocker data not loading
+- Check TL credentials in `.env`
+- Verify TradeLocker API is reachable
 
 ### Mini App not loading
 - Ensure `WEBAPP_URL` is public HTTPS
@@ -314,14 +302,15 @@ MIT License - see LICENSE file for details
 
 ## Roadmap
 
-- [ ] Full cTrader Protobuf integration
-- [ ] MetaTrader 4/5 integration
-- [ ] Mobile app (React Native)
-- [ ] AI trade analysis
-- [ ] Social trading features
-- [ ] Backtesting engine
-- [ ] Risk calculator
-- [ ] News sentiment analysis
+- [x] Chart-first trade entry with drawing tools (BOS, CHoCH, Sweep)
+- [x] Pine review app with market structure analysis (swings, FVGs, OBs, liquidity)
+- [x] Backtesting engine with Monte Carlo simulation
+- [x] Multi-timeframe data fetching (TradeLocker, yFinance, Binance)
+- [ ] Connect structure analysis API from pine to trading journal UI
+- [ ] Auto-detect HH/HL/BOS/CHOCH/FVG overlays on the chart
+- [ ] Real-time WebSocket streaming for 1m scalping
+- [ ] TradeLocker data source for forex
+- [ ] Execution via vibe-trading connectors (Binance Futures + Bybit copy)
 
 ## Credits
 
@@ -330,6 +319,7 @@ Built with:
 - [Flask](https://flask.palletsprojects.com/)
 - [matplotlib](https://matplotlib.org/)
 - [yfinance](https://github.com/ranaroussi/yfinance)
+- [TradeLocker](https://tradelocker.com/)
 - [pandas](https://pandas.pydata.org/)
 
 ---

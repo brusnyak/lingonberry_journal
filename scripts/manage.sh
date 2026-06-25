@@ -12,12 +12,13 @@ if [ -d ".venv" ]; then
 fi
 
 if [ -f .env ]; then
-    export $(grep -v '^#' .env | xargs)
+    set -a
+    source .env
+    set +a
 fi
 
 BOT_PID_FILE="data/.bot.pid"
 WEBAPP_PID_FILE="data/.webapp.pid"
-CTRADER_SYNC_PID_FILE="data/.ctrader_sync.pid"
 SLTP_POLLER_PID_FILE="data/.sltp_poller.pid"
 
 LOG_DIR="data/logs"
@@ -25,7 +26,6 @@ mkdir -p "$LOG_DIR"
 
 BOT_LOG="$LOG_DIR/bot.log"
 WEBAPP_LOG="$LOG_DIR/webapp.log"
-CTRADER_SYNC_LOG="$LOG_DIR/ctrader_sync.log"
 SLTP_POLLER_LOG="$LOG_DIR/sltp_poller.log"
 
 RED='\033[0;31m'
@@ -37,7 +37,6 @@ systemd_unit_for() {
     case "$1" in
         bot) echo "journal-bot.service" ;;
         webapp) echo "journal-webapp.service" ;;
-        ctrader) echo "journal-ctrader-sync.service" ;;
         sltp) echo "journal-sltp-poller.service" ;;
         *) return 1 ;;
     esac
@@ -57,7 +56,6 @@ has_all_systemd_units() {
     for unit in \
         journal-bot.service \
         journal-webapp.service \
-        journal-ctrader-sync.service \
         journal-sltp-poller.service
     do
         systemctl cat "$unit" >/dev/null 2>&1 || return 1
@@ -157,34 +155,6 @@ stop_webapp_local() {
     echo -e "${GREEN}Webapp stopped${NC}"
 }
 
-start_ctrader_sync_local() {
-    echo -e "${YELLOW}Starting cTrader sync job...${NC}"
-
-    if is_running "$CTRADER_SYNC_PID_FILE"; then
-        echo -e "${RED}cTrader sync is already running${NC}"
-        return 1
-    fi
-
-    nohup python3 jobs/ctrader_sync.py continuous > "$CTRADER_SYNC_LOG" 2>&1 &
-    echo $! > "$CTRADER_SYNC_PID_FILE"
-
-    echo -e "${GREEN}cTrader sync started (PID: $(cat "$CTRADER_SYNC_PID_FILE"))${NC}"
-    echo "Logs: $CTRADER_SYNC_LOG"
-}
-
-stop_ctrader_sync_local() {
-    echo -e "${YELLOW}Stopping cTrader sync job...${NC}"
-
-    if ! is_running "$CTRADER_SYNC_PID_FILE"; then
-        echo -e "${RED}cTrader sync is not running${NC}"
-        return 1
-    fi
-
-    kill "$(cat "$CTRADER_SYNC_PID_FILE")"
-    rm -f "$CTRADER_SYNC_PID_FILE"
-    echo -e "${GREEN}cTrader sync stopped${NC}"
-}
-
 start_sltp_poller_local() {
     echo -e "${YELLOW}Starting SL/TP poller...${NC}"
 
@@ -245,9 +215,6 @@ run_service_action() {
         start:webapp) start_webapp_local ;;
         stop:webapp) stop_webapp_local ;;
         restart:webapp) stop_webapp_local || true; sleep 1; start_webapp_local ;;
-        start:ctrader) start_ctrader_sync_local ;;
-        stop:ctrader) stop_ctrader_sync_local ;;
-        restart:ctrader) stop_ctrader_sync_local || true; sleep 1; start_ctrader_sync_local ;;
         start:sltp) start_sltp_poller_local ;;
         stop:sltp) stop_sltp_poller_local ;;
         restart:sltp) stop_sltp_poller_local || true; sleep 1; start_sltp_poller_local ;;
@@ -261,7 +228,6 @@ status_all() {
     if use_systemd; then
         print_systemd_status_line "Bot" "journal-bot.service"
         print_systemd_status_line "Webapp" "journal-webapp.service"
-        print_systemd_status_line "cTrader Sync" "journal-ctrader-sync.service"
         print_systemd_status_line "SL/TP Poller" "journal-sltp-poller.service"
         return
     fi
@@ -281,13 +247,6 @@ status_all() {
         pid=$(find_webapp_pid)
         echo "$pid" > "$WEBAPP_PID_FILE"
         echo -e "${YELLOW}Running (recovered PID: $pid)${NC}"
-    else
-        echo -e "${RED}Stopped${NC}"
-    fi
-
-    echo -n "cTrader Sync: "
-    if is_running "$CTRADER_SYNC_PID_FILE"; then
-        echo -e "${GREEN}Running (PID: $(cat "$CTRADER_SYNC_PID_FILE"))${NC}"
     else
         echo -e "${RED}Stopped${NC}"
     fi
@@ -317,10 +276,9 @@ logs_for_service() {
     case "$service" in
         bot) tail -f "$BOT_LOG" ;;
         webapp) tail -f "$WEBAPP_LOG" ;;
-        ctrader) tail -f "$CTRADER_SYNC_LOG" ;;
         sltp) tail -f "$SLTP_POLLER_LOG" ;;
         *)
-            echo "Usage: $0 logs {bot|webapp|ctrader|sltp}"
+            echo "Usage: $0 logs {bot|webapp|sltp}"
             exit 1
             ;;
     esac
@@ -340,7 +298,6 @@ run_all_action() {
     fi
     run_service_action "$action" bot
     run_service_action "$action" webapp
-    run_service_action "$action" ctrader
     run_service_action "$action" sltp
     echo -e "${GREEN}All services ${past_tense}${NC}"
 }
@@ -348,21 +305,21 @@ run_all_action() {
 case "${1:-}" in
     start)
         case "${2:-all}" in
-            bot|webapp|ctrader|sltp) run_service_action start "${2}" ;;
+            bot|webapp|sltp) run_service_action start "${2}" ;;
             all) run_all_action start ;;
             *) echo "Unknown service: $2"; exit 1 ;;
         esac
         ;;
     stop)
         case "${2:-all}" in
-            bot|webapp|ctrader|sltp) run_service_action stop "${2}" ;;
+            bot|webapp|sltp) run_service_action stop "${2}" ;;
             all) run_all_action stop ;;
             *) echo "Unknown service: $2"; exit 1 ;;
         esac
         ;;
     restart)
         case "${2:-all}" in
-            bot|webapp|ctrader|sltp) run_service_action restart "${2}" ;;
+            bot|webapp|sltp) run_service_action restart "${2}" ;;
             all) run_all_action restart ;;
             *) echo "Unknown service: $2"; exit 1 ;;
         esac
@@ -376,7 +333,7 @@ case "${1:-}" in
     *)
         echo "Usage: $0 {start|stop|restart|status|logs} [service]"
         echo ""
-        echo "Services: bot, webapp, ctrader, sltp, all"
+        echo "Services: bot, webapp, sltp, all"
         echo ""
         echo "Environment:"
         echo "  JOURNAL_MANAGE_MODE=local  Force local nohup mode even if systemd units exist"

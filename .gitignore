@@ -1,26 +1,50 @@
-.env
-!.env.example
+# ── Python ──
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# ── OS ──
 .DS_Store
-data/*.db
+
+# ── Secrets / keys ──
+.env
+!.env.example
+*.key
+*.key.pub
+
+# ── Data files (large, generated) ──
+*.csv
+*.parquet
+*.png
+*.db
+*.json
+!opencode.json
+!opencode.jsonc
+data/market_data/
+data/cache/
+data/exports/
+data/logs/
+data/reports/
 data/.ctrader_sync_state.txt
 data/.bot.pid
 data/.webapp.pid
 data/.ctrader_sync.pid
 data/.sltp_poller.pid
-data/cache/
-data/exports/
-data/logs/
-data/market_data/
-data/reports/
-charts/
-.pytest_cache/
-*.key
-*.key.pub
 
-# Documentation (keep only README)
-*.md
-!README.md
-!docs/*.md
+# ── Docs (full burn — rebuild when needed) ──
+docs/
+
+# ── Charts ──
+charts/
+
+# ── Generated analysis data ──
+pine-review/data/
+pine-review/logs/
+pine-review/__pycache__/
+
+# ── Webapp (node deps are build artifacts) ──
+webapp/node_modules/
+
+# ── IDE ──
+.vscode/
