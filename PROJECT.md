@@ -407,16 +407,19 @@ Exchange connector layer installed and ready:
 - [X] **Live quotes** ✅ DONE
 - [X] **Auto-save market data** ✅ DONE
 
-### Phase 4: Structure-Based Trading System (Current — Q3 2026)
+### Phase 4: Prop Firm Engine (Current — Q3 2026)
 
-**Goal:** Connect the pine review market structure analysis to the trading journal UI for live decision support, then backtest and execute.
+**Goal:** Build a mechanical trading engine that passes GFT prop firm challenges using validated ICT/SMC patterns.
 
-- [ ] **Data infrastructure**: Add TradeLocker data source, Binance WebSocket streaming
-- [ ] **Structure analysis API**: Expose `analyze_market_structure()` from pine to trading journal
-- [ ] **Auto-detect overlays**: Render HH/HL, BOS/CHOCH, FVGs, liquidity levels on chart
-- [ ] **Multi-TF analysis**: 4h context → 15m structure → 1m execution
-- [ ] **Backtesting**: Wrap structure detection as signal generator for BacktestEngine
-- [ ] **Execution**: Wire to vibe-trading connectors (Binance Futures + Bybit copy-trade)
+- [x] **Project reviewed** — All files, Obsidian, structure_lib, engine audited
+- [x] **Branch created** — `feature/prop-firm-engine` for isolated development
+- [x] **Documentation updated** — Obsidian vault, PROJECT.md, PLAN.md aligned
+- [ ] **Wire structure_lib → webapp** — Backend endpoint serving structure data for any symbol/date range
+- [ ] **Build CHoCH/BOS strategy class** — Using structure_lib, 93% WR from manual trades
+- [ ] **Fix forex_v1.py** — Currently 0 trades, needs debugging
+- [ ] **30-day rolling validation** — GBPUSD, GBPAUD, GBPJPY, EURUSD with walk-forward
+- [ ] **Fix TradeLocker client** — Live signal execution for paper trading
+- [ ] **Deploy paper bot** — Oracle server, one pair, one session (London), 1-2 trades/day
 
 ## Comparison with Existing Tools
 
