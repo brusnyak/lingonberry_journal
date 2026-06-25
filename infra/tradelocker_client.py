@@ -29,23 +29,41 @@ class TradeLockerAuthError(TradeLockerError):
 
 
 # ---------------------------------------------------------------------------
-# Cached TLAPI singleton
+# Cached TLAPI singletons (demo + live)
 # ---------------------------------------------------------------------------
 
-_tlapi_instance: Any = None
+_tlapi_demo: Any = None
+_tlapi_live: Any = None
 _tlapi_lock = threading.Lock()
 
 
-def _get_tlapi():
-    """Get or create a cached TLAPI instance."""
-    global _tlapi_instance
-    if _tlapi_instance is not None:
-        return _tlapi_instance
+def _get_tlapi(environment: str | None = None) -> Any:
+    """
+    Get or create a cached TLAPI instance for the specified environment.
 
+    Parameters
+    ----------
+    environment : str, optional
+        "demo" or "live". If None, uses TL_ACTIVE_ENV from .env (defaults to "demo").
+
+    Returns
+    -------
+    TLAPI instance for the requested environment.
+    """
+    global _tlapi_demo, _tlapi_live
+
+    # Determine which environment to use
+    if environment is None:
+        environment = os.getenv("TL_ACTIVE_ENV", "demo").lower()
+
+    # Return cached instance if available
     with _tlapi_lock:
-        if _tlapi_instance is not None:
-            return _tlapi_instance
+        if environment == "demo" and _tlapi_demo is not None:
+            return _tlapi_demo
+        elif environment == "live" and _tlapi_live is not None:
+            return _tlapi_live
 
+        # Create new instance
         try:
             from tradelocker import TLAPI
         except ModuleNotFoundError as exc:
@@ -53,25 +71,40 @@ def _get_tlapi():
                 "tradelocker package not installed. Run: pip install tradelocker"
             ) from exc
 
-        env = os.getenv("TL_ENVIRONMENT", "https://demo.tradelocker.com")
-        username = os.getenv("TL_USERNAME", "")
-        password = os.getenv("TL_PASSWORD", "")
-        server = os.getenv("TL_SERVER", "")
+        # Load environment-specific credentials
+        suffix = environment.upper()
+        env = os.getenv(f"TL_ENVIRONMENT_{suffix}", "")
+        username = os.getenv(f"TL_USERNAME_{suffix}", "")
+        password = os.getenv(f"TL_PASSWORD_{suffix}", "")
+        server = os.getenv(f"TL_SERVER_{suffix}", "")
 
-        if not all([username, password, server]):
+        if not all([env, username, password, server]):
             raise TradeLockerAuthError(
-                "Missing TradeLocker credentials. "
-                "Set TL_USERNAME, TL_PASSWORD, and TL_SERVER in .env"
+                f"Missing TradeLocker credentials for {environment} environment. "
+                f"Set TL_ENVIRONMENT_{suffix}, TL_USERNAME_{suffix}, TL_PASSWORD_{suffix}, "
+                f"and TL_SERVER_{suffix} in .env"
             )
 
-        _tlapi_instance = TLAPI(
-            environment=env,
-            username=username,
-            password=password,
-            server=server,
-            log_level="warning",
-        )
-        return _tlapi_instance
+        try:
+            instance = TLAPI(
+                environment=env,
+                username=username,
+                password=password,
+                server=server,
+                log_level="warning",
+            )
+        except Exception as exc:
+            raise TradeLockerAuthError(
+                f"Failed to authenticate with {environment} environment: {exc}"
+            ) from exc
+
+        # Cache the instance
+        if environment == "demo":
+            _tlapi_demo = instance
+        else:
+            _tlapi_live = instance
+
+        return instance
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +223,7 @@ def fetch_historical_bars(
     timeframe: str = "M15",
     limit: int = 500,
     lookback: str | None = None,
+    environment: str | None = None,
 ) -> pd.DataFrame:
     """
     Fetch historical OHLC bars from TradeLocker.
@@ -204,12 +238,14 @@ def fetch_historical_bars(
         Maximum number of bars to return.
     lookback : str, optional
         Explicit lookback period (e.g. "5D", "10h"). Derived from limit if not set.
+    environment : str, optional
+        "demo" or "live". If None, uses TL_ACTIVE_ENV from .env.
 
     Returns
     -------
     pd.DataFrame with columns: ts, open, high, low, close, volume
     """
-    tl = _get_tlapi()
+    tl = _get_tlapi(environment)
     iid = resolve_instrument_id(symbol)
     period = _tf_to_tl_period(timeframe)
     if lookback is None:
@@ -246,13 +282,13 @@ _QUOTE_SUBSCRIBERS: dict[int, list[Callable]] = {}
 _QUOTE_SUBSCRIBERS_LOCK = threading.Lock()
 
 
-def get_quote(symbol: str) -> dict[str, float]:
+def get_quote(symbol: str, environment: str | None = None) -> dict[str, float]:
     """
     Get latest bid/ask quote for a symbol.
 
     Returns dict with keys: bid, ask, bid_size, ask_size, last
     """
-    tl = _get_tlapi()
+    tl = _get_tlapi(environment)
     iid = resolve_instrument_id(symbol)
 
     try:
@@ -336,6 +372,254 @@ def _quote_poller_loop():
 def stop_quote_poller():
     """Stop the background quote poller thread."""
     _QUOTE_POLLER_STOP.set()
+
+
+# ---------------------------------------------------------------------------
+# Order Execution (Paper Trading on Demo)
+# ---------------------------------------------------------------------------
+
+def create_order(
+    symbol: str,
+    quantity: float,
+    side: str,
+    order_type: str = "market",
+    price: float | None = None,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    account_number: int | None = None,
+    environment: str | None = None,
+) -> dict[str, Any]:
+    """
+    Create a trade order on TradeLocker.
+
+    Parameters
+    ----------
+    symbol : str
+        Instrument symbol (EURUSD, GBPUSD.X, etc.)
+    quantity : float
+        Lot size (e.g. 0.01 for micro lot)
+    side : str
+        "buy" or "sell"
+    order_type : str
+        "market", "limit", or "stop"
+    price : float, optional
+        Required for limit/stop orders
+    stop_loss : float, optional
+        Stop loss price
+    take_profit : float, optional
+        Take profit price
+    account_number : int, optional
+        TradeLocker account number (reserved for future use)
+    environment : str, optional
+        "demo" or "live". If None, uses TL_ACTIVE_ENV from .env.
+
+    Returns
+    -------
+    dict with keys: order_id, status, message
+    """
+    tl = _get_tlapi(environment)
+    iid = resolve_instrument_id(symbol)
+
+    try:
+        # Create the order
+        order_id = tl.create_order(
+            instrument_id=iid,
+            quantity=quantity,
+            side=side,
+            type_=order_type,
+            price=price,
+            stop_loss=stop_loss,
+            stop_loss_type="absolute" if stop_loss else None,
+            take_profit=take_profit,
+            take_profit_type="absolute" if take_profit else None,
+        )
+
+        if order_id:
+            return {
+                "order_id": order_id,
+                "status": "filled" if order_type == "market" else "pending",
+                "message": f"Order placed: {side} {quantity} {symbol} @ {price or 'market'}",
+            }
+        else:
+            return {
+                "order_id": None,
+                "status": "failed",
+                "message": "TradeLocker returned no order_id",
+            }
+
+    except Exception as exc:
+        return {
+            "order_id": None,
+            "status": "error",
+            "message": str(exc),
+        }
+
+
+def close_position(
+    order_id: int,
+    account_number: int | None = None,
+    environment: str | None = None,
+) -> dict[str, Any]:
+    """
+    Close an open position by order ID.
+
+    Parameters
+    ----------
+    order_id : int
+        The order ID to close
+    account_number : int, optional
+        TradeLocker account number (reserved for future use)
+    environment : str, optional
+        "demo" or "live". If None, uses TL_ACTIVE_ENV from .env.
+
+    Returns
+    -------
+    dict with keys: status, message
+    """
+    tl = _get_tlapi(environment)
+
+    try:
+        tl.close_position(order_id)
+        return {
+            "status": "closed",
+            "message": f"Position {order_id} closed",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": str(exc),
+        }
+
+
+def modify_position(
+    order_id: int,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    account_number: int | None = None,
+) -> dict[str, Any]:
+    """
+    Modify SL/TP on an open position.
+
+    Parameters
+    ----------
+    order_id : int
+        The order ID to modify
+    stop_loss : float, optional
+        New stop loss price
+    take_profit : float, optional
+        New take profit price
+    account_number : int, optional
+        TradeLocker account number (reserved for future use)
+
+    Returns
+    -------
+    dict with keys: status, message
+    """
+    tl = _get_tlapi()
+
+    try:
+        tl.modify_position(
+            order_id,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+        )
+        return {
+            "status": "modified",
+            "message": f"Position {order_id} modified: SL={stop_loss}, TP={take_profit}",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": str(exc),
+        }
+
+
+def get_open_positions(
+    account_number: int | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Get all open positions for an account.
+
+    Returns
+    -------
+    list of dicts with keys: order_id, symbol, side, quantity, entry_price,
+                             current_price, pnl, stop_loss, take_profit
+    """
+    tl = _get_tlapi()
+
+    try:
+        positions_df = tl.get_all_positions()
+        if positions_df is None or positions_df.empty:
+            return []
+
+        result = []
+        for _, pos in positions_df.iterrows():
+            # Get symbol name from instrument ID
+            try:
+                iid = pos.get("tradableInstrumentId")
+                if iid:
+                    symbol = tl.get_symbol_name_from_instrument_id(iid)
+                    quote = tl.get_quotes(iid)
+                    current_price = float(quote.get("bp", 0)) if quote else 0
+                else:
+                    symbol = ""
+                    current_price = 0
+            except Exception:
+                symbol = ""
+                current_price = 0
+
+            result.append({
+                "order_id": pos.get("id"),
+                "symbol": symbol,
+                "side": pos.get("side", ""),
+                "quantity": float(pos.get("qty", 0)),
+                "entry_price": float(pos.get("avgPrice", 0)),
+                "current_price": current_price,
+                "pnl": float(pos.get("unrealizedPl", 0)),
+                "stop_loss_id": pos.get("stopLossId"),
+                "take_profit_id": pos.get("takeProfitId"),
+                "open_date": pos.get("openDate"),
+            })
+        return result
+
+    except Exception as exc:
+        print(f"Error getting positions: {exc}")
+        return []
+
+
+def get_account_balance(
+    account_number: int | None = None,
+) -> dict[str, Any]:
+    """
+    Get account balance and equity.
+
+    Returns
+    -------
+    dict with keys: balance, equity, margin, free_margin, margin_level
+    """
+    tl = _get_tlapi()
+
+    try:
+        state = tl.get_account_state()
+        return {
+            "balance": float(state.get("balance", 0)),
+            "equity": float(state.get("projectedBalance", 0)),
+            "margin": float(state.get("initialMarginReq", 0)),
+            "free_margin": float(state.get("availableFunds", 0)),
+            "margin_level": None,
+            "open_positions": int(state.get("positionsCount", 0)),
+            "open_orders": int(state.get("ordersCount", 0)),
+            "today_pnl": float(state.get("todayNet", 0)),
+        }
+    except Exception as exc:
+        return {
+            "balance": 0,
+            "equity": 0,
+            "margin": 0,
+            "free_margin": 0,
+            "margin_level": None,
+            "error": str(exc),
+        }
 
 
 # ---------------------------------------------------------------------------

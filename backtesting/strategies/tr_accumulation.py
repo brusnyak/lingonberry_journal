@@ -53,7 +53,11 @@ class TrAccumulation(Strategy):
         tp1_r: float = 1.5,
         risk_pct: float = 0.005,
         pip_size: float = 0.0001,
-        direction: str = "both",        # "bull", "bear", or "both"
+        direction: str = "bull",        # "bull", "bear", or "both" — research shows bull is the edge
+        # HTF direction filter (requires "240" key in data dict)
+        # Method: 4H close > close N bars ago = bullish; disagree = block entry
+        # Validated: acc_sweep + 4H momentum agree → t=4.97 across 7/7 pairs (vs t=3.03 unfiltered)
+        htf_momentum_bars: int = 10,    # 4H bars for momentum look-back (~40 hours)
     ):
         self.range_lookback = range_lookback
         self.history_bars = history_bars
@@ -62,26 +66,55 @@ class TrAccumulation(Strategy):
         self.tp1_r = tp1_r
         self.risk_pct = risk_pct
         self.pip_size = pip_size
-        self.direction = direction  # filter to confirmed signal direction
+        self.direction = direction
+        self.htf_momentum_bars = htf_momentum_bars
 
     def init(self, data: dict) -> None:
-        key = next(iter(data))
-        df = data[key].copy()
+        # Entry TF data (first key = entry TF passed by runner)
+        entry_key = next(iter(data))
+        df = data[entry_key].copy()
         if "ts" in df.columns:
             df = df.set_index("ts")
         df.sort_index(inplace=True)
         self._df = df
 
-        # Precompute rolling N-bar range series
+        # Precompute rolling N-bar range series (all as numpy — avoids per-bar pandas slice)
         lb = self.range_lookback
-        roll_range = df["high"].rolling(lb).max() - df["low"].rolling(lb).min()
-        # Mean range over history_bars of rolling-range values
-        self._mean_range = roll_range.rolling(self.history_bars).mean()
-        self._roll_range = roll_range
+        roll_high_s = df["high"].rolling(lb).max()
+        roll_low_s  = df["low"].rolling(lb).min()
+        roll_range  = roll_high_s - roll_low_s
+        self._mean_range  = roll_range.rolling(self.history_bars).mean().to_numpy()
+        self._roll_range  = roll_range.to_numpy()
+        self._roll_high_v = roll_high_s.to_numpy()  # range_high per bar
+        self._roll_low_v  = roll_low_s.to_numpy()   # range_low per bar
+
+        # HTF direction filter: 4H close momentum
+        # +1 = bullish (close > close N bars ago), -1 = bearish, 0 = flat/unknown
+        self._htf_ts:  Optional[np.ndarray] = None
+        self._htf_dir: Optional[np.ndarray] = None
+        if "240" in data:
+            df4h = data["240"].copy()
+            if "ts" in df4h.columns:
+                df4h = df4h.set_index("ts")
+            df4h = df4h.sort_index()
+            delta = df4h["close"] - df4h["close"].shift(self.htf_momentum_bars)
+            direction_series = np.sign(delta).fillna(0)
+            self._htf_ts  = df4h.index.to_numpy()
+            self._htf_dir = direction_series.to_numpy()
 
     def next(self, bar: BarData, state: EngineState) -> Optional[Signal]:
         if state.has_open_position:
             return None
+
+        # HTF direction gate: only enter when 4H momentum agrees with trade direction
+        if self._htf_ts is not None:
+            idx4h = int(np.searchsorted(self._htf_ts, bar.ts, side="right")) - 1
+            if idx4h >= 0:
+                htf = self._htf_dir[idx4h]
+                if self.direction == "bull" and htf < 0:
+                    return None
+                if self.direction == "bear" and htf > 0:
+                    return None
 
         i = bar.index
         lb = self.range_lookback
@@ -90,11 +123,10 @@ class TrAccumulation(Strategy):
             return None
 
         pip = self.pip_size
-        df = self._df
 
-        # Causal: use values at i-1 (exclude current bar)
-        current_range = float(self._roll_range.iloc[i - 1])
-        mean_range = float(self._mean_range.iloc[i - 1])
+        # Causal: use values at i-1 (exclude current bar) — all numpy, no per-bar pandas slice
+        current_range = self._roll_range[i - 1]
+        mean_range    = self._mean_range[i - 1]
         if np.isnan(current_range) or np.isnan(mean_range) or mean_range == 0:
             return None
 
@@ -102,10 +134,8 @@ class TrAccumulation(Strategy):
         if current_range >= self.compress_ratio * mean_range:
             return None
 
-        # Range bounds at i-1 (causal)
-        window = df.iloc[i - lb: i]
-        range_high = float(window["high"].max())
-        range_low = float(window["low"].min())
+        range_high = self._roll_high_v[i - 1]
+        range_low  = self._roll_low_v[i - 1]
 
         sl_buf = self.sl_buffer_pips * pip
 

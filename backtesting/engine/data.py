@@ -5,7 +5,8 @@ Loads OHLCV from any source with a single function call.
 Handles all file formats currently in the project:
 
   - Flat parquet:   data/market_data/{SYMBOL}{TF}.parquet       (21 forex pairs)
-  - Crypto parquet:  data/market_data/crypto/{SYMBOL}{TF}.parquet
+  - Crypto parquet: data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet
+  - Legacy crypto:  data/market_data/crypto/{SYMBOL}{TF}.parquet
   - Forex CSVs:     data/market_data/forex/{SYMBOL}/m{tf}.csv
   - Index CSVs:     data/market_data/index/{SYMBOL}/{SYMBOL}{tf}.csv
   - Commodity CSVs: data/market_data/commodity/{SYMBOL}/*.csv
@@ -14,7 +15,7 @@ Usage:
     from backtesting.engine.data import load_data, list_pairs, list_tfs
 
     df = load_data("EURUSD", tf="1", days=30)
-    df = load_data("BTCUSDT", tf="60", start="2026-01-01", end="2026-06-01", asset_type="crypto")
+    df = load_data("BTCUSDT", tf="60", start="2026-01-01", end="2026-06-01", asset_type="crypto", exchange="binance")
     df = load_data("XAUUSD", tf="15", days=90)
 
     pairs = list_pairs()           # all available symbols
@@ -30,6 +31,7 @@ from typing import Optional
 import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "market_data"
+CRYPTO_EXCHANGES = ("binance", "bybit")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -101,9 +103,11 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     if missing:
         return pd.DataFrame()
 
-    # Parse timestamps
+    # Parse timestamps — ensure tz-aware UTC
     if not pd.api.types.is_datetime64_any_dtype(df["ts"]):
         df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    elif df["ts"].dt.tz is None:
+        df["ts"] = df["ts"].dt.tz_localize("UTC")
 
     # Ensure numeric types
     for col in ["open", "high", "low", "close", "volume"]:
@@ -131,20 +135,47 @@ def _load_from_flat_parquet(symbol: str, tf: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _load_from_crypto_dir(symbol: str, tf: str) -> pd.DataFrame:
+def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) -> pd.DataFrame:
+    """data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet, with legacy fallback."""
+    paths = []
+    if exchange:
+        paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}{tf}.parquet")
+    else:
+        paths.extend(DATA_DIR / "crypto" / ex / f"{symbol}{tf}.parquet" for ex in CRYPTO_EXCHANGES)
+        paths.append(DATA_DIR / "crypto" / f"{symbol}{tf}.parquet")
+
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            continue
+    return pd.DataFrame()
+
+
+def _load_from_crypto_funding(symbol: str, exchange: Optional[str] = None) -> pd.DataFrame:
+    """data/market_data/crypto/{exchange}/{SYMBOL}_funding.parquet, with legacy fallback."""
+    paths = []
+    if exchange:
+        paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}_funding.parquet")
+    else:
+        paths.extend(DATA_DIR / "crypto" / ex / f"{symbol}_funding.parquet" for ex in CRYPTO_EXCHANGES)
+        paths.append(DATA_DIR / "crypto" / f"{symbol}_funding.parquet")
+
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            continue
+    return pd.DataFrame()
+
+
+def _load_from_legacy_crypto_dir(symbol: str, tf: str) -> pd.DataFrame:
     """data/market_data/crypto/{SYMBOL}{TF}.parquet"""
     path = DATA_DIR / "crypto" / f"{symbol}{tf}.parquet"
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        return pd.read_parquet(path)
-    except Exception:
-        return pd.DataFrame()
-
-
-def _load_from_crypto_funding(symbol: str) -> pd.DataFrame:
-    """data/market_data/crypto/{SYMBOL}_funding.parquet"""
-    path = DATA_DIR / "crypto" / f"{symbol}_funding.parquet"
     if not path.exists():
         return pd.DataFrame()
     try:
@@ -178,8 +209,19 @@ def _load_from_forex_dir(symbol: str, tf: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+PINE_REVIEW_DIR = Path(__file__).resolve().parent.parent.parent / "pine-review" / "data" / "parquet"
+
+
 def _load_from_index_dir(symbol: str, tf: str) -> pd.DataFrame:
-    """data/market_data/index/{SYMBOL}/{SYMBOL}{tf}.csv (tab-separated, no header)"""
+    """data/market_data/index/{SYMBOL}/{SYMBOL}{tf}.csv or pine-review/data/parquet/indeces/{SYMBOL}{tf}.parquet"""
+    # Try pine-review parquet first (has NAS100, SPX, DJI data)
+    pine_path = PINE_REVIEW_DIR / "indeces" / f"{symbol}{tf}.parquet"
+    if pine_path.exists():
+        try:
+            return pd.read_parquet(pine_path)
+        except Exception:
+            pass
+
     path = DATA_DIR / "index" / symbol / f"{symbol}{tf}.csv"
     if not path.exists():
         return pd.DataFrame()
@@ -259,6 +301,7 @@ def load_data(
     start: Optional[str | datetime] = None,
     end: Optional[str | datetime] = None,
     asset_type: Optional[str] = None,
+    exchange: Optional[str] = None,
     resample: bool = True,
 ) -> pd.DataFrame:
     """
@@ -279,6 +322,9 @@ def load_data(
     asset_type : str, optional
         'forex', 'crypto', 'index', 'commodity'.
         If None, auto-detected from symbol and available data.
+    exchange : str, optional
+        Crypto exchange namespace ('binance' or 'bybit'). If omitted, loader
+        checks exchange-scoped crypto data first, then legacy flat crypto files.
     resample : bool
         If True and exact TF not available, resample from lower TF.
 
@@ -292,10 +338,10 @@ def load_data(
     df = pd.DataFrame()
 
     if asset_type == "crypto":
-        df = _load_from_crypto_dir(symbol, tf)
+        df = _load_from_crypto_dir(symbol, tf, exchange=exchange)
         if df.empty:
             # Try resampling from 1m
-            df_1m = _load_from_crypto_dir(symbol, "1")
+            df_1m = _load_from_crypto_dir(symbol, "1", exchange=exchange)
             if not df_1m.empty and resample:
                 df = _resample_to_tf(df_1m, tf)
     elif asset_type == "forex":
@@ -332,7 +378,7 @@ def load_data(
         # Auto-detect: try each source in order
         for loader in [
             lambda: _load_from_flat_parquet(symbol, tf),
-            lambda: _load_from_crypto_dir(symbol, tf),
+            lambda: _load_from_crypto_dir(symbol, tf, exchange=exchange),
             lambda: _load_from_forex_dir(symbol, tf),
             lambda: _load_from_index_dir(symbol, tf),
             lambda: _load_from_commodity_dir(symbol, tf),
@@ -346,7 +392,7 @@ def load_data(
             for lower_tf in ["1", "5"]:
                 for loader in [
                     lambda: _load_from_flat_parquet(symbol, lower_tf),
-                    lambda: _load_from_crypto_dir(symbol, lower_tf),
+                    lambda: _load_from_crypto_dir(symbol, lower_tf, exchange=exchange),
                     lambda: _load_from_commodity_dir(symbol, lower_tf),
                 ]:
                     df_lower = loader()
@@ -374,13 +420,13 @@ def load_data(
     return df
 
 
-def load_funding_rate(symbol: str) -> pd.DataFrame:
+def load_funding_rate(symbol: str, exchange: Optional[str] = None) -> pd.DataFrame:
     """Load funding rate data for a crypto symbol.
 
     Returns DataFrame with columns: ts, fundingRate
     (no OHLCV normalization — funding data has different schema).
     """
-    df = _load_from_crypto_funding(symbol)
+    df = _load_from_crypto_funding(symbol, exchange=exchange)
     if df.empty:
         return df
     if not pd.api.types.is_datetime64_any_dtype(df["ts"]):
@@ -403,6 +449,18 @@ def list_pairs(asset_type: Optional[str] = None) -> list[str]:
 
     # Crypto dir
     if (DATA_DIR / "crypto").exists():
+        for ex in CRYPTO_EXCHANGES:
+            ex_dir = DATA_DIR / "crypto" / ex
+            if not ex_dir.exists():
+                continue
+            for f in ex_dir.glob("*.parquet"):
+                name = f.stem
+                if name.endswith("_funding"):
+                    continue
+                while name and name[-1].isdigit():
+                    name = name[:-1]
+                if len(name) >= 3:
+                    pairs.add(name)
         for f in (DATA_DIR / "crypto").glob("*.parquet"):
             name = f.stem
             if name.endswith("_funding"):

@@ -184,17 +184,25 @@ class BacktestResult:
             return pd.DataFrame()
         rows = []
         for t in self.trades:
+            duration_min = 0.0
+            try:
+                duration_min = (t.exit_time - t.entry_time).total_seconds() / 60
+            except Exception:
+                pass
             rows.append({
                 "id": t.id,
                 "direction": t.direction.value if hasattr(t.direction, "value") else t.direction,
                 "entry_time": t.entry_time,
                 "exit_time": t.exit_time,
+                "duration_min": round(duration_min, 1),
                 "entry_price": t.entry_price,
                 "exit_price": t.exit_price,
                 "exit_reason": t.exit_reason.value if hasattr(t.exit_reason, "value") else t.exit_reason,
                 "lots": t.lots,
                 "pnl": t.pnl,
                 "r_multiple": t.r_multiple,
+                "sl": getattr(t, "sl", 0.0),
+                "tp1": getattr(t, "tp1", 0.0),
                 "label": t.label,
             })
         return pd.DataFrame(rows)
@@ -270,6 +278,17 @@ def run(
                 exit_code = int(results[j, 0])
                 fill_raw = results[j, 1]
                 is_sl_hit = bool(results[j, 2])
+                direction_value = pos.direction.value if hasattr(pos.direction, "value") else pos.direction
+
+                if hasattr(costs, "would_liquidate") and costs.would_liquidate(
+                    pos.entry_price,
+                    direction_value,
+                    bar.high,
+                    bar.low,
+                ):
+                    exit_code = 6
+                    fill_raw = costs.liquidation_price(pos.entry_price, direction_value)
+                    is_sl_hit = True
 
                 if exit_code == 0:
                     # Update trailing stop if TP1 already hit
@@ -285,8 +304,9 @@ def run(
 
                 if exit_code == 2:  # TP1 — partial close
                     close_lots = pos.lots * pos.tp1_frac
-                    comm_share = pos.entry_commission * pos.tp1_frac
-                    pnl = _calc_pnl(costs, pos, fill, close_lots) - comm_share
+                    comm_share = _commission_for_exit(costs, pos, close_lots, fill, pos.tp1_frac, is_sl=False)
+                    funding = _funding_for_exit(costs, pos, close_lots, bar.ts)
+                    pnl = _calc_pnl(costs, pos, fill, close_lots) - comm_share - funding
                     equity += pnl
                     trade_id += 1
                     ct = ClosedTrade(
@@ -299,7 +319,7 @@ def run(
                         exit_reason=ExitReason.TP1,
                         lots=close_lots,
                         pnl=pnl,
-                        r_multiple=_r_mult(pos, fill, close_lots, costs),
+                        r_multiple=_r_mult_net(pos, close_lots, costs, pnl),
                         label=pos.label if hasattr(pos, "label") else "",
                         sl=pos.original_sl,
                         tp1=pos.tp1 or 0.0,
@@ -310,6 +330,8 @@ def run(
                     # Update position state
                     pos.lots_remaining -= close_lots
                     pos.tp1_hit = True
+                    if pos.lots_remaining <= 1e-12:
+                        continue
                     # Move SL to breakeven
                     pos.sl = pos.entry_price
                     pos.be_moved = True
@@ -320,8 +342,9 @@ def run(
 
                 elif exit_code == 3:  # TP2 — partial close
                     close_lots = pos.lots * pos.tp2_frac
-                    comm_share = pos.entry_commission * pos.tp2_frac
-                    pnl = _calc_pnl(costs, pos, fill, close_lots) - comm_share
+                    comm_share = _commission_for_exit(costs, pos, close_lots, fill, pos.tp2_frac, is_sl=False)
+                    funding = _funding_for_exit(costs, pos, close_lots, bar.ts)
+                    pnl = _calc_pnl(costs, pos, fill, close_lots) - comm_share - funding
                     equity += pnl
                     trade_id += 1
                     ct = ClosedTrade(
@@ -334,7 +357,7 @@ def run(
                         exit_reason=ExitReason.TP2,
                         lots=close_lots,
                         pnl=pnl,
-                        r_multiple=_r_mult(pos, fill, close_lots, costs),
+                        r_multiple=_r_mult_net(pos, close_lots, costs, pnl),
                         label=pos.label if hasattr(pos, "label") else "",
                         sl=pos.original_sl,
                         tp1=pos.tp1 or 0.0,
@@ -343,16 +366,16 @@ def run(
                     strategy.on_partial(ct, _make_state(equity, initial_equity, remaining, closed_trades, i))
                     pos.lots_remaining -= close_lots
                     pos.tp2_hit = True
+                    if pos.lots_remaining <= 1e-12:
+                        continue
                     remaining.append(pos)
 
                 else:  # SL / TP3 / TRAIL — full close of remainder
                     close_lots = pos.lots_remaining
                     runner_frac = close_lots / pos.lots if pos.lots > 0 else 1.0
-                    comm_share = pos.entry_commission * runner_frac
-                    pnl = _calc_pnl(costs, pos, fill, close_lots) - comm_share
-                    # Funding cost for crypto
-                    if hasattr(costs, "funding_cost"):
-                        pnl -= costs.funding_cost(close_lots, pos.entry_price, pos.entry_time, bar.ts)
+                    comm_share = _commission_for_exit(costs, pos, close_lots, fill, runner_frac, is_sl=is_sl_hit)
+                    funding = _funding_for_exit(costs, pos, close_lots, bar.ts)
+                    pnl = _calc_pnl(costs, pos, fill, close_lots) - comm_share - funding
                     equity += pnl
                     trade_id += 1
                     ct = ClosedTrade(
@@ -365,7 +388,7 @@ def run(
                         exit_reason=exit_reason,
                         lots=close_lots,
                         pnl=pnl,
-                        r_multiple=_r_mult(pos, fill, close_lots, costs),
+                        r_multiple=_r_mult_net(pos, close_lots, costs, pnl),
                         label=pos.label if hasattr(pos, "label") else "",
                         sl=pos.original_sl,
                         tp1=pos.tp1 or 0.0,
@@ -384,8 +407,8 @@ def run(
                 pos = _open_position(signal, bar, costs, equity, pos_id)
                 if pos is not None:
                     pos_id += 1
-                    # Store round-trip commission; netted into trade.pnl proportionally on close
-                    pos.entry_commission = costs.commission(pos.lots, bar.close)
+                    # Stored and netted into trade.pnl proportionally on close.
+                    pos.entry_commission = _entry_commission(costs, pos.lots, pos.entry_price)
                     open_positions.append(pos)
 
         if verbose and i % 10_000 == 0 and i > 0:
@@ -399,8 +422,9 @@ def run(
     for pos in open_positions:
         fill = costs.exit_fill(close_arr[-1], pos.direction.value, is_sl=False)
         runner_frac = pos.lots_remaining / pos.lots if pos.lots > 0 else 1.0
-        comm_share = pos.entry_commission * runner_frac
-        pnl = _calc_pnl(costs, pos, fill, pos.lots_remaining) - comm_share
+        comm_share = _commission_for_exit(costs, pos, pos.lots_remaining, fill, runner_frac, is_sl=False)
+        funding = _funding_for_exit(costs, pos, pos.lots_remaining, last_bar.ts)
+        pnl = _calc_pnl(costs, pos, fill, pos.lots_remaining) - comm_share - funding
         equity += pnl
         trade_id += 1
         closed_trades.append(ClosedTrade(
@@ -413,7 +437,7 @@ def run(
             exit_reason=ExitReason.EOD,
             lots=pos.lots_remaining,
             pnl=pnl,
-            r_multiple=_r_mult(pos, fill, pos.lots_remaining, costs),
+            r_multiple=_r_mult_net(pos, pos.lots_remaining, costs, pnl),
             label=pos.label if hasattr(pos, "label") else "",
             sl=pos.original_sl,
             tp1=pos.tp1 or 0.0,
@@ -450,7 +474,8 @@ def _positions_to_array(positions: list[Position]) -> np.ndarray:
 
 def _code_to_reason(code: int) -> ExitReason:
     return {1: ExitReason.SL, 2: ExitReason.TP1, 3: ExitReason.TP2,
-            4: ExitReason.TP3, 5: ExitReason.TRAIL}.get(code, ExitReason.SL)
+            4: ExitReason.TP3, 5: ExitReason.TRAIL,
+            6: ExitReason.LIQUIDATION}.get(code, ExitReason.SL)
 
 
 def _calc_pnl(costs: CostModel, pos: Position, fill: float, lots: float) -> float:
@@ -461,13 +486,45 @@ def _calc_pnl(costs: CostModel, pos: Position, fill: float, lots: float) -> floa
     return price_move * costs.pip_value(lots)
 
 
-def _r_mult(pos: Position, fill: float, lots: float, costs: CostModel) -> float:
-    initial_risk = abs(pos.entry_price - pos.sl) * costs.pip_value(lots) / (
-        costs.pip_size if hasattr(costs, "pip_size") else 0.0001
+def _entry_commission(costs: CostModel, lots: float, price: float) -> float:
+    if hasattr(costs, "entry_commission"):
+        return costs.entry_commission(lots, price)
+    return costs.commission(lots, price)
+
+
+def _commission_for_exit(
+    costs: CostModel,
+    pos: Position,
+    close_lots: float,
+    fill: float,
+    entry_fraction: float,
+    is_sl: bool,
+) -> float:
+    entry_share = pos.entry_commission * entry_fraction
+    if hasattr(costs, "exit_commission"):
+        return entry_share + costs.exit_commission(close_lots, fill, is_sl=is_sl)
+    return entry_share
+
+
+def _funding_for_exit(costs: CostModel, pos: Position, close_lots: float, exit_time) -> float:
+    if not hasattr(costs, "funding_cost"):
+        return 0.0
+    return costs.funding_cost(
+        close_lots,
+        pos.entry_price,
+        pos.entry_time,
+        exit_time,
+        direction=pos.direction.value if hasattr(pos.direction, "value") else pos.direction,
     )
+
+
+def _r_mult_net(pos: Position, lots: float, costs: CostModel, pnl: float) -> float:
+    original_sl = getattr(pos, "original_sl", pos.sl)
+    stop_dist = abs(pos.entry_price - original_sl)
+    pip_size = costs.pip_size if hasattr(costs, "pip_size") else 0.0001
+    initial_risk = (stop_dist / pip_size) * costs.pip_value(lots)
     if initial_risk == 0:
         return 0.0
-    pnl = _calc_pnl(costs, pos, fill, lots)
     return pnl / initial_risk
 
 

@@ -20,6 +20,7 @@ fi
 BOT_PID_FILE="data/.bot.pid"
 WEBAPP_PID_FILE="data/.webapp.pid"
 SLTP_POLLER_PID_FILE="data/.sltp_poller.pid"
+COPY_PID_FILE="data/.copy.pid"
 
 LOG_DIR="data/logs"
 mkdir -p "$LOG_DIR"
@@ -27,6 +28,7 @@ mkdir -p "$LOG_DIR"
 BOT_LOG="$LOG_DIR/bot.log"
 WEBAPP_LOG="$LOG_DIR/webapp.log"
 SLTP_POLLER_LOG="$LOG_DIR/sltp_poller.log"
+COPY_LOG="$LOG_DIR/copy_trader.log"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -38,6 +40,7 @@ systemd_unit_for() {
         bot) echo "journal-bot.service" ;;
         webapp) echo "journal-webapp.service" ;;
         sltp) echo "journal-sltp-poller.service" ;;
+        copy) echo "journal-copy-trader.service" ;;
         *) return 1 ;;
     esac
 }
@@ -56,7 +59,8 @@ has_all_systemd_units() {
     for unit in \
         journal-bot.service \
         journal-webapp.service \
-        journal-sltp-poller.service
+        journal-sltp-poller.service \
+        journal-copy-trader.service
     do
         systemctl cat "$unit" >/dev/null 2>&1 || return 1
     done
@@ -183,6 +187,34 @@ stop_sltp_poller_local() {
     echo -e "${GREEN}SL/TP poller stopped${NC}"
 }
 
+start_copy_local() {
+    echo -e "${YELLOW}Starting Copy Trader...${NC}"
+
+    if is_running "$COPY_PID_FILE"; then
+        echo -e "${RED}Copy Trader is already running${NC}"
+        return 1
+    fi
+
+    nohup python3 infra/copy_trader.py > "$COPY_LOG" 2>&1 &
+    echo $! > "$COPY_PID_FILE"
+
+    echo -e "${GREEN}Copy Trader started (PID: $(cat "$COPY_PID_FILE"))${NC}"
+    echo "Logs: $COPY_LOG"
+}
+
+stop_copy_local() {
+    echo -e "${YELLOW}Stopping Copy Trader...${NC}"
+
+    if ! is_running "$COPY_PID_FILE"; then
+        echo -e "${RED}Copy Trader is not running${NC}"
+        return 1
+    fi
+
+    kill "$(cat "$COPY_PID_FILE")"
+    rm -f "$COPY_PID_FILE"
+    echo -e "${GREEN}Copy Trader stopped${NC}"
+}
+
 print_systemd_status_line() {
     local label=$1
     local unit=$2
@@ -218,6 +250,9 @@ run_service_action() {
         start:sltp) start_sltp_poller_local ;;
         stop:sltp) stop_sltp_poller_local ;;
         restart:sltp) stop_sltp_poller_local || true; sleep 1; start_sltp_poller_local ;;
+        start:copy) start_copy_local ;;
+        stop:copy) stop_copy_local ;;
+        restart:copy) stop_copy_local || true; sleep 1; start_copy_local ;;
         *) echo "Unknown action/service: ${action} ${service}"; exit 1 ;;
     esac
 }
@@ -229,6 +264,7 @@ status_all() {
         print_systemd_status_line "Bot" "journal-bot.service"
         print_systemd_status_line "Webapp" "journal-webapp.service"
         print_systemd_status_line "SL/TP Poller" "journal-sltp-poller.service"
+        print_systemd_status_line "Copy Trader" "journal-copy-trader.service"
         return
     fi
 
@@ -257,6 +293,13 @@ status_all() {
     else
         echo -e "${RED}Stopped${NC}"
     fi
+
+    echo -n "Copy Trader: "
+    if is_running "$COPY_PID_FILE"; then
+        echo -e "${GREEN}Running (PID: $(cat "$COPY_PID_FILE"))${NC}"
+    else
+        echo -e "${RED}Stopped${NC}"
+    fi
 }
 
 logs_for_service() {
@@ -277,8 +320,9 @@ logs_for_service() {
         bot) tail -f "$BOT_LOG" ;;
         webapp) tail -f "$WEBAPP_LOG" ;;
         sltp) tail -f "$SLTP_POLLER_LOG" ;;
+        copy) tail -f "$COPY_LOG" ;;
         *)
-            echo "Usage: $0 logs {bot|webapp|sltp}"
+            echo "Usage: $0 logs {bot|webapp|sltp|copy}"
             exit 1
             ;;
     esac
@@ -299,6 +343,7 @@ run_all_action() {
     run_service_action "$action" bot
     run_service_action "$action" webapp
     run_service_action "$action" sltp
+    run_service_action "$action" copy
     echo -e "${GREEN}All services ${past_tense}${NC}"
 }
 

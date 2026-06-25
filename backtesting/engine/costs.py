@@ -11,7 +11,7 @@ ForexCosts — from PLAN.md:
 CryptoCosts (Binance USDT-M futures):
   maker fee: 0.02%   taker fee: 0.04%
   funding:   from parquet file (ts, fundingRate), applied every 8h
-  leverage:  configurable (default 10x)
+  leverage:  configurable (default 50x for challenge simulation)
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from __future__ import annotations
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from math import floor
 from typing import Optional
 
 import pandas as pd
@@ -110,14 +111,19 @@ class CryptoCosts(CostModel):
     Crypto futures cost model (Binance USDT-M / Bybit Linear).
 
     All fees as fractions (0.0004 = 0.04%).
-    Leverage is used only for liquidation checks — not for position sizing.
+    Leverage caps position sizing and exposes liquidation checks.
     Position sizing is risk-based: risk_pct × equity / stop_dist_price.
     """
     maker_fee: float = 0.0002          # 0.02% Binance maker
     taker_fee: float = 0.0004          # 0.04% Binance taker
-    leverage: float = 10.0
+    leverage: float = 50.0
     pip_size: float = 1.0              # 1 price unit = 1 pip for linear perps
     funding_df: Optional[pd.DataFrame] = None  # columns: ts, fundingRate
+    qty_step: float = 0.0              # exchange contract/base-qty step
+    min_qty: float = 0.0
+    min_notional: float = 0.0
+    tick_size: float = 0.0
+    maintenance_margin_rate: float = 0.005
 
     def entry_fill(self, price: float, direction: str) -> float:
         # Market entry = taker; limit = maker. Use taker by default.
@@ -132,6 +138,15 @@ class CryptoCosts(CostModel):
         """Round-trip fee. lots = contracts (1 lot = 1 base unit)."""
         notional = lots * price
         return notional * (self.taker_fee + self.maker_fee)  # entry taker + exit maker
+
+    def entry_commission(self, lots: float, price: float) -> float:
+        """Entry fee for market/taker entries."""
+        return lots * price * self.taker_fee
+
+    def exit_commission(self, lots: float, price: float, is_sl: bool = False) -> float:
+        """Exit fee: stops are taker, targets are assumed maker."""
+        fee = self.taker_fee if is_sl else self.maker_fee
+        return lots * price * fee
 
     def pip_value(self, lots: float, price: float = 1.0) -> float:
         # For crypto: PnL = contracts × price_move (linear perp)
@@ -156,13 +171,21 @@ class CryptoCosts(CostModel):
         if price > 0:
             max_lots = (equity * self.leverage) / price
             lots_by_risk = min(lots_by_risk, max_lots)
-        return max(0.0, lots_by_risk)
+            if self.min_notional > 0 and lots_by_risk * price < self.min_notional:
+                return 0.0
 
-    def funding_cost(self, lots: float, price: float, open_time, close_time) -> float:
+        lots = max(0.0, lots_by_risk)
+        if self.qty_step > 0:
+            lots = floor(lots / self.qty_step) * self.qty_step
+        if self.min_qty > 0 and lots < self.min_qty:
+            return 0.0
+        return lots
+
+    def funding_cost(self, lots: float, price: float, open_time, close_time, direction: str = "long") -> float:
         """
         Apply funding rate charges between open_time and close_time.
         Funding periods: 00:00, 08:00, 16:00 UTC.
-        Returns total funding cost (positive = you pay, negative = you receive).
+        Returns total funding cost (positive = trader pays, negative = trader receives).
         """
         if self.funding_df is None or self.funding_df.empty:
             return 0.0
@@ -174,4 +197,27 @@ class CryptoCosts(CostModel):
         if rates.empty:
             return 0.0
         notional = lots * price
-        return float(rates.sum()) * notional  # positive rate = long pays short
+        signed_rate = float(rates.sum())
+        if direction == "short":
+            signed_rate *= -1
+        return signed_rate * notional  # positive funding: long pays short
+
+    def liquidation_price(self, entry: float, direction: str) -> float:
+        """
+        Approximate isolated-margin liquidation threshold for linear perps.
+
+        This is deliberately conservative for research. Real exchange formulas
+        include bracketed maintenance rates, fees, wallet balance, and funding.
+        """
+        if self.leverage <= 0:
+            return 0.0
+        buffer = max(0.0, (1.0 / self.leverage) - self.maintenance_margin_rate)
+        if direction == "long":
+            return entry * (1.0 - buffer)
+        return entry * (1.0 + buffer)
+
+    def would_liquidate(self, entry: float, direction: str, bar_high: float, bar_low: float) -> bool:
+        liq = self.liquidation_price(entry, direction)
+        if direction == "long":
+            return bar_low <= liq
+        return bar_high >= liq

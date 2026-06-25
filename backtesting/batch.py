@@ -23,7 +23,9 @@ Usage:
 from __future__ import annotations
 
 import itertools
+import os
 import traceback
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional, Type
 
@@ -86,24 +88,44 @@ def run_batch(
     configs: list[RunConfig],
     sort_by: str = "profit_factor",
     min_trades: int = 10,
+    workers: int = 1,
 ) -> pd.DataFrame:
     """
-    Run all configs sequentially. Returns a DataFrame sorted by sort_by.
-    Rows with fewer than min_trades are kept but appear at the bottom.
+    Run all configs. workers=1 is sequential (default); workers>1 uses ProcessPoolExecutor.
+    Pass workers=os.cpu_count() for max parallelism.
+    Returns a DataFrame sorted by sort_by.
     """
-    rows = []
     n = len(configs)
-    for i, cfg in enumerate(configs, 1):
-        print(f"  [{i}/{n}] {cfg.pair} {cfg.entry_tf}m  {cfg.params}", end="  ", flush=True)
-        row = _run_one(strategy_cls, cfg)
-        trades = row.get("trades", 0)
-        pf = row.get("profit_factor", 0)
-        err = row.get("error")
-        if err:
-            print(f"ERROR: {str(err)[:80]}")
-        else:
-            print(f"T={trades}  PF={pf:.2f}")
-        rows.append(row)
+
+    if workers > 1:
+        rows = [None] * n
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_run_one, strategy_cls, cfg): i for i, cfg in enumerate(configs)}
+            done = 0
+            for fut in as_completed(futures):
+                i = futures[fut]
+                row = fut.result()
+                rows[i] = row
+                done += 1
+                cfg = configs[i]
+                trades = row.get("trades", 0)
+                pf = row.get("profit_factor", 0)
+                err = row.get("error")
+                status = f"ERROR: {str(err)[:60]}" if err else f"T={trades}  PF={pf:.2f}"
+                print(f"  [{done}/{n}] {cfg.pair} {cfg.entry_tf}m  {cfg.params}  {status}", flush=True)
+    else:
+        rows = []
+        for i, cfg in enumerate(configs, 1):
+            print(f"  [{i}/{n}] {cfg.pair} {cfg.entry_tf}m  {cfg.params}", end="  ", flush=True)
+            row = _run_one(strategy_cls, cfg)
+            trades = row.get("trades", 0)
+            pf = row.get("profit_factor", 0)
+            err = row.get("error")
+            if err:
+                print(f"ERROR: {str(err)[:80]}")
+            else:
+                print(f"T={trades}  PF={pf:.2f}")
+            rows.append(row)
 
     df = pd.DataFrame(rows)
     if df.empty:

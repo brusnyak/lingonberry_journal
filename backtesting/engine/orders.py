@@ -22,6 +22,7 @@ class ExitReason(str, Enum):
     TP2 = "tp2"
     TP3 = "tp3"
     TRAIL = "trail"
+    LIQUIDATION = "liquidation"
     SIGNAL = "signal"   # strategy closed manually
     EOD = "eod"         # end-of-data flush
 

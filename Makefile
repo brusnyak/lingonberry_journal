@@ -3,7 +3,7 @@ VENV := .venv
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
-.PHONY: help venv install run-web run-bot test clean nas100 nas100-sweep nas100-monthly
+.PHONY: help venv install run-web run-bot run-copy copy-status test clean nas100 nas100-sweep nas100-monthly
 
 help:
 	@echo "Available targets:"
@@ -11,6 +11,9 @@ help:
 	@echo "  make install       - install dependencies"
 	@echo "  make run-web       - start Flask web app (port 5000)"
 	@echo "  make run-bot       - start Telegram bot"
+	@echo "  make run-copy      - start Copy Trader (25K→100K)"
+	@echo "  make copy-status   - print copy trader account status"
+	@echo "  make copy-dry      - start Copy Trader in dry-run mode"
 	@echo "  make test          - run test suite"
 	@echo "  make clean         - clean cache files"
 	@echo "  make nas100        - NAS100 backtest (30d, single run)"
@@ -29,6 +32,15 @@ run-web:
 
 run-bot:
 	$(PY) bot/journal_daemon.py
+
+run-copy:
+	$(PY) infra/copy_trader.py
+
+copy-status:
+	$(PY) infra/copy_trader.py --status
+
+copy-dry:
+	COPY_DRY_RUN=true $(PY) infra/copy_trader.py
 
 test:
 	$(PY) -m pytest -q

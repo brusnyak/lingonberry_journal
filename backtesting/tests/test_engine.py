@@ -390,6 +390,85 @@ def test_crypto_margin_cap():
     print(f"PASS test_crypto_margin_cap (BTC: {lots} lots, WLD: {lots_wld} lots)")
 
 
+# ── Test 7b: Crypto exchange constraints ─────────────────────────────────────
+
+def test_crypto_exchange_constraints():
+    """Crypto sizing must respect 50x margin, min notional, min qty, and qty step."""
+    cr = CryptoCosts(leverage=50, qty_step=0.001, min_qty=0.001, min_notional=5.0)
+
+    # $20 account at 50x can carry at most $1000 notional.
+    lots = cr.calc_lots(equity=20.0, risk_pct=0.5, stop_dist_price=10.0, price=100.0)
+    assert lots == 1.0, f"Expected risk sizing to 1.0 lot, got {lots}"
+
+    capped = cr.calc_lots(equity=20.0, risk_pct=1.0, stop_dist_price=0.01, price=100.0)
+    assert capped == 10.0, f"Expected 50x notional cap to 10.0 lots, got {capped}"
+
+    too_small = cr.calc_lots(equity=20.0, risk_pct=0.001, stop_dist_price=10.0, price=100.0)
+    assert too_small == 0.0, f"Expected min_qty/min_notional rejection, got {too_small}"
+    print("PASS test_crypto_exchange_constraints")
+
+
+# ── Test 7c: Crypto funding side and liquidation ─────────────────────────────
+
+def test_crypto_funding_and_liquidation():
+    """Positive funding costs longs and credits shorts; 50x liquidation is close."""
+    funding = pd.DataFrame({
+        "ts": pd.to_datetime([
+            "2026-01-01 08:00:00+00:00",
+            "2026-01-01 16:00:00+00:00",
+        ]),
+        "fundingRate": [0.0001, 0.0002],
+    })
+    cr = CryptoCosts(leverage=50, funding_df=funding, maintenance_margin_rate=0.005)
+    open_time = pd.Timestamp("2026-01-01 00:00:00", tz="UTC")
+    close_time = pd.Timestamp("2026-01-01 20:00:00", tz="UTC")
+
+    long_cost = cr.funding_cost(1.0, 1000.0, open_time, close_time, direction="long")
+    short_cost = cr.funding_cost(1.0, 1000.0, open_time, close_time, direction="short")
+    assert abs(long_cost - 0.30) < 1e-9, f"Long funding should pay $0.30, got {long_cost}"
+    assert abs(short_cost + 0.30) < 1e-9, f"Short funding should receive $0.30, got {short_cost}"
+
+    assert abs(cr.liquidation_price(100.0, "long") - 98.5) < 1e-9
+    assert abs(cr.liquidation_price(100.0, "short") - 101.5) < 1e-9
+    assert cr.would_liquidate(100.0, "long", bar_high=101.0, bar_low=98.4)
+    assert cr.would_liquidate(100.0, "short", bar_high=101.6, bar_low=99.0)
+    print("PASS test_crypto_funding_and_liquidation")
+
+
+# ── Test 7d: Runner liquidation exit ─────────────────────────────────────────
+
+def test_runner_liquidation_exit():
+    """Runner must close crypto trades at liquidation before a distant SL."""
+    rows = [{"open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0}] * 5
+    rows.append({"open": 100.0, "high": 100.5, "low": 99.5, "close": 100.0})  # entry
+    rows.append({"open": 100.0, "high": 100.2, "low": 98.4, "close": 99.0})   # 50x liq ~= 98.5
+
+    class _CryptoLong(Strategy):
+        def next(self, bar, state):
+            if bar.index == 5 and not state.has_open_position:
+                return Signal(
+                    direction=Direction.LONG,
+                    entry=100.0,
+                    sl=95.0,
+                    tp1=110.0,
+                    risk_pct=0.5,
+                    trail=False,
+                )
+            return None
+
+    result = run(
+        _CryptoLong(),
+        {"1": _make_bars_custom(rows)},
+        entry_tf="1",
+        costs=CryptoCosts(leverage=50, maintenance_margin_rate=0.005),
+        initial_equity=20.0,
+    )
+    assert len(result.trades) == 1
+    assert result.trades[0].exit_reason == ExitReason.LIQUIDATION
+    assert abs(result.trades[0].exit_price - 98.5) < 1e-9
+    print("PASS test_runner_liquidation_exit")
+
+
 # ── Test 8: Forex lot sizing dollar risk ─────────────────────────────────────
 
 def test_forex_lot_sizing():
@@ -481,6 +560,9 @@ TESTS = [
     test_be_move_after_tp1,
     test_r_multiple_sign,
     test_crypto_margin_cap,
+    test_crypto_exchange_constraints,
+    test_crypto_funding_and_liquidation,
+    test_runner_liquidation_exit,
     test_forex_lot_sizing,
     test_metrics,
     test_eod_flush,

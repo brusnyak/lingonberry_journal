@@ -9,6 +9,9 @@ __pycache__/
 
 # ── Secrets / keys ──
 .env
+*creds*.txt
+*account-id*.txt
+OANDA-*.zip
 !.env.example
 *.key
 *.key.pub
