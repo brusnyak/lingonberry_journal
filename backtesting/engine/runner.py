@@ -280,7 +280,11 @@ def run(
                 is_sl_hit = bool(results[j, 2])
                 direction_value = pos.direction.value if hasattr(pos.direction, "value") else pos.direction
 
-                if hasattr(costs, "would_liquidate") and costs.would_liquidate(
+                # ponytail: only override with liquidation when no other exit
+                # (SL/TP from numba) was already triggered. If SL is tighter than
+                # liquidation, the numba SL check handles it correctly. If
+                # liquidation is tighter (rare at high leverage), this catches it.
+                if exit_code == 0 and hasattr(costs, "would_liquidate") and costs.would_liquidate(
                     pos.entry_price,
                     direction_value,
                     bar.high,
