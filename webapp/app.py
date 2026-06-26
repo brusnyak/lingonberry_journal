@@ -1642,10 +1642,265 @@ def api_trade_playback(trade_id: int):
     trade = journal_db.get_trade(trade_id)
     if not trade:
         abort(404, description="Trade not found")
-    
+
     # TODO: wire TradeLocker or local cache for candle fetch
     candles = []
     return jsonify({"trade": trade, "candles": candles})
+
+
+# ── Visual Backtest Reviewer ──────────────────────────────────────────────────
+
+@app.route("/review")
+def review_page():
+    return render_template("review.html")
+
+
+@app.route("/api/review/run", methods=["POST"])
+def api_review_run():
+    """Run a backtest and return all trades as JSON for the review UI."""
+    import pandas as pd
+    body = request.get_json(silent=True) or {}
+    symbol   = body.get("symbol", "XAUUSD")
+    tf       = body.get("tf", "5")
+    start    = body.get("start")
+    end      = body.get("end")
+    strategy = body.get("strategy", "TrFvg")
+    params   = body.get("params", {})
+
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from backtesting.engine.data import load_data
+        from backtesting.engine.runner import run as bt_run
+        from backtesting.engine.costs import ForexCosts
+
+        load_kw = {}
+        if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
+            load_kw["asset_type"] = "crypto"
+
+        support_tf = "240"
+        data = {
+            tf: load_data(symbol, tf=tf, start=start, end=end, **load_kw),
+            support_tf: load_data(symbol, tf=support_tf, start=start, end=end, **load_kw),
+        }
+        if data[tf].empty:
+            return jsonify({"error": "No data for requested range"}), 400
+
+        if strategy == "TrFvg":
+            from backtesting.strategies.tr_fvg import TrFvg
+            pip_defaults = {
+                "XAUUSD": 0.1, "XAGUSD": 0.001,
+                "GBPJPY": 0.01, "BTCUSD": 1.0, "ETHUSD": 1.0,
+            }
+            pip_size = pip_defaults.get(symbol, 0.0001)
+            params.setdefault("pip_size", pip_size)
+            strat = TrFvg(**params)
+            costs = ForexCosts(
+                pip_size=pip_size,
+                pip_value_per_lot=100.0 if symbol in ("XAUUSD",) else
+                                  50.0  if symbol in ("XAGUSD",) else 10.0,
+            )
+        else:
+            return jsonify({"error": f"Unknown strategy: {strategy}"}), 400
+
+        result = bt_run(strat, data, entry_tf=tf, costs=costs, initial_equity=10_000)
+        df_trades = result.to_df()
+
+        trades_json = []
+        for _, row in df_trades.iterrows():
+            trades_json.append({
+                "id": int(row["id"]) if pd.notna(row["id"]) else 0,
+                "direction": str(row["direction"]),
+                "entry_time": row["entry_time"].isoformat() if hasattr(row["entry_time"], "isoformat") else str(row["entry_time"]),
+                "exit_time":  row["exit_time"].isoformat()  if hasattr(row["exit_time"],  "isoformat") else str(row["exit_time"]),
+                "duration_min": float(row["duration_min"]),
+                "entry_price": float(row["entry_price"]),
+                "exit_price":  float(row["exit_price"]),
+                "exit_reason": str(row["exit_reason"]),
+                "sl": float(row["sl"]) if pd.notna(row["sl"]) else None,
+                "tp1": float(row["tp1"]) if pd.notna(row["tp1"]) else None,
+                "pnl": float(row["pnl"]),
+                "r_multiple": float(row["r_multiple"]) if pd.notna(row["r_multiple"]) else None,
+                "label": str(row["label"]) if row["label"] else "",
+            })
+
+        # Embed full candle array so the frontend never needs a second request
+        import numpy as np
+        df5 = data[tf].copy()
+        candles_json = [
+            {
+                "time": int(row["ts"].timestamp()),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low":  float(row["low"]),
+                "close": float(row["close"]),
+            }
+            for _, row in df5.iterrows()
+        ]
+
+        # Structure overlay — resample 5m → 30m, compute structure and OBs
+        structure_data = {"pivots": [], "demand_obs": [], "supply_obs": []}
+        try:
+            from backtesting.engine.structure import StructureAnalyzer
+            df_src = df5.copy().set_index("ts").sort_index()
+            df30 = df_src.resample("30min").agg(
+                {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+            ).dropna(subset=["open"]).reset_index()
+            if len(df30) > 10:
+                sa = StructureAnalyzer(
+                    high=df30["high"].to_numpy(),
+                    low=df30["low"].to_numpy(),
+                    close=df30["close"].to_numpy(),
+                    open_=df30["open"].to_numpy(),
+                    swing_n=3, ob_lookback=60, ob_min_body_ratio=0.3,
+                )
+                # Pivots: walk forward and collect all labeled pivots
+                for idx in range(len(df30)):
+                    p = sa._labels[idx]
+                    if p is not None:
+                        ts_val = df30["ts"].iloc[idx]
+                        structure_data["pivots"].append({
+                            "time": int(pd.Timestamp(ts_val).timestamp()),
+                            "price": float(p.price),
+                            "kind": p.kind,
+                        })
+
+                # Collect OBs across period — scan every 6th bar to avoid N² cost
+                ts30_arr = df30["ts"].to_numpy()
+                seen_ob_idx = set()
+                for bar_i in range(6, len(df30), 3):
+                    ob = sa.demand_ob_before(bar_i)
+                    if ob is not None and ob.idx not in seen_ob_idx:
+                        seen_ob_idx.add(ob.idx)
+                        ob_ts = df30["ts"].iloc[ob.idx]
+                        # end time = ob candle close time (30m candle)
+                        end_ts = df30["ts"].iloc[min(ob.idx + 1, len(df30)-1)]
+                        structure_data["demand_obs"].append({
+                            "time_start": int(pd.Timestamp(ob_ts).timestamp()),
+                            "time_end":   int(pd.Timestamp(end_ts).timestamp()),
+                            "high": float(ob.high),
+                            "low":  float(ob.low),
+                            "kind": "demand",
+                        })
+                seen_ob_idx = set()
+                for bar_i in range(6, len(df30), 3):
+                    ob = sa.supply_ob_before(bar_i)
+                    if ob is not None and ob.idx not in seen_ob_idx:
+                        seen_ob_idx.add(ob.idx)
+                        ob_ts = df30["ts"].iloc[ob.idx]
+                        end_ts = df30["ts"].iloc[min(ob.idx + 1, len(df30)-1)]
+                        structure_data["supply_obs"].append({
+                            "time_start": int(pd.Timestamp(ob_ts).timestamp()),
+                            "time_end":   int(pd.Timestamp(end_ts).timestamp()),
+                            "high": float(ob.high),
+                            "low":  float(ob.low),
+                            "kind": "supply",
+                        })
+        except Exception:
+            pass  # structure overlay is non-critical
+
+        report = result.report
+        # strip non-serialisable fields (equity_curve list of np.float64 is fine, but drop large arrays)
+        safe_report = {k: v for k, v in report.items()
+                       if k not in ("equity_curve", "trade_pnls", "trade_r_multiples")}
+        safe_report["trades"] = int(safe_report.get("trades", 0))
+
+        return jsonify({
+            "symbol": symbol,
+            "tf": tf,
+            "params": params,
+            "report": safe_report,
+            "trades": trades_json,
+            "candles": candles_json,
+            "structure": structure_data,
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc(limit=5)}), 500
+
+
+@app.route("/api/review/candles")
+def api_review_candles():
+    """Return OHLCV candles around a trade for the review chart."""
+    import pandas as pd
+    symbol = request.args.get("symbol", "XAUUSD")
+    tf     = request.args.get("tf", "5")
+    center = request.args.get("center")   # ISO timestamp of trade entry
+    before = int(request.args.get("before", 200))   # bars before entry
+    after  = int(request.args.get("after",  100))   # bars after entry
+
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from backtesting.engine.data import load_data
+
+        load_kw = {}
+        if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
+            load_kw["asset_type"] = "crypto"
+
+        # Load a wide window, then slice around center
+        _ts = pd.Timestamp(center) if center else None
+        center_ts = (_ts.tz_convert("UTC") if _ts is not None and _ts.tzinfo else
+                     _ts.tz_localize("UTC") if _ts is not None else None)
+        if center_ts:
+            tf_min = {"1": 1, "5": 5, "15": 15, "60": 60, "240": 240}.get(tf, 5)
+            pad_before = timedelta(minutes=before * tf_min * 1.5)
+            pad_after  = timedelta(minutes=after  * tf_min * 1.5)
+            start = (center_ts - pad_before).isoformat()
+            end   = (center_ts + pad_after).isoformat()
+        else:
+            start = end = None
+
+        df = load_data(symbol, tf=tf, start=start, end=end, **load_kw)
+        if df.empty:
+            return jsonify([])
+
+        # Find center index
+        if center_ts is not None:
+            idx = (df["ts"] - center_ts).abs().idxmin()
+            lo = max(0, idx - before)
+            hi = min(len(df), idx + after + 1)
+            df = df.iloc[lo:hi]
+
+        candles = [
+            {
+                "time": int(row["ts"].timestamp()),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low":  float(row["low"]),
+                "close": float(row["close"]),
+            }
+            for _, row in df.iterrows()
+        ]
+        return jsonify(candles)
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc(limit=5)}), 500
+
+
+@app.route("/api/review/label", methods=["POST"])
+def api_review_label():
+    """Persist a user label on a trade (stored in a local JSON file)."""
+    import json as json_mod
+    body = request.get_json(silent=True) or {}
+    store_path = Path(__file__).resolve().parent / "review_labels.json"
+    labels: dict = {}
+    if store_path.exists():
+        with open(store_path) as f:
+            labels = json_mod.load(f)
+
+    key = f"{body.get('symbol','?')}_{body.get('tf','?')}_{body.get('entry_time','?')}"
+    labels[key] = {
+        "symbol": body.get("symbol"),
+        "tf": body.get("tf"),
+        "entry_time": body.get("entry_time"),
+        "label": body.get("label"),       # "good" / "bad" / "skip"
+        "notes": body.get("notes", ""),
+        "params": body.get("params", {}),
+    }
+    with open(store_path, "w") as f:
+        json_mod.dump(labels, f, indent=2)
+    return jsonify({"ok": True, "total": len(labels)})
 
 
 if __name__ == "__main__":
