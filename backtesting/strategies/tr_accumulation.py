@@ -59,6 +59,7 @@ class TrAccumulation(Strategy):
         # Validated: acc_sweep + 4H momentum agree → t=4.97 across 7/7 pairs (vs t=3.03 unfiltered)
         htf_momentum_bars: int = 10,    # 4H bars for momentum look-back (~40 hours)
     ):
+        super().__init__()
         self.range_lookback = range_lookback
         self.history_bars = history_bars
         self.compress_ratio = compress_ratio

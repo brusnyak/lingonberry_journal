@@ -70,6 +70,7 @@ class TrAsiaSweep(Strategy):
         fvg_entry_bars: int = 40,
         min_fvg_pts: float = 5.0,
     ):
+        super().__init__()
         self.sl_buffer_pts = sl_buffer_pts
         self.tp1_r = tp1_r
         self.tp1_frac = tp1_frac

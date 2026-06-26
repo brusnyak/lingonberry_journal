@@ -43,6 +43,7 @@ class SmcV1(Strategy):
         pip_buffer: int = 2,
         entry_tf_key: str = "1",   # key in data dict for FVG + entry bars
     ):
+        super().__init__()
         self.swing_length_15m = swing_length_15m
         self.killzone_filter = killzone_filter
         self.fvg_max_bars = fvg_max_bars

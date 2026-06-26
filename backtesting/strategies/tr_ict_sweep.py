@@ -70,6 +70,7 @@ class TrIctSweep(Strategy):
         htf_agree: bool       = True,
         htf_bars: int         = 10,
     ):
+        super().__init__()
         self.swing_n        = swing_n
         self.mss_bars       = mss_bars
         self.fvg_expiry_bars= fvg_expiry_bars

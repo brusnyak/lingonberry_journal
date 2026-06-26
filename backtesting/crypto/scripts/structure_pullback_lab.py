@@ -54,6 +54,7 @@ class StructurePullbackV1(Strategy):
     """First pullback after confirmed 30m structure impulse."""
 
     def __init__(self, cfg: PullbackConfig):
+        super().__init__()
         self.cfg = cfg
         self.df: pd.DataFrame | None = None
         self.traded_by_leg: dict[int, int] = {}

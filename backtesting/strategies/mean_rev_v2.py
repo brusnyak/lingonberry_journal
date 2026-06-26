@@ -45,6 +45,7 @@ class MeanRevV2(Strategy):
         long_only: bool = False,
         risk_pct: float = 0.005,
     ) -> None:
+        super().__init__()
         self.sma_period = sma_period
         self.entry_band = entry_band
         self.stop_loss_pct = stop_loss_pct

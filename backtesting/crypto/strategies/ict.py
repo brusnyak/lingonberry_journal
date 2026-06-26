@@ -64,6 +64,7 @@ class TrIct(Strategy):
         sessions_only: bool = True,
         swing_length: int = 1,
     ):
+        super().__init__()
         self.risk_pct = risk_pct
         self.min_rr = min_rr
         self.sessions_only = sessions_only

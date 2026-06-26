@@ -54,6 +54,7 @@ class TrBreakout(Strategy):
         risk_pct: float = 0.005,
         pip_size: float = 0.0001,
     ):
+        super().__init__()
         self.bos_lookback = bos_lookback
         self.retrace_min = retrace_min
         self.retrace_max = retrace_max

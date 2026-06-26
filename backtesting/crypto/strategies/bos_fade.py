@@ -56,6 +56,7 @@ class TrBosFade(Strategy):
         htf_momentum_bars: int = 10,
         htf_agree: bool = True,         # require 4H agreement; set False to disable
     ):
+        super().__init__()
         self.bos_lookback = bos_lookback
         self.sl_buffer_pips = sl_buffer_pips
         self.tp1_r = tp1_r

@@ -106,6 +106,7 @@ class TrTrend(Strategy):
         risk_pct: float = 0.005,
         pip_size: float = 0.0001,
     ):
+        super().__init__()
         self.htf_tf_key = htf_tf_key
         self.mtf_tf_key = mtf_tf_key
         self.htf_ma_period = htf_ma_period
