@@ -113,6 +113,15 @@
         <option value="GBPUSD">GBPUSD</option>
         <option value="BTCUSD">BTCUSD</option>
         <option value="ETHUSD">ETHUSD</option>
+        <option value="ADAUSDT">ADAUSDT</option>
+        <option value="XRPUSDT">XRPUSDT</option>
+        <option value="SOLUSDT">SOLUSDT</option>
+        <option value="AVAXUSDT">AVAXUSDT</option>
+        <option value="LINKUSDT">LINKUSDT</option>
+        <option value="NEARUSDT">NEARUSDT</option>
+        <option value="SUIUSDT">SUIUSDT</option>
+        <option value="DOGEUSDT">DOGEUSDT</option>
+        <option value="AAVEUSDT">AAVEUSDT</option>
       </select>
     </div>
     <div>
@@ -126,11 +135,11 @@
     </div>
     <div>
       <label>Start</label>
-      <input type="date" id="cfg-start" value="2025-08-01">
-    </div>
-    <div>
-      <label>End</label>
-      <input type="date" id="cfg-end" value="2026-05-23">
+        <input type="date" id="cfg-start" value="2026-05-01">
+      </div>
+      <div>
+        <label>End</label>
+        <input type="date" id="cfg-end" value="2026-06-26">
     </div>
     <div>
       <label>Strategy</label>
@@ -220,8 +229,10 @@
     <button class="draw-util-btn" onclick="clearAnnotations()" title="Clear all">✕ Clear</button>
     <label style="margin-left:8px;display:flex;align-items:center;gap:4px;font-size:10px;color:#f59e0b;cursor:pointer;">
       <input type="checkbox" id="toggle-structure" checked onchange="if(trades.length>0)showTrade(currentIdx)" style="accent-color:#f59e0b;">
-      OB/Structure
+      OB/Struct
     </label>
+    <span style="margin-left:4px;border-left:1px solid #333;padding-left:6px;"></span>
+    <button class="draw-util-btn" onclick="loadStructureView()" title="Load full structure overlay across entire timeframe" style="color:#a78bfa;">⊞ Struct View</button>
     <span id="draw-status" style="margin-left:10px;font-size:10px;color:#f97316;font-style:italic;"></span>
   </div>
 
@@ -240,6 +251,7 @@
 </div>
 
 <script src="/static/js/drawing-engine.js"></script>
+<script src="/static/js/structure-overlay.js"></script>
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 let trades        = [];
@@ -539,6 +551,97 @@ function _renderAutoStructure(t, winStart, winEnd, isLong) {
   });
 
   drawingEngine.redraw();
+}
+
+// ── Structure View (full-timeframe overlay via StructureOverlay) ──────────────
+let _structureOverlay = null;
+
+async function loadStructureView() {
+  showLoading('Loading structure overlay…');
+  try {
+    const symbol = document.getElementById('cfg-symbol').value;
+    const tf = document.getElementById('cfg-tf').value;
+
+    // Run a backtest with wide window to get structure + candle data
+    // Use a very short window but get all data via 240 support_tf
+    const resp = await fetch('/api/review/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol, tf,
+        start: document.getElementById('cfg-start').value || undefined,
+        end:   document.getElementById('cfg-end').value   || undefined,
+        strategy: 'TrFvg',
+        params: {
+          sl_buffer_pips: 500, tp1_r: 3.0, min_gap_atr_pct: 1.0,
+          direction: 'both', risk_pct: 0.001, tp1_frac: 1.0,
+        },
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) { alert('Error: ' + data.error); return; }
+
+    // Clear trade state
+    clearTradeLines();
+    trades = [];
+    document.getElementById('trade-list').innerHTML = '';
+    document.getElementById('stats').innerHTML = '';
+
+    // Remove old overlay
+    if (_structureOverlay) { _structureOverlay.remove(); _structureOverlay = null; }
+
+    // Build StructureOverlay-compatible data from the review API response
+    const pivots = data.structure?.pivots || [];
+    const bosEvents = data.structure?.bos_events || [];
+    const swingHighs = pivots.filter(p => p.kind === 'HH' || p.kind === 'LH');
+    const swingLows = pivots.filter(p => p.kind === 'HL' || p.kind === 'LL');
+
+    // Collect all FVGs from all trades
+    const allFvgs = [];
+    const allObs = [];
+    for (const t of (data.trades || [])) {
+      if (t.fvgs) allFvgs.push(...t.fvgs.map(f => ({
+        type: f.kind,
+        top: f.top, bottom: f.bottom,
+        start_time: f.c1_time, end_time: f.c3_time,
+        mitigated: false,
+      })));
+      if (t.demand_ob) allObs.push({
+        type: 'bullish', top: t.demand_ob.high, bottom: t.demand_ob.low,
+        time: t.demand_ob.time_start, mitigated: false,
+      });
+      if (t.supply_ob) allObs.push({
+        type: 'bearish', top: t.supply_ob.high, bottom: t.supply_ob.low,
+        time: t.supply_ob.time_start, mitigated: false,
+      });
+    }
+
+    const overlayData = {
+      candles: data.candles,
+      swing_highs: swingHighs.map(p => ({ time: p.time, price: p.price })),
+      swing_lows: swingLows.map(p => ({ time: p.time, price: p.price })),
+      structure_labels: pivots.map(p => ({ time: p.time, price: p.price, label: p.kind, type: p.kind === 'HH' || p.kind === 'LH' ? 'high' : 'low' })),
+      structure_breaks: bosEvents.map(b => ({ time: b.time, price: b.level, type: b.event_type === 'bos' ? 'BOS' : 'CHoCH', direction: b.direction })),
+      fvgs: allFvgs,
+      order_blocks: allObs,
+      liquidity_levels: [],
+      liquidity_sweeps: [],
+    };
+
+    // Set candles
+    candleSeries.setData(data.candles);
+
+    // Create overlay
+    const container = document.getElementById('chart');
+    _structureOverlay = new StructureOverlay(chart, candleSeries, overlayData, container);
+    _structureOverlay.renderAll();
+
+    chart.timeScale().fitContent();
+  } catch(e) {
+    alert('Structure view error: ' + e.message);
+  } finally {
+    hideLoading();
+  }
 }
 
 // ── Drawing tools ─────────────────────────────────────────────────────────────
