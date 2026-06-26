@@ -1682,6 +1682,9 @@ def api_review_run():
             tf: load_data(symbol, tf=tf, start=start, end=end, **load_kw),
             support_tf: load_data(symbol, tf=support_tf, start=start, end=end, **load_kw),
         }
+        # ICT strategy also needs 30m structure TF
+        if strategy == "TrIct":
+            data["30"] = load_data(symbol, tf="30", start=start, end=end, **load_kw)
         if data[tf].empty:
             return jsonify({"error": "No data for requested range"}), 400
 
@@ -1699,6 +1702,12 @@ def api_review_run():
                 pip_value_per_lot=100.0 if symbol in ("XAUUSD",) else
                                   50.0  if symbol in ("XAGUSD",) else 10.0,
             )
+        elif strategy == "TrIct":
+            from backtesting.crypto.strategies.ict import TrIct
+            risk_pct = float(params.get("risk_pct", 0.005))
+            min_rr   = float(params.get("min_rr", 1.5))
+            strat = TrIct(risk_pct=risk_pct, min_rr=min_rr, sessions_only=True)
+            costs = ForexCosts()
         else:
             return jsonify({"error": f"Unknown strategy: {strategy}"}), 400
 

@@ -133,32 +133,47 @@
       <input type="date" id="cfg-end" value="2026-05-23">
     </div>
     <div>
-      <label>SL pips</label>
-      <input type="number" id="p-sl" value="200" min="1">
-    </div>
-    <div>
-      <label>TP R</label>
-      <input type="number" id="p-tp" value="2.0" step="0.1" min="0.5">
-    </div>
-    <div>
-      <label>Gap ATR%</label>
-      <input type="number" id="p-gap" value="0.2" step="0.05" min="0">
-    </div>
-    <div>
-      <label>Direction</label>
-      <select id="p-dir">
-        <option value="bear" selected>bear</option>
-        <option value="bull">bull</option>
-        <option value="both">both</option>
+      <label>Strategy</label>
+      <select id="cfg-strategy" onchange="toggleStrategy()">
+        <option value="TrFvg" selected>TrFvg (FVG sweep)</option>
+        <option value="TrIct">TrIct (ICT/SMC)</option>
       </select>
     </div>
-    <div>
-      <label>Risk %</label>
-      <input type="number" id="p-risk" value="0.5" step="0.05" min="0.1">
+    <div id="cfg-fvg-fields">
+      <div>
+        <label>SL pips</label>
+        <input type="number" id="p-sl" value="200" min="1">
+      </div>
+      <div>
+        <label>TP R</label>
+        <input type="number" id="p-tp" value="2.0" step="0.1" min="0.5">
+      </div>
+      <div>
+        <label>Gap ATR%</label>
+        <input type="number" id="p-gap" value="0.2" step="0.05" min="0">
+      </div>
+      <div>
+        <label>Direction</label>
+        <select id="p-dir">
+          <option value="bear" selected>bear</option>
+          <option value="bull">bull</option>
+          <option value="both">both</option>
+        </select>
+      </div>
+      <div>
+        <label>Context bars</label>
+        <input type="number" id="cfg-context" value="150" min="20">
+      </div>
     </div>
-    <div>
-      <label>Context bars</label>
-      <input type="number" id="cfg-context" value="150" min="20">
+    <div id="cfg-ict-fields" style="display:none">
+      <div>
+        <label>Risk %</label>
+        <input type="number" id="p-risk-ict" value="0.5" step="0.05" min="0.1">
+      </div>
+      <div>
+        <label>Min R:R</label>
+        <input type="number" id="p-minrr" value="1.5" step="0.1" min="1.0">
+      </div>
     </div>
     <button id="run-btn" onclick="runBacktest()">▶ RUN BACKTEST</button>
   </div>
@@ -227,9 +242,10 @@ let trades        = [];
 let allCandles    = [];
 let structureData = { pivots: [], bos_events: [] };
 let currentIdx    = 0;
-let currentSymbol = 'XAUUSD';
-let currentTf     = '5';
-let currentParams = {};
+let currentSymbol   = 'XAUUSD';
+let currentTf       = '5';
+let currentStrategy = 'TrFvg';
+let currentParams   = {};
 let currentLabel  = null;
 let userLabels    = {};   // key → {label, notes, annotations}
 
@@ -319,6 +335,13 @@ function _syncDrawings() {
     .map(d => ({ ...d }));
 }
 
+// ── Strategy toggle ────────────────────────────────────────────────────────────
+function toggleStrategy() {
+  const strat = document.getElementById('cfg-strategy').value;
+  document.getElementById('cfg-fvg-fields').style.display = strat === 'TrFvg' ? '' : 'none';
+  document.getElementById('cfg-ict-fields').style.display  = strat === 'TrIct' ? '' : 'none';
+}
+
 // ── Run backtest ──────────────────────────────────────────────────────────────
 async function runBacktest() {
   const btn = document.getElementById('run-btn');
@@ -327,14 +350,24 @@ async function runBacktest() {
 
   currentSymbol = document.getElementById('cfg-symbol').value;
   currentTf     = document.getElementById('cfg-tf').value;
-  const params  = {
-    sl_buffer_pips:  parseFloat(document.getElementById('p-sl').value),
-    tp1_r:           parseFloat(document.getElementById('p-tp').value),
-    min_gap_atr_pct: parseFloat(document.getElementById('p-gap').value),
-    direction:       document.getElementById('p-dir').value,
-    risk_pct:        parseFloat(document.getElementById('p-risk').value) / 100,
-    tp1_frac:        1.0,
-  };
+  currentStrategy = document.getElementById('cfg-strategy').value;
+
+  let params = {};
+  if (currentStrategy === 'TrFvg') {
+    params = {
+      sl_buffer_pips:  parseFloat(document.getElementById('p-sl').value),
+      tp1_r:           parseFloat(document.getElementById('p-tp').value),
+      min_gap_atr_pct: parseFloat(document.getElementById('p-gap').value),
+      direction:       document.getElementById('p-dir').value,
+      risk_pct:        parseFloat(document.getElementById('p-risk').value) / 100,
+      tp1_frac:        1.0,
+    };
+  } else if (currentStrategy === 'TrIct') {
+    params = {
+      risk_pct: parseFloat(document.getElementById('p-risk-ict').value) / 100,
+      min_rr:   parseFloat(document.getElementById('p-minrr').value),
+    };
+  }
   currentParams = params;
 
   try {
@@ -345,7 +378,7 @@ async function runBacktest() {
         symbol: currentSymbol, tf: currentTf,
         start: document.getElementById('cfg-start').value || undefined,
         end:   document.getElementById('cfg-end').value   || undefined,
-        strategy: 'TrFvg', params,
+        strategy: currentStrategy, params,
       }),
     });
     const data = await resp.json();
