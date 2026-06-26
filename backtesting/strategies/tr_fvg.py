@@ -83,6 +83,7 @@ class TrFvg(Strategy):
         # Regime-direction params (only used when direction="regime")
         regime_bars: int = 20,            # rolling 4H bars for regime scoring
     ):
+        super().__init__()
         self.sl_buffer_pips = sl_buffer_pips
         self.tp1_r = tp1_r
         self.tp1_frac = tp1_frac
@@ -246,10 +247,33 @@ class TrFvg(Strategy):
     # ── Main logic ────────────────────────────────────────────────────────────
 
     def next(self, bar: BarData, state: EngineState) -> Optional[Signal]:
+        i = bar.index
+
+        # ── Structure-based trailing on open position ──────────────────────
         if state.has_open_position:
+            pos = state.open_positions[0]
+            if hasattr(self, "_swing_high") and hasattr(self, "_swing_low"):
+                confirmed = max(0, i - self.structure_sl_swing_n - 1)
+                if pos.direction == 1 or (hasattr(pos.direction, 'value') and pos.direction.value == 1) or str(pos.direction) == 'Direction.LONG':
+                    # Long: trail on most recent swing low above current SL
+                    lo = max(0, confirmed - self.structure_sl_lookback)
+                    lows = self._swing_low[lo:confirmed]
+                    valid = lows[~np.isnan(lows)]
+                    if len(valid) > 0:
+                        new_sl = float(valid[-1]) - self.sl_buffer_pips * self.pip_size
+                        if new_sl > pos.sl and bar.close > new_sl:
+                            self.update_sl(pos.id, new_sl)
+                else:
+                    # Short: trail on most recent swing high below current SL
+                    lo = max(0, confirmed - self.structure_sl_lookback)
+                    highs = self._swing_high[lo:confirmed]
+                    valid = highs[~np.isnan(highs)]
+                    if len(valid) > 0:
+                        new_sl = float(valid[-1]) + self.sl_buffer_pips * self.pip_size
+                        if new_sl < pos.sl and bar.close < new_sl:
+                            self.update_sl(pos.id, new_sl)
             return None
 
-        i = bar.index
         if i < max(3, self.structure_sl_swing_n * 2 + 2):
             return None
 

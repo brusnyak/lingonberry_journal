@@ -1707,6 +1707,12 @@ def api_review_run():
                 "GBPJPY": 0.01, "BTCUSD": 1.0, "ETHUSD": 1.0,
             }
             pip_size = pip_defaults.get(symbol, 0.0001)
+            if symbol.endswith("USDT") and pip_size == 0.0001:
+                _cv = data[tf]["close"].iloc[0] if len(data[tf]) > 0 else 0
+                if _cv >= 1000:  pip_size = 1.0
+                elif _cv >= 100: pip_size = 0.1
+                elif _cv >= 10:  pip_size = 0.01
+                elif _cv >= 1:   pip_size = 0.001
             params.setdefault("pip_size", pip_size)
             strat = TrFvg(**params)
             costs = ForexCosts(
@@ -1774,7 +1780,7 @@ def api_review_run():
             ).dropna(subset=["open"])
 
             if len(df30) > 10:
-                swings, levels = swing_points(df30, swing_length=1, causal=True)
+                swings, levels = swing_points(df30, swing_length=1, causal=False)
                 labels_df = label_structure(df30, swings, levels)
 
                 # Build pivot list with timestamps for BOS line start anchoring

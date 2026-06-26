@@ -64,6 +64,9 @@ class EngineState:
 class Strategy(ABC):
     """Base class for all backtested strategies."""
 
+    def __init__(self) -> None:
+        self._pending_sl_update: Optional[tuple[int, float]] = None
+
     def init(self, data: dict[str, object]) -> None:
         """
         Called once before the bar loop.
@@ -89,3 +92,19 @@ class Strategy(ABC):
 
     def on_partial(self, trade: object, state: EngineState) -> None:
         """Called after each partial close (TP1, TP2). Override if needed."""
+
+    def update_sl(self, pos_id: int, new_sl: float) -> None:
+        """
+        Request the runner to move an open position's stop-loss.
+
+        Called from within next(). The runner applies the update before
+        exit checks on the following bar (one bar delay for safety).
+
+        Parameters
+        ----------
+        pos_id : int
+            ID of the open position to modify.
+        new_sl : float
+            New stop-loss price.
+        """
+        self._pending_sl_update = (pos_id, new_sl)

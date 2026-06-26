@@ -268,6 +268,11 @@ def run(
             index=i,
         )
 
+        # ── 0. Process pending SL update from strategy.next() on previous bar ─
+        if open_positions and strategy._pending_sl_update is not None:
+            _apply_sl_update(strategy._pending_sl_update, open_positions)
+            strategy._pending_sl_update = None
+
         # ── 1. Check exits on open positions ──────────────────────────────────
         if open_positions:
             states = _positions_to_array(open_positions)
@@ -596,6 +601,18 @@ def _open_position(
         trail=signal.trail,
         label=getattr(signal, "label", ""),
     )
+
+
+def _apply_sl_update(
+    pending: tuple[int, float],
+    open_positions: list[Position],
+) -> None:
+    """Apply a strategy-requested SL update to the matching open position."""
+    pos_id, new_sl = pending
+    for pos in open_positions:
+        if pos.id == pos_id:
+            pos.sl = new_sl
+            return
 
 
 def _make_state(equity, initial_equity, open_positions, closed_trades, bar_index) -> EngineState:
