@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtesting.crypto_reports import BacktestContext, build_report_tables
+from backtesting.crypto.reports import BacktestContext, build_report_tables
 from backtesting.engine.base import BarData, EngineState, Strategy
 from backtesting.engine.costs import CryptoCosts
 from backtesting.engine.data import load_data, load_funding_rate

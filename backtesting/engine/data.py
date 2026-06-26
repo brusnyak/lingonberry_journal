@@ -31,7 +31,9 @@ from typing import Optional
 import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "market_data"
-CRYPTO_EXCHANGES = ("binance", "bybit")
+
+# Crypto loading lives in backtesting.crypto.data for a clean separation.
+from backtesting.crypto.data import CRYPTO_EXCHANGES, _load_from_crypto_dir, _load_from_crypto_funding, load_funding_rate  # noqa: F401
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -159,58 +161,6 @@ def _load_from_flat_parquet(symbol: str, tf: str) -> pd.DataFrame:
     merged = pd.concat(normed, ignore_index=True)
     merged = merged.drop_duplicates(subset=["ts"]).sort_values("ts").reset_index(drop=True)
     return merged
-
-
-def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) -> pd.DataFrame:
-    """data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet, with legacy fallback.
-    Also checks pine-review/data/parquet/crypto/ for BTC/ETH/XRP/ADA."""
-    paths = []
-    if exchange:
-        paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}{tf}.parquet")
-    else:
-        paths.extend(DATA_DIR / "crypto" / ex / f"{symbol}{tf}.parquet" for ex in CRYPTO_EXCHANGES)
-        paths.append(DATA_DIR / "crypto" / f"{symbol}{tf}.parquet")
-    # pine-review crypto parquets (BTCUSD, ETHUSD, XRPUSDT, ADAUSDT)
-    paths.append(PINE_REVIEW_DIR / "crypto" / f"{symbol}{tf}.parquet")
-
-    for path in paths:
-        if not path.exists():
-            continue
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            continue
-    return pd.DataFrame()
-
-
-def _load_from_crypto_funding(symbol: str, exchange: Optional[str] = None) -> pd.DataFrame:
-    """data/market_data/crypto/{exchange}/{SYMBOL}_funding.parquet, with legacy fallback."""
-    paths = []
-    if exchange:
-        paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}_funding.parquet")
-    else:
-        paths.extend(DATA_DIR / "crypto" / ex / f"{symbol}_funding.parquet" for ex in CRYPTO_EXCHANGES)
-        paths.append(DATA_DIR / "crypto" / f"{symbol}_funding.parquet")
-
-    for path in paths:
-        if not path.exists():
-            continue
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            continue
-    return pd.DataFrame()
-
-
-def _load_from_legacy_crypto_dir(symbol: str, tf: str) -> pd.DataFrame:
-    """data/market_data/crypto/{SYMBOL}{TF}.parquet"""
-    path = DATA_DIR / "crypto" / f"{symbol}{tf}.parquet"
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        return pd.read_parquet(path)
-    except Exception:
-        return pd.DataFrame()
 
 
 def _load_from_forex_dir(symbol: str, tf: str) -> pd.DataFrame:
@@ -447,20 +397,6 @@ def load_data(
         df = _slice_days(df, days)
 
     return df
-
-
-def load_funding_rate(symbol: str, exchange: Optional[str] = None) -> pd.DataFrame:
-    """Load funding rate data for a crypto symbol.
-
-    Returns DataFrame with columns: ts, fundingRate
-    (no OHLCV normalization — funding data has different schema).
-    """
-    df = _load_from_crypto_funding(symbol, exchange=exchange)
-    if df.empty:
-        return df
-    if not pd.api.types.is_datetime64_any_dtype(df["ts"]):
-        df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
-    return df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
 
 
 def list_pairs(asset_type: Optional[str] = None) -> list[str]:

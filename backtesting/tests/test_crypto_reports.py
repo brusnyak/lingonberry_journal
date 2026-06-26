@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from backtesting.crypto_reports import BacktestContext, build_report_tables, challenge_outcome
+from backtesting.crypto.reports import BacktestContext, build_report_tables, challenge_outcome
 from backtesting.engine.orders import ClosedTrade, Direction, ExitReason
 from backtesting.engine.runner import BacktestResult
 

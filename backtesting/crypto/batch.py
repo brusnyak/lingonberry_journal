@@ -162,7 +162,7 @@ SWEEP_STRATEGIES: dict[str, Type[Strategy]] = {}
 def _load_strategies():
     global SWEEP_STRATEGIES
     from backtesting.strategies.tr_fvg import TrFvg
-    from backtesting.strategies.tr_bos_fade import TrBosFade
+    from backtesting.crypto.strategies.bos_fade import TrBosFade
     from backtesting.strategies.tr_accumulation import TrAccumulation
     SWEEP_STRATEGIES = {
         "tr_fvg": TrFvg,
