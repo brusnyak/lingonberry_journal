@@ -48,23 +48,30 @@ class RunConfig:
     end: Optional[str] = None
     days: Optional[int] = None
     initial_equity: float = 10_000.0
+    asset_type: Optional[str] = None  # passed to load_data (None = auto-detect)
+    costs: Optional[object] = None    # CostModel override; defaults to ForexCosts()
 
 
 def _run_one(strategy_cls: Type[Strategy], cfg: RunConfig) -> dict:
     try:
         tfs = list(dict.fromkeys([cfg.entry_tf] + cfg.support_tfs))  # dedup, preserve order
         data: dict[str, pd.DataFrame] = {}
+        load_kw = {}
+        if cfg.asset_type:
+            load_kw["asset_type"] = cfg.asset_type
         for tf in tfs:
-            df = load_data(cfg.pair, tf=tf, start=cfg.start, end=cfg.end, days=cfg.days)
+            df = load_data(cfg.pair, tf=tf, start=cfg.start, end=cfg.end,
+                           days=cfg.days, **load_kw)
             if df.empty:
                 return _err(cfg, f"no data: pair={cfg.pair} tf={tf}")
             data[tf] = df
 
+        costs = cfg.costs if cfg.costs is not None else ForexCosts()
         result = run(
             strategy_cls(**cfg.params),
             data,
             entry_tf=cfg.entry_tf,
-            costs=ForexCosts(),
+            costs=costs,
             initial_equity=cfg.initial_equity,
         )
         return {

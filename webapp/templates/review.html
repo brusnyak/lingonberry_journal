@@ -186,25 +186,29 @@
   <!-- Drawing toolbar -->
   <div id="draw-toolbar">
     <span>DRAW</span>
-    <button class="draw-btn" data-type="choch" onclick="setDrawMode('choch')">ChoCH</button>
-    <button class="draw-btn" data-type="bos"   onclick="setDrawMode('bos')">BOS</button>
-    <button class="draw-btn" data-type="sweep" onclick="setDrawMode('sweep')">Sweep</button>
-    <button class="draw-btn" data-type="liq"   onclick="setDrawMode('liq')">Liq</button>
-    <button class="draw-btn" data-type="hh"    onclick="setDrawMode('hh')">HH</button>
-    <button class="draw-btn" data-type="hl"    onclick="setDrawMode('hl')">HL</button>
-    <button class="draw-btn" data-type="ll"    onclick="setDrawMode('ll')">LL</button>
-    <button class="draw-btn" data-type="lh"    onclick="setDrawMode('lh')">LH</button>
-    <button class="draw-btn" data-type="ob"    onclick="setDrawMode('ob')">OB</button>
+    <button class="draw-btn" data-type="choch" onclick="setDrawMode('choch')" title="1">ChoCH</button>
+    <button class="draw-btn" data-type="bos"   onclick="setDrawMode('bos')"   title="2">BOS</button>
+    <button class="draw-btn" data-type="sweep" onclick="setDrawMode('sweep')" title="3">Sweep</button>
+    <button class="draw-btn" data-type="liq"   onclick="setDrawMode('liq')"   title="4">Liq</button>
+    <button class="draw-btn" data-type="ob"    onclick="setDrawMode('ob')"    title="5">OB</button>
+    <button class="draw-btn" data-type="fvg"   onclick="setDrawMode('fvg')"   title="6">FVG</button>
+    <span style="margin-left:6px;border-left:1px solid #333;padding-left:6px;"></span>
+    <button class="draw-btn" data-type="hh"    onclick="setDrawMode('hh')"    title="7">HH</button>
+    <button class="draw-btn" data-type="hl"    onclick="setDrawMode('hl')"    title="8">HL</button>
+    <button class="draw-btn" data-type="ll"    onclick="setDrawMode('ll')"    title="9">LL</button>
+    <button class="draw-btn" data-type="lh"    onclick="setDrawMode('lh')"    title="0">LH</button>
     <button class="draw-util-btn" onclick="undoAnnotation()" title="Undo last">↩ Undo</button>
     <button class="draw-util-btn" onclick="clearAnnotations()" title="Clear all">✕ Clear</button>
     <label style="margin-left:8px;display:flex;align-items:center;gap:4px;font-size:10px;color:#f59e0b;cursor:pointer;">
       <input type="checkbox" id="toggle-structure" checked onchange="if(trades.length>0)showTrade(currentIdx)" style="accent-color:#f59e0b;">
       OB/Structure
     </label>
+    <span id="draw-status" style="margin-left:10px;font-size:10px;color:#f97316;font-style:italic;"></span>
   </div>
 
   <div id="chart-container">
     <div id="chart"></div>
+    <canvas id="draw-canvas" style="position:absolute;inset:0;pointer-events:none;z-index:10;"></canvas>
   </div>
 
   <div id="label-panel">
@@ -216,11 +220,12 @@
   </div>
 </div>
 
+<script src="/static/js/drawing-engine.js"></script>
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 let trades        = [];
 let allCandles    = [];
-let structureData = { pivots: [], demand_obs: [], supply_obs: [] };
+let structureData = { pivots: [], bos_events: [] };
 let currentIdx    = 0;
 let currentSymbol = 'XAUUSD';
 let currentTf     = '5';
@@ -229,17 +234,23 @@ let currentLabel  = null;
 let userLabels    = {};   // key → {label, notes, annotations}
 
 // ── Drawing state ─────────────────────────────────────────────────────────────
-let drawMode   = null;
-const DRAW_TYPES = {
-  choch: { color: '#f97316', label: 'ChoCH', style: 1 },
-  bos:   { color: '#3b82f6', label: 'BOS',   style: 1 },
-  sweep: { color: '#a855f7', label: 'Sweep', style: 3 },
-  liq:   { color: '#eab308', label: 'Liq',   style: 3 },
-  hh:    { color: '#22c55e', label: 'HH',    style: 2 },
-  hl:    { color: '#86efac', label: 'HL',    style: 2 },
-  ll:    { color: '#ef4444', label: 'LL',    style: 2 },
-  lh:    { color: '#fca5a5', label: 'LH',    style: 2 },
-  ob:    { color: '#f59e0b', label: 'OB',    style: 2 },
+let drawMode      = null;
+let drawingEngine = null;
+
+// Tool mapping: toolbar type → DrawingEngine tool id
+const TOOL_MAP = {
+  choch: 'choch', bos: 'bos', sweep: 'sweep',
+  liq: 'sweep',   // two-click SMC, relabeled in override
+  ob:  'rect',
+  fvg: 'rect',    // two-click rect; override adds CE midline
+  hh: 'hline', hl: 'hline', ll: 'hline', lh: 'hline',
+};
+const LIQ_OVERRIDE = { label: 'Liq', stroke: '#eab308', dash: [4, 4] };
+const HLINE_STYLES = {
+  hh: { label: 'HH', stroke: '#22c55e' },
+  hl: { label: 'HL', stroke: '#86efac' },
+  ll: { label: 'LL', stroke: '#ef4444' },
+  lh: { label: 'LH', stroke: '#fca5a5' },
 };
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
@@ -259,24 +270,12 @@ const candleSeries = chart.addCandlestickSeries({
   wickUpColor: '#22c55e', wickDownColor: '#ef4444',
 });
 
-// Track lines separately: trade lines (entry/SL/TP) vs annotation lines vs structure
-let tradeLines      = [];   // price lines for entry/SL/TP
-let annotationLines = [];   // price lines from drawing tools
-let structureLines  = [];   // price lines from auto structure overlay
+// Track lines separately: trade lines (entry/SL/TP) only
+let tradeLines = [];
 
 function clearTradeLines() {
   tradeLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
   tradeLines = [];
-}
-
-function clearAnnotationLines() {
-  annotationLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
-  annotationLines = [];
-}
-
-function clearStructureLines() {
-  structureLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
-  structureLines = [];
 }
 
 function addTradeLine(price, color, title, style) {
@@ -284,9 +283,52 @@ function addTradeLine(price, color, title, style) {
   tradeLines.push(candleSeries.createPriceLine({ price, color, lineWidth: 1, lineStyle: style ?? 2, title }));
 }
 
-function addStructureLine(price, color, title, style, width) {
-  if (price == null) return;
-  structureLines.push(candleSeries.createPriceLine({ price, color, lineWidth: width ?? 1, lineStyle: style ?? 3, title }));
+// ── DrawingEngine init ────────────────────────────────────────────────────────
+function initDrawingEngine() {
+  const canvas = document.getElementById('draw-canvas');
+  drawingEngine = new DrawingEngine(chart, candleSeries, chartContainer, canvas);
+
+  // Intercept addDrawing to handle hline label injection + sync
+  // (drawing-added event is not fired for single-click hline tool)
+  const _origAdd = drawingEngine.addDrawing.bind(drawingEngine);
+  drawingEngine.addDrawing = function(partial) {
+    const d = _origAdd(partial);
+    if (drawMode === 'liq' && d.type === 'smc') {
+      d.label = LIQ_OVERRIDE.label;
+      d.style = { stroke: LIQ_OVERRIDE.stroke, dash: LIQ_OVERRIDE.dash };
+      drawingEngine.redraw();
+    }
+    if (HLINE_STYLES[drawMode] && d.type === 'hline') {
+      const s = HLINE_STYLES[drawMode];
+      d.label = s.label;
+      d.style = { stroke: s.stroke, fill: '' };
+      drawingEngine.redraw();
+    }
+    if (drawMode === 'fvg' && d.type === 'rect' && d.points.length === 2) {
+      // Add CE midline for manually drawn FVGs
+      const ce = (d.points[0].price + d.points[1].price) / 2;
+      const ceColor = d.points[0].price > d.points[1].price ? '#22c55e' : '#ef4444';
+      _origAdd({
+        type: 'smc', source: null,
+        points: [{ time: d.points[0].time, price: ce }, { time: d.points[1].time, price: ce }],
+        style: { stroke: ceColor, dash: [3, 3] },
+      });
+    }
+    _syncDrawings();
+    setDrawMode(null);
+    return d;
+  };
+
+  chartContainer.addEventListener('drawing-updated', _syncDrawings);
+}
+
+function _syncDrawings() {
+  if (!trades[currentIdx] || !drawingEngine) return;
+  const key = labelKey(trades[currentIdx]);
+  if (!userLabels[key]) userLabels[key] = { label: null, notes: '' };
+  userLabels[key].drawings = drawingEngine.state.drawings
+    .filter(d => d.source !== 'auto')
+    .map(d => ({ ...d }));
 }
 
 // ── Run backtest ──────────────────────────────────────────────────────────────
@@ -323,7 +365,8 @@ async function runBacktest() {
 
     trades        = data.trades || [];
     allCandles    = data.candles || [];
-    structureData = data.structure || { pivots: [], demand_obs: [], supply_obs: [] };
+    structureData = data.structure || { pivots: [], bos_events: [] };
+    if (drawingEngine) drawingEngine.setCandles(allCandles);
     renderStats(data.report);
     renderTradeList();
     if (trades.length > 0) showTrade(0);
@@ -366,132 +409,138 @@ function showTrade(idx) {
   if (slice.length === 0) return;
 
   clearTradeLines();
-  clearAnnotationLines();
-  clearStructureLines();
   candleSeries.setData(slice);
 
-  const isLong = t.direction === 'LONG' || t.direction.toLowerCase().includes('long');
-
-  // Structure overlay (demand OBs, supply OBs, pivot labels) — filter to visible window
+  const isLong    = t.direction === 'LONG' || t.direction.toLowerCase().includes('long');
+  const winStart  = slice[0].time;
+  const winEnd    = slice[slice.length - 1].time;
   const showStruct = document.getElementById('toggle-structure')?.checked !== false;
+
+  // Pivot markers (HH/HL/LL/LH) via lightweight-charts setMarkers
+  const PIVOT_COLORS = { HH:'#22c55e', HL:'#86efac', LL:'#ef4444', LH:'#fca5a5' };
+  const markers = [];
   if (showStruct) {
-    const winStart = slice[0].time;
-    const winEnd   = slice[slice.length - 1].time;
-
-    // Demand OBs → amber band (high + low lines)
-    (structureData.demand_obs || []).forEach(ob => {
-      if (ob.time_start > winEnd || ob.time_end < winStart) return;
-      addStructureLine(ob.high, 'rgba(245,158,11,0.7)', 'OB↑', 3, 1);
-      addStructureLine(ob.low,  'rgba(245,158,11,0.4)', '',     3, 1);
-    });
-
-    // Supply OBs → red band
-    (structureData.supply_obs || []).forEach(ob => {
-      if (ob.time_start > winEnd || ob.time_end < winStart) return;
-      addStructureLine(ob.high, 'rgba(239,68,68,0.4)',  '',     3, 1);
-      addStructureLine(ob.low,  'rgba(239,68,68,0.7)',  'OB↓',  3, 1);
-    });
-
-    // Pivot markers — merge with entry marker
-    const PIVOT_COLORS = { HH:'#22c55e', HL:'#86efac', LL:'#ef4444', LH:'#fca5a5' };
-    const pivotMarkers = (structureData.pivots || [])
+    (structureData.pivots || [])
       .filter(p => p.time >= winStart && p.time <= winEnd)
-      .map(p => ({
+      .forEach(p => markers.push({
         time:     p.time,
         position: (p.kind === 'HH' || p.kind === 'LH') ? 'aboveBar' : 'belowBar',
         color:    PIVOT_COLORS[p.kind] || '#888',
-        shape:    'circle',
-        size:     0.5,
-        text:     p.kind,
+        shape:    'circle', size: 0.5, text: p.kind,
       }));
-
-    const entryMarker = {
-      time:     entryTs,
-      position: isLong ? 'belowBar' : 'aboveBar',
-      color:    isLong ? '#22c55e'  : '#ef4444',
-      shape:    isLong ? 'arrowUp'  : 'arrowDown',
-      text:     'Entry',
-    };
-    candleSeries.setMarkers([...pivotMarkers, entryMarker].sort((a, b) => a.time - b.time));
-  } else {
-    candleSeries.setMarkers([{
-      time:     entryTs,
-      position: isLong ? 'belowBar' : 'aboveBar',
-      color:    isLong ? '#22c55e'  : '#ef4444',
-      shape:    isLong ? 'arrowUp'  : 'arrowDown',
-      text:     'Entry',
-    }]);
   }
+  markers.push({
+    time: entryTs, position: isLong ? 'belowBar' : 'aboveBar',
+    color: isLong ? '#22c55e' : '#ef4444',
+    shape: isLong ? 'arrowUp' : 'arrowDown', text: 'Entry',
+  });
+  candleSeries.setMarkers(markers.sort((a, b) => a.time - b.time));
 
-  // Entry/SL/TP lines
   addTradeLine(t.entry_price, '#94a3b8', 'Entry', 2);
   addTradeLine(t.sl,          '#ef4444', 'SL',    3);
   addTradeLine(t.tp1,         '#22c55e', 'TP',    3);
 
-  // Restore annotations for this trade
-  renderAnnotations(key);
+  // Restore user drawings + render auto-structure via DrawingEngine
+  if (drawingEngine) {
+    drawingEngine.state.drawings = [];
+    const saved = ul && ul.drawings ? ul.drawings : [];
+    saved.forEach(d => drawingEngine.state.drawings.push({ ...d }));
+    if (showStruct) _renderAutoStructure(t, winStart, winEnd, isLong);
+    else drawingEngine.redraw();
+  }
 
-  // Scroll: entry at ~40% from left
-  const relI    = entryI - lo;
-  const visSize = slice.length;
   chart.timeScale().setVisibleLogicalRange({
-    from: relI - Math.floor(visSize * 0.4),
-    to:   relI + Math.ceil(visSize  * 0.4),
+    from: (entryI - lo) - Math.floor(slice.length * 0.4),
+    to:   (entryI - lo) + Math.ceil(slice.length  * 0.4),
   });
+}
+
+function _renderAutoStructure(t, winStart, winEnd, isLong) {
+  // Per-trade OB rect
+  const ob = isLong ? t.demand_ob : t.supply_ob;
+  if (ob) {
+    const obColor = isLong ? '#f59e0b' : '#ef4444';
+    const obFill  = isLong ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)';
+    const obEnd   = Math.min(winEnd, ob.time_end + 7200);
+    drawingEngine.state.drawings.push({
+      id: 'auto_ob', type: 'rect', source: 'auto', label: 'OB',
+      points: [{ time: ob.time_start, price: ob.high }, { time: obEnd, price: ob.low }],
+      style:  { stroke: obColor, fill: obFill },
+    });
+  }
+
+  // Unmitigated FVGs — rect + CE midline
+  (t.fvgs || []).forEach((fvg, i) => {
+    if (fvg.c3_time < winStart || fvg.c1_time > winEnd) return;
+    const isBull  = fvg.kind === 'bullish';
+    const col     = isBull ? '#22c55e' : '#ef4444';
+    const fill    = isBull ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)';
+    const t1      = fvg.c1_time;
+    const t2      = Math.min(winEnd, fvg.c3_time + 7200);
+    const ce      = (fvg.top + fvg.bottom) / 2;
+    drawingEngine.state.drawings.push({
+      id: 'auto_fvg_' + i, type: 'rect', source: 'auto',
+      points: [{ time: t1, price: fvg.top }, { time: t2, price: fvg.bottom }],
+      style: { stroke: col, fill },
+    });
+    // CE midline
+    drawingEngine.state.drawings.push({
+      id: 'auto_fvg_ce_' + i, type: 'smc', source: 'auto',
+      points: [{ time: t1, price: ce }, { time: t2, price: ce }],
+      style: { stroke: col, dash: [3, 3] },
+    });
+  });
+
+  // BOS/ChoCH lines — from swing origin to break bar
+  (structureData.bos_events || []).forEach((ev, i) => {
+    if (ev.time < winStart || ev.time > winEnd) return;
+    const isBull = ev.direction === 'bullish';
+    const isBos  = ev.event_type === 'bos';
+    const color  = isBos ? (isBull ? '#3b82f6' : '#6366f1') : (isBull ? '#f97316' : '#ef4444');
+    const lbl    = isBos ? (isBull ? '↑BOS' : '↓BOS') : (isBull ? '↑ChoCH' : '↓ChoCH');
+    const t0     = ev.level_time
+      ? Math.max(winStart, ev.level_time)
+      : Math.max(winStart, ev.time - 3600);
+    drawingEngine.state.drawings.push({
+      id: 'auto_bos_' + i, type: 'smc', source: 'auto', label: lbl,
+      points: [{ time: t0, price: ev.level }, { time: ev.time, price: ev.level }],
+      style:  { stroke: color, dash: isBos ? [] : [5, 3] },
+    });
+  });
+
+  drawingEngine.redraw();
 }
 
 // ── Drawing tools ─────────────────────────────────────────────────────────────
 function setDrawMode(type) {
+  if (!drawingEngine) return;
   drawMode = drawMode === type ? null : type;
-  document.querySelectorAll('.draw-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.type === drawMode);
-  });
-  chartContainer.style.cursor = drawMode ? 'crosshair' : 'default';
-}
-
-chart.subscribeClick(param => {
-  if (!drawMode || !param.point || trades.length === 0) return;
-  const price = candleSeries.coordinateToPrice(param.point.y);
-  if (price == null) return;
-
-  const key = labelKey(trades[currentIdx]);
-  if (!userLabels[key]) userLabels[key] = { label: null, notes: '', annotations: [] };
-  if (!userLabels[key].annotations) userLabels[key].annotations = [];
-  userLabels[key].annotations.push({ type: drawMode, price });
-
-  renderAnnotations(key);
-  setDrawMode(null);  // one-shot: click once to place, reactivate to draw another
-});
-
-function renderAnnotations(key) {
-  clearAnnotationLines();
-  const ann = (userLabels[key] && userLabels[key].annotations) || [];
-  ann.forEach(a => {
-    const def = DRAW_TYPES[a.type];
-    if (!def) return;
-    annotationLines.push(candleSeries.createPriceLine({
-      price:     a.price,
-      color:     def.color,
-      lineWidth: 1,
-      lineStyle: def.style,
-      title:     def.label,
-    }));
-  });
-}
-
-function undoAnnotation() {
-  const key = labelKey(trades[currentIdx]);
-  const ann = userLabels[key] && userLabels[key].annotations;
-  if (ann && ann.length > 0) {
-    ann.pop();
-    renderAnnotations(key);
+  document.querySelectorAll('.draw-btn').forEach(b => b.classList.toggle('active', b.dataset.type === drawMode));
+  if (!drawMode) {
+    drawingEngine.setTool('cursor');
+    document.getElementById('draw-status').textContent = '';
+  } else {
+    drawingEngine.setTool(TOOL_MAP[drawMode] || drawMode);
+    const hint = ['bos','choch','sweep','ob'].includes(drawMode) ? '2 clicks' : '1 click';
+    document.getElementById('draw-status').textContent = drawMode.toUpperCase() + ' — ' + hint;
   }
 }
 
+function undoAnnotation() {
+  if (!drawingEngine) return;
+  const user = drawingEngine.state.drawings.filter(d => d.source !== 'auto');
+  if (!user.length) return;
+  const lastId = user[user.length - 1].id;
+  drawingEngine.state.drawings = drawingEngine.state.drawings.filter(d => d.id !== lastId);
+  drawingEngine.redraw();
+  _syncDrawings();
+}
+
 function clearAnnotations() {
-  const key = labelKey(trades[currentIdx]);
-  if (userLabels[key]) userLabels[key].annotations = [];
-  clearAnnotationLines();
+  if (!drawingEngine) return;
+  drawingEngine.state.drawings = drawingEngine.state.drawings.filter(d => d.source === 'auto');
+  drawingEngine.redraw();
+  _syncDrawings();
 }
 
 // ── Meta / nav ────────────────────────────────────────────────────────────────
@@ -575,15 +624,15 @@ async function saveLabel() {
   const key   = labelKey(t);
   const notes = document.getElementById('notes').value;
 
-  if (!userLabels[key]) userLabels[key] = { annotations: [] };
+  if (!userLabels[key]) userLabels[key] = {};
   userLabels[key].label = currentLabel;
   userLabels[key].notes = notes;
-
-  // Update sidebar color
-  const item = document.getElementById('ti-' + currentIdx);
-  if (item) {
-    item.className = 'trade-item active' + (currentLabel ? ' labeled-' + currentLabel : '');
+  if (drawingEngine) {
+    userLabels[key].drawings = drawingEngine.state.drawings.filter(d => d.source !== 'auto');
   }
+
+  const item = document.getElementById('ti-' + currentIdx);
+  if (item) item.className = 'trade-item active' + (currentLabel ? ' labeled-' + currentLabel : '');
 
   fetch('/api/review/label', {
     method: 'POST',
@@ -592,7 +641,7 @@ async function saveLabel() {
       symbol: currentSymbol, tf: currentTf,
       entry_time: t.entry_time, label: currentLabel, notes,
       params: currentParams,
-      annotations: userLabels[key].annotations || [],
+      drawings: userLabels[key].drawings || [],
     }),
   });
 
@@ -612,8 +661,11 @@ function showLoading(msg) {
 }
 function hideLoading() { document.getElementById('loading').style.display = 'none'; }
 
+// boot
+initDrawingEngine();
+
 document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === 'ArrowRight' || e.key === 'n') navigate(1);
   if (e.key === 'ArrowLeft'  || e.key === 'p') navigate(-1);
   if (e.key === 'g') setLabel('good');
@@ -621,15 +673,16 @@ document.addEventListener('keydown', e => {
   if (e.key === 's') setLabel('skip');
   if (e.key === 'Enter') saveLabel();
   if (e.key === 'Escape') setDrawMode(null);
-  // Quick draw shortcuts
   if (e.key === '1') setDrawMode('choch');
   if (e.key === '2') setDrawMode('bos');
   if (e.key === '3') setDrawMode('sweep');
   if (e.key === '4') setDrawMode('liq');
-  if (e.key === '5') setDrawMode('hh');
-  if (e.key === '6') setDrawMode('hl');
-  if (e.key === '7') setDrawMode('ll');
-  if (e.key === '8') setDrawMode('lh');
+  if (e.key === '5') setDrawMode('ob');
+  if (e.key === '6') setDrawMode('fvg');
+  if (e.key === '7') setDrawMode('hh');
+  if (e.key === '8') setDrawMode('hl');
+  if (e.key === '9') setDrawMode('ll');
+  if (e.key === '0') setDrawMode('lh');
   if (e.key === 'z') undoAnnotation();
 });
 </script>

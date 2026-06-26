@@ -1737,64 +1737,137 @@ def api_review_run():
             for _, row in df5.iterrows()
         ]
 
-        # Structure overlay — resample 5m → 30m, compute structure and OBs
-        structure_data = {"pivots": [], "demand_obs": [], "supply_obs": []}
+        # Structure overlay — 30m structure via structure_lib (proper BOS/ChoCH, FVGs, OBs)
+        structure_data = {"pivots": [], "bos_events": []}
         try:
-            from backtesting.engine.structure import StructureAnalyzer
+            from backtesting.structure_lib.swing import swing_points
+            from backtesting.structure_lib.labels import label_structure
+            from backtesting.structure_lib.fvg import detect_fvgs
+            from backtesting.structure_lib.ob import detect_order_blocks
+
             df_src = df5.copy().set_index("ts").sort_index()
+
+            # 30m for structure
             df30 = df_src.resample("30min").agg(
                 {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-            ).dropna(subset=["open"]).reset_index()
+            ).dropna(subset=["open"])
+
             if len(df30) > 10:
-                sa = StructureAnalyzer(
-                    high=df30["high"].to_numpy(),
-                    low=df30["low"].to_numpy(),
-                    close=df30["close"].to_numpy(),
-                    open_=df30["open"].to_numpy(),
-                    swing_n=3, ob_lookback=60, ob_min_body_ratio=0.3,
-                )
-                # Pivots: walk forward and collect all labeled pivots
-                for idx in range(len(df30)):
-                    p = sa._labels[idx]
-                    if p is not None:
-                        ts_val = df30["ts"].iloc[idx]
-                        structure_data["pivots"].append({
-                            "time": int(pd.Timestamp(ts_val).timestamp()),
-                            "price": float(p.price),
-                            "kind": p.kind,
+                swings, levels = swing_points(df30, swing_length=1, causal=True)
+                labels_df = label_structure(df30, swings, levels)
+
+                # Build pivot list with timestamps for BOS line start anchoring
+                pivot_list = []  # (ts, kind, price)
+                for ts_idx in df30.index:
+                    lbl = labels_df.loc[ts_idx, "structure_label"] if ts_idx in labels_df.index else None
+                    if lbl in ("HH", "HL", "LL", "LH"):
+                        level_val = levels.loc[ts_idx] if ts_idx in levels.index else float("nan")
+                        if not pd.isna(level_val):
+                            structure_data["pivots"].append({
+                                "time":  int(ts_idx.timestamp()),
+                                "price": float(level_val),
+                                "kind":  lbl,
+                            })
+                            pivot_list.append((ts_idx, lbl, float(level_val)))
+
+                # BOS/ChoCH events — find level_time by matching broken level to pivot history
+                for ts_idx in labels_df.index:
+                    row = labels_df.loc[ts_idx]
+                    for ev_type, direction, level_col in [
+                        ("bos",   "bullish", "bos_level"),
+                        ("bos",   "bearish", "bos_level"),
+                        ("choch", "bullish", "choch_level"),
+                        ("choch", "bearish", "choch_level"),
+                    ]:
+                        flag_col = f"{direction}_{ev_type}"
+                        if not (flag_col in row and row[flag_col]):
+                            continue
+                        lv = row.get(level_col, float("nan"))
+                        if pd.isna(lv):
+                            continue
+                        # Find the most recent pivot before this bar that matches the broken level
+                        level_time = None
+                        for p_ts, p_kind, p_price in reversed(pivot_list):
+                            if p_ts >= ts_idx:
+                                continue
+                            if abs(p_price - float(lv)) < 0.01:
+                                level_time = int(p_ts.timestamp())
+                                break
+                        structure_data["bos_events"].append({
+                            "time":       int(ts_idx.timestamp()),
+                            "level":      float(lv),
+                            "level_time": level_time,
+                            "direction":  direction,
+                            "event_type": ev_type,
                         })
 
-                # Collect OBs across period — scan every 6th bar to avoid N² cost
-                ts30_arr = df30["ts"].to_numpy()
-                seen_ob_idx = set()
-                for bar_i in range(6, len(df30), 3):
-                    ob = sa.demand_ob_before(bar_i)
-                    if ob is not None and ob.idx not in seen_ob_idx:
-                        seen_ob_idx.add(ob.idx)
-                        ob_ts = df30["ts"].iloc[ob.idx]
-                        # end time = ob candle close time (30m candle)
-                        end_ts = df30["ts"].iloc[min(ob.idx + 1, len(df30)-1)]
-                        structure_data["demand_obs"].append({
-                            "time_start": int(pd.Timestamp(ob_ts).timestamp()),
-                            "time_end":   int(pd.Timestamp(end_ts).timestamp()),
-                            "high": float(ob.high),
-                            "low":  float(ob.low),
-                            "kind": "demand",
-                        })
-                seen_ob_idx = set()
-                for bar_i in range(6, len(df30), 3):
-                    ob = sa.supply_ob_before(bar_i)
-                    if ob is not None and ob.idx not in seen_ob_idx:
-                        seen_ob_idx.add(ob.idx)
-                        ob_ts = df30["ts"].iloc[ob.idx]
-                        end_ts = df30["ts"].iloc[min(ob.idx + 1, len(df30)-1)]
-                        structure_data["supply_obs"].append({
-                            "time_start": int(pd.Timestamp(ob_ts).timestamp()),
-                            "time_end":   int(pd.Timestamp(end_ts).timestamp()),
-                            "high": float(ob.high),
-                            "low":  float(ob.low),
-                            "kind": "supply",
-                        })
+                # Per-trade OBs via structure_lib (tied to BOS/ChoCH)
+                obs = detect_order_blocks(df30, labels_df, lookback=5, min_body_pct=0.3)
+                ts30_arr = df30.index.to_numpy()
+
+                for trade in trades_json:
+                    try:
+                        entry_ts_val = pd.Timestamp(trade["entry_time"])
+                        idx30 = int(np.searchsorted(ts30_arr, np.datetime64(entry_ts_val), side="right")) - 1
+                        if idx30 < 3:
+                            continue
+                        direction = trade["direction"]
+                        entry_price = float(trade["entry_price"])
+                        for ob in reversed(obs):
+                            if ob.time > df30.index[idx30]:
+                                continue
+                            if direction == "LONG" and ob.kind == "bullish" and ob.bottom < entry_price:
+                                ob_end = ob.time + pd.Timedelta("30min")
+                                trade["demand_ob"] = {
+                                    "time_start": int(ob.time.timestamp()),
+                                    "time_end":   int(ob_end.timestamp()),
+                                    "high": float(ob.top), "low": float(ob.bottom),
+                                }
+                                break
+                            elif direction == "SHORT" and ob.kind == "bearish" and ob.top > entry_price:
+                                ob_end = ob.time + pd.Timedelta("30min")
+                                trade["supply_ob"] = {
+                                    "time_start": int(ob.time.timestamp()),
+                                    "time_end":   int(ob_end.timestamp()),
+                                    "high": float(ob.top), "low": float(ob.bottom),
+                                }
+                                break
+                    except Exception:
+                        pass
+
+                # Per-trade unmitigated FVGs (5m)
+                fvgs_5m = detect_fvgs(df_src)
+                df5_idx = df_src.index.to_numpy()
+
+                for trade in trades_json:
+                    try:
+                        entry_ts_val = pd.Timestamp(trade["entry_time"])
+                        entry_i = int(np.searchsorted(df5_idx, np.datetime64(entry_ts_val), side="right"))
+                        ctx_start = max(0, entry_i - 150)
+                        trade_fvgs = []
+                        for fvg in fvgs_5m:
+                            if fvg.c3_idx >= entry_i or fvg.c1_idx < ctx_start:
+                                continue
+                            # Check mitigation between c3 and entry
+                            mitigated = False
+                            for k in range(fvg.c3_idx + 1, entry_i):
+                                c = df_src.iloc[k]
+                                if fvg.kind == "bearish" and c["high"] >= fvg.bottom:
+                                    mitigated = True; break
+                                elif fvg.kind == "bullish" and c["low"] <= fvg.top:
+                                    mitigated = True; break
+                            if not mitigated:
+                                trade_fvgs.append({
+                                    "kind":    fvg.kind,
+                                    "top":     float(fvg.top),
+                                    "bottom":  float(fvg.bottom),
+                                    "c1_time": int(df_src.index[fvg.c1_idx].timestamp()),
+                                    "c3_time": int(df_src.index[fvg.c3_idx].timestamp()),
+                                })
+                        trade["fvgs"] = trade_fvgs
+                    except Exception:
+                        pass
+
         except Exception:
             pass  # structure overlay is non-critical
 

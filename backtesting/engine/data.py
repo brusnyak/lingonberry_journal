@@ -124,25 +124,54 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 # ── Loaders for each source ──────────────────────────────────────────────────
 
 
+CTRADER_DIR = DATA_DIR / "ctrader"
+
+
 def _load_from_flat_parquet(symbol: str, tf: str) -> pd.DataFrame:
-    """data/market_data/{SYMBOL}{TF}.parquet"""
-    path = DATA_DIR / f"{symbol}{tf}.parquet"
-    if not path.exists():
+    """Merge data/market_data + pine-review forex/metals + ctrader for maximum history."""
+    paths = [
+        DATA_DIR / f"{symbol}{tf}.parquet",
+        PINE_REVIEW_DIR / "forex"  / f"{symbol}{tf}.parquet",
+        PINE_REVIEW_DIR / "metals" / f"{symbol}{tf}.parquet",
+        CTRADER_DIR / f"{symbol}{tf}.parquet",
+    ]
+    frames = []
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            df = pd.read_parquet(path)
+            if not df.empty:
+                frames.append(df)
+        except Exception:
+            continue
+    if not frames:
         return pd.DataFrame()
-    try:
-        return pd.read_parquet(path)
-    except Exception:
+    if len(frames) == 1:
+        return frames[0]
+    # Normalize each frame individually (may have 'datetime' vs 'ts'), then merge
+    normed = [_normalize_columns(f) for f in frames]
+    normed = [f for f in normed if not f.empty]
+    if not normed:
         return pd.DataFrame()
+    if len(normed) == 1:
+        return normed[0]
+    merged = pd.concat(normed, ignore_index=True)
+    merged = merged.drop_duplicates(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    return merged
 
 
 def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) -> pd.DataFrame:
-    """data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet, with legacy fallback."""
+    """data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet, with legacy fallback.
+    Also checks pine-review/data/parquet/crypto/ for BTC/ETH/XRP/ADA."""
     paths = []
     if exchange:
         paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}{tf}.parquet")
     else:
         paths.extend(DATA_DIR / "crypto" / ex / f"{symbol}{tf}.parquet" for ex in CRYPTO_EXCHANGES)
         paths.append(DATA_DIR / "crypto" / f"{symbol}{tf}.parquet")
+    # pine-review crypto parquets (BTCUSD, ETHUSD, XRPUSDT, ADAUSDT)
+    paths.append(PINE_REVIEW_DIR / "crypto" / f"{symbol}{tf}.parquet")
 
     for path in paths:
         if not path.exists():

@@ -10,6 +10,8 @@ __pycache__/
 # ── Secrets / keys ──
 .env
 *creds*.txt
+*creds*.key
+*auth.txt
 *account-id*.txt
 OANDA-*.zip
 !.env.example
@@ -24,16 +26,21 @@ OANDA-*.zip
 *.json
 !opencode.json
 !opencode.jsonc
-data/market_data/
-data/cache/
-data/exports/
-data/logs/
-data/reports/
+data/
 data/.ctrader_sync_state.txt
 data/.bot.pid
 data/.webapp.pid
 data/.ctrader_sync.pid
 data/.sltp_poller.pid
+
+# ── Hermes (external agent files — not project code) ──
+hermes/
+
+# ── Generated reports (rebuild on demand) ──
+backtesting/results/*.html
+
+# ── Scratch / random text files ──
+qwen37.txt
 
 # ── Docs (full burn — rebuild when needed) ──
 docs/
