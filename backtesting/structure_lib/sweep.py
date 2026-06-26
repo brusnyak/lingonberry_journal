@@ -133,93 +133,70 @@ def detect_sweeps(
     """
     Detect liquidity sweeps: price breaks a pool level and reclaims it.
 
-    Parameters
-    ----------
-    ohlc : pd.DataFrame
-        OHLC data.
-    pools : list of LiquidityPool
-        Known liquidity pools to check.
-    lookback : int
-        How many candles back to check for the break event.
-    reclaim_candles : int
-        Max candles for the close to reclaim the level after the break.
-
-    Returns
-    -------
-    list of Sweep
-        Sweep events in chronological order.
+    Only creates ONE sweep per pool per break event (at the break candle),
+    not retrospectively on subsequent candles.
     """
+    n = len(ohlc)
+    high = ohlc["high"].to_numpy(dtype=float)
+    low = ohlc["low"].to_numpy(dtype=float)
+    close = ohlc["close"].to_numpy(dtype=float)
+    times = ohlc.index.to_numpy()
+
     sweeps: list[Sweep] = []
+    seen: set[tuple[float, str, int]] = set()  # (pool_level, direction, break_idx)
 
-    for i in range(len(ohlc)):
-        if i < lookback:
-            continue
+    buy_pools = [(p.level, p) for p in pools if p.side == "buy"]
+    sell_pools = [(p.level, p) for p in pools if p.side == "sell"]
 
-        candle = ohlc.iloc[i]
-        # Look back to see if any pool was swept in the last `lookback` candles
-        for j in range(max(0, i - lookback), i + 1):
-            test_candle = ohlc.iloc[j]
-            for pool in pools:
-                # Already detected this sweep?
-                if any(s.sweep_time == ohlc.index[i] and s.pool == pool for s in sweeps):
-                    continue
+    for i in range(lookback, n):
+        # Buy-side pools — check if THIS candle broke the level
+        for level, pool in buy_pools:
+            if not (high[i] > level):
+                continue
 
-                broke = False
-                wick_only = False
-                direction = ""
+            key = (level, "bearish", i)
+            if key in seen:
+                continue
+            seen.add(key)
 
-                # Buy-side pool (high) — break above = sweep of BSL
-                if pool.side == "buy":
-                    if test_candle["high"] > pool.level:
-                        broke = True
-                        wick_only = test_candle["close"] <= pool.level
-                        direction = "bearish"  # selling after BSL sweep
+            wick = close[i] <= level
 
-                # Sell-side pool (low) — break below = sweep of SSL
-                elif pool.side == "sell":
-                    if test_candle["low"] < pool.level:
-                        broke = True
-                        wick_only = test_candle["close"] >= pool.level
-                        direction = "bullish"  # buying after SSL sweep
+            # Reclaim check
+            reclaim = False
+            check_end = min(i + reclaim_candles + 1, n)
+            for k in range(i + 1, check_end):
+                if close[k] < level:
+                    reclaim = True
+                    break
 
-                if not broke:
-                    continue
+            sweeps.append(Sweep(
+                pool=pool, sweep_time=pd.Timestamp(times[i]),
+                direction="bearish", reclaim=reclaim, wick_only=wick,
+            ))
 
-                # Check for reclaim within reclaim_candles after the break
-                reclaim = False
-                check_start = j + 1
-                check_end = min(i + reclaim_candles + 1, len(ohlc))
+        # Sell-side pools
+        for level, pool in sell_pools:
+            if not (low[i] < level):
+                continue
 
-                for k in range(check_start, check_end):
-                    reclaim_candle = ohlc.iloc[k]
-                    if pool.side == "buy":
-                        # Close back below the level
-                        if reclaim_candle["close"] < pool.level:
-                            reclaim = True
-                            break
-                    elif pool.side == "sell":
-                        # Close back above the level
-                        if reclaim_candle["close"] > pool.level:
-                            reclaim = True
-                            break
+            key = (level, "bullish", i)
+            if key in seen:
+                continue
+            seen.add(key)
 
-                # Record sweep
-                sweeps.append(Sweep(
-                    pool=pool,
-                    sweep_time=ohlc.index[i],
-                    direction=direction,
-                    reclaim=reclaim,
-                    wick_only=wick_only,
-                ))
+            wick = close[i] >= level
 
-    # Deduplicate and sort
-    seen_keys: set[tuple] = set()
-    unique: list[Sweep] = []
-    for s in sweeps:
-        key = (s.pool.level, s.direction, s.sweep_time)
-        if key not in seen_keys:
-            seen_keys.add(key)
-            unique.append(s)
+            reclaim = False
+            check_end = min(i + reclaim_candles + 1, n)
+            for k in range(i + 1, check_end):
+                if close[k] > level:
+                    reclaim = True
+                    break
 
-    unique.sort(key=lambda s: s.sweep_time)
-    return unique
+            sweeps.append(Sweep(
+                pool=pool, sweep_time=pd.Timestamp(times[i]),
+                direction="bullish", reclaim=reclaim, wick_only=wick,
+            ))
+
+    sweeps.sort(key=lambda s: s.sweep_time)
+    return sweeps

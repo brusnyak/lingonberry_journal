@@ -1801,14 +1801,18 @@ def api_review_run():
                             "event_type": ev_type,
                         })
 
-                # Per-trade OBs via structure_lib (tied to BOS/ChoCH)
+                # Per-trade OBs via structure_lib
                 obs = detect_order_blocks(df30, labels_df, lookback=5, min_body_pct=0.3)
-                ts30_arr = df30.index.to_numpy()
+
+                def _ts(s):
+                    """Timezone-safe pd.Timestamp — always UTC."""
+                    t = pd.Timestamp(s)
+                    return t if t.tz is not None else t.tz_localize("UTC")
 
                 for trade in trades_json:
                     try:
-                        entry_ts_val = pd.Timestamp(trade["entry_time"])
-                        idx30 = int(np.searchsorted(ts30_arr, np.datetime64(entry_ts_val), side="right")) - 1
+                        entry_ts_val = _ts(trade["entry_time"])
+                        idx30 = df30.index.searchsorted(entry_ts_val, side="right") - 1
                         if idx30 < 3:
                             continue
                         direction = trade["direction"]
@@ -1835,26 +1839,26 @@ def api_review_run():
                     except Exception:
                         pass
 
-                # Per-trade unmitigated FVGs (5m)
+                # Per-trade unmitigated FVGs (5m) — CE-based mitigation (gap touch ≠ mitigated)
                 fvgs_5m = detect_fvgs(df_src)
-                df5_idx = df_src.index.to_numpy()
 
                 for trade in trades_json:
                     try:
-                        entry_ts_val = pd.Timestamp(trade["entry_time"])
-                        entry_i = int(np.searchsorted(df5_idx, np.datetime64(entry_ts_val), side="right"))
+                        entry_ts_val = _ts(trade["entry_time"])
+                        entry_i = df_src.index.searchsorted(entry_ts_val, side="right")
                         ctx_start = max(0, entry_i - 150)
                         trade_fvgs = []
                         for fvg in fvgs_5m:
                             if fvg.c3_idx >= entry_i or fvg.c1_idx < ctx_start:
                                 continue
-                            # Check mitigation between c3 and entry
+                            ce = (fvg.top + fvg.bottom) / 2
                             mitigated = False
                             for k in range(fvg.c3_idx + 1, entry_i):
                                 c = df_src.iloc[k]
-                                if fvg.kind == "bearish" and c["high"] >= fvg.bottom:
+                                # Mitigated only when price crosses CE, not just touches the gap edge
+                                if fvg.kind == "bearish" and c["high"] >= ce:
                                     mitigated = True; break
-                                elif fvg.kind == "bullish" and c["low"] <= fvg.top:
+                                elif fvg.kind == "bullish" and c["low"] <= ce:
                                     mitigated = True; break
                             if not mitigated:
                                 trade_fvgs.append({

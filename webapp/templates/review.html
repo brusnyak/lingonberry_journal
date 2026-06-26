@@ -237,21 +237,15 @@ let userLabels    = {};   // key → {label, notes, annotations}
 let drawMode      = null;
 let drawingEngine = null;
 
-// Tool mapping: toolbar type → DrawingEngine tool id
+// Tool mapping → DrawingEngine tool id
+// hh/hl/ll/lh are NOT DrawingEngine tools — handled via chart.subscribeClick as candle markers
 const TOOL_MAP = {
   choch: 'choch', bos: 'bos', sweep: 'sweep',
-  liq: 'sweep',   // two-click SMC, relabeled in override
-  ob:  'rect',
-  fvg: 'rect',    // two-click rect; override adds CE midline
-  hh: 'hline', hl: 'hline', ll: 'hline', lh: 'hline',
+  liq: 'sweep', ob: 'rect', fvg: 'rect',
 };
 const LIQ_OVERRIDE = { label: 'Liq', stroke: '#eab308', dash: [4, 4] };
-const HLINE_STYLES = {
-  hh: { label: 'HH', stroke: '#22c55e' },
-  hl: { label: 'HL', stroke: '#86efac' },
-  ll: { label: 'LL', stroke: '#ef4444' },
-  lh: { label: 'LH', stroke: '#fca5a5' },
-};
+const MARKER_TOOLS = new Set(['hh', 'hl', 'll', 'lh']);
+const MARKER_COLORS = { hh: '#22c55e', hl: '#86efac', ll: '#ef4444', lh: '#fca5a5' };
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
 const chartContainer = document.getElementById('chart-container');
@@ -296,12 +290,6 @@ function initDrawingEngine() {
     if (drawMode === 'liq' && d.type === 'smc') {
       d.label = LIQ_OVERRIDE.label;
       d.style = { stroke: LIQ_OVERRIDE.stroke, dash: LIQ_OVERRIDE.dash };
-      drawingEngine.redraw();
-    }
-    if (HLINE_STYLES[drawMode] && d.type === 'hline') {
-      const s = HLINE_STYLES[drawMode];
-      d.label = s.label;
-      d.style = { stroke: s.stroke, fill: '' };
       drawingEngine.redraw();
     }
     if (drawMode === 'fvg' && d.type === 'rect' && d.points.length === 2) {
@@ -429,6 +417,11 @@ function showTrade(idx) {
         shape:    'circle', size: 0.5, text: p.kind,
       }));
   }
+  // User-placed HH/HL/LL/LH markers
+  ((ul && ul.markers) || [])
+    .filter(m => m.time >= winStart && m.time <= winEnd)
+    .forEach(m => markers.push(m));
+
   markers.push({
     time: entryTs, position: isLong ? 'belowBar' : 'aboveBar',
     color: isLong ? '#22c55e' : '#ef4444',
@@ -519,28 +512,58 @@ function setDrawMode(type) {
   if (!drawMode) {
     drawingEngine.setTool('cursor');
     document.getElementById('draw-status').textContent = '';
+  } else if (MARKER_TOOLS.has(drawMode)) {
+    // Marker modes: keep DrawingEngine in cursor so it doesn't intercept clicks
+    drawingEngine.setTool('cursor');
+    document.getElementById('draw-status').textContent = drawMode.toUpperCase() + ' — click candle';
   } else {
     drawingEngine.setTool(TOOL_MAP[drawMode] || drawMode);
-    const hint = ['bos','choch','sweep','ob'].includes(drawMode) ? '2 clicks' : '1 click';
+    const hint = ['bos','choch','sweep','liq','ob','fvg'].includes(drawMode) ? '2 clicks' : '1 click';
     document.getElementById('draw-status').textContent = drawMode.toUpperCase() + ' — ' + hint;
   }
 }
 
+// Single-click marker placement for HH/HL/LL/LH
+chart.subscribeClick(param => {
+  if (!MARKER_TOOLS.has(drawMode) || !param.time || trades.length === 0) return;
+  const key = labelKey(trades[currentIdx]);
+  if (!userLabels[key]) userLabels[key] = {};
+  if (!userLabels[key].markers) userLabels[key].markers = [];
+  userLabels[key].markers.push({
+    time:     Number(param.time),
+    position: (drawMode === 'hh' || drawMode === 'lh') ? 'aboveBar' : 'belowBar',
+    color:    MARKER_COLORS[drawMode],
+    shape:    'circle',
+    size:     1,
+    text:     drawMode.toUpperCase(),
+  });
+  showTrade(currentIdx);  // re-render to show new marker
+  _syncDrawings();
+  setDrawMode(null);
+});
+
 function undoAnnotation() {
   if (!drawingEngine) return;
+  const key = labelKey(trades[currentIdx]);
   const user = drawingEngine.state.drawings.filter(d => d.source !== 'auto');
-  if (!user.length) return;
-  const lastId = user[user.length - 1].id;
-  drawingEngine.state.drawings = drawingEngine.state.drawings.filter(d => d.id !== lastId);
-  drawingEngine.redraw();
-  _syncDrawings();
+  if (user.length > 0) {
+    const lastId = user[user.length - 1].id;
+    drawingEngine.state.drawings = drawingEngine.state.drawings.filter(d => d.id !== lastId);
+    drawingEngine.redraw();
+    _syncDrawings();
+  } else if (userLabels[key] && userLabels[key].markers && userLabels[key].markers.length > 0) {
+    userLabels[key].markers.pop();
+    showTrade(currentIdx);
+  }
 }
 
 function clearAnnotations() {
   if (!drawingEngine) return;
   drawingEngine.state.drawings = drawingEngine.state.drawings.filter(d => d.source === 'auto');
   drawingEngine.redraw();
-  _syncDrawings();
+  const key = labelKey(trades[currentIdx]);
+  if (userLabels[key]) { userLabels[key].drawings = []; userLabels[key].markers = []; }
+  showTrade(currentIdx);
 }
 
 // ── Meta / nav ────────────────────────────────────────────────────────────────
@@ -642,6 +665,7 @@ async function saveLabel() {
       entry_time: t.entry_time, label: currentLabel, notes,
       params: currentParams,
       drawings: userLabels[key].drawings || [],
+      markers:  userLabels[key].markers  || [],
     }),
   });
 
