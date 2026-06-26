@@ -1,4 +1,4 @@
-"""Central configuration — GFT accounts, pairs, timeframes, risk."""
+"""Central configuration — $70 personal account, crypto pairs, risk."""
 from __future__ import annotations
 
 import os
@@ -6,73 +6,65 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 # ──────────────────────────────────────────────
-# GFT Account Rules
+# Account: $70 Personal (Binance/Bybit USDT-M)
 # ──────────────────────────────────────────────
 
-GFT_RULES_25K_PRO = {
-    "name": "25k Pro 2-Step",
-    "initial_balance": 25_000,
-    "phase1_target": 0.08,  # 8% = $2,000
-    "phase2_target": 0.05,  # 5% = $1,250
-    "daily_dd": 0.05,  # 5% balance-based
-    "max_loss": 0.10,  # 10% static → floor at $22,500
-    "min_days_per_phase": 3,
-    "min_profit_day_pct": 0.005,  # 0.5% = $125
-}
-
-GFT_RULES_100K_1STEP = {
-    "name": "100k 1-Step",
-    "initial_balance": 100_000,
-    "phase1_target": 0.10,  # 10% = $10,000
-    "phase2_target": None,  # single phase
-    "daily_dd": 0.04,  # 4% balance-based
-    "max_loss": 0.06,  # 6% static → floor at $94,000
-    "min_days_per_phase": 3,
-    "min_profit_day_pct": None,
+PERSONAL_ACCOUNT = {
+    "name": "Crypto Personal",
+    "initial_balance": 70.0,
+    "max_daily_loss_pct": 0.05,     # 5% = $3.50
+    "max_overall_loss_pct": 0.15,   # 15% = $10.50 (reset if hit)
+    "min_balance": 50.0,            # stop trading if below
 }
 
 # ──────────────────────────────────────────────
-# Tradeable Instruments
+# Tradeable Instruments — Crypto USDT-M Futures
 # ──────────────────────────────────────────────
 
 @dataclass
 class PairConfig:
-    symbol: str                     # TradeLocker name (e.g. "EURUSD", "XAUUSD")
+    symbol: str                     # Binance/Bybit name
     name: str                       # Human-readable label
-    # Timeframe resolutions available on TradeLocker:
-    # 1M, 1W, 1D, 4H, 1H, 30m, 15m, 5m, 1m
-    # (3m is NOT available — use 5m for LTF)
-    htf_resolution: str = "4H"      # Directional bias / sentiment
-    mtf_resolution: str = "30m"     # Structure / OB / FVG zones
-    mtf2_resolution: str = "15m"    # Finer structure / liquidity
-    ltf_resolution: str = "5m"      # Entry confirmation (BOS/CHoCH)
 
-    # SMC swing_lengths (passed to smc.swing_highs_lows which DOUBLES internally)
-    # 4h:  swing=7  → effective 14 candles (~2.3 days)
-    # 30m: swing=10 → effective 20 candles (10 hours)
-    # 15m: swing=8  → effective 16 candles (4 hours)
-    # 5m:  swing=4  → effective 9 candles (45 min) — LTF entry
+    # Timeframe resolutions:
+    # 15m or 5m entry, 1H/4H for structure bias
+    htf_resolution: str = "4H"      # Directional bias
+    mtf_resolution: str = "1H"      # Structure / OB / FVG zones
+    ltf_resolution: str = "15m"     # Entry confirmation (BOS/CHoCH/FVG)
+
+    # SMC swing_lengths
     htf_swing_length: int = 7
     mtf_swing_length: int = 10
-    mtf2_swing_length: int = 8
     ltf_swing_length: int = 4
 
-    min_rr: float = 2.0
+    min_rr: float = 1.5
     min_score: float = 60.0
 
-PAIRS: list[PairConfig] = [
-    PairConfig(symbol="EURUSD.X", name="EUR/USD"),
-    PairConfig(symbol="GBPUSD.X", name="GBP/USD"),
-    PairConfig(symbol="GBPAUD.X", name="GBP/AUD"),
-    PairConfig(symbol="GBPCAD.X", name="GBP/CAD"),
-    PairConfig(symbol="XAUUSD.X", name="Gold"),
+CRYPTO_PAIRS: list[PairConfig] = [
+    PairConfig(symbol="XRPUSDT",  name="Ripple"),
+    PairConfig(symbol="ADAUSDT",  name="Cardano"),
+    PairConfig(symbol="SOLUSDT",  name="Solana"),
+    PairConfig(symbol="DOGEUSDT", name="Dogecoin"),
+    PairConfig(symbol="AVAXUSDT", name="Avalanche"),
+    PairConfig(symbol="NEARUSDT", name="Near Protocol"),
+    PairConfig(symbol="LINKUSDT", name="Chainlink"),
+    PairConfig(symbol="AAVEUSDT", name="Aave"),
+    PairConfig(symbol="SUIUSDT",  name="Sui"),
 ]
 
-# Mean-reversion pairs (used by run_backtest.py by default)
-MR_PAIRS: list[str] = ["GBPUSD.X", "GBPAUD.X", "GBPCAD.X", "EURUSD.X"]
+# Bull-only configs (best performers from 30d backtest)
+BULL_CONFIG = {
+    "sl_buffer_pips": 20,
+    "tp1_r": 2.0,
+    "direction": "bull",
+    "min_gap_atr_pct": 0.2,
+    "sl_mode": "structure",
+    "structure_sl_lookback": 20,
+    "structure_sl_swing_n": 3,
+}
 
 # ──────────────────────────────────────────────
-# Risk Per Account
+# Risk Rules — $70 Personal
 # ──────────────────────────────────────────────
 
 @dataclass
@@ -81,23 +73,16 @@ class RiskRule:
     initial_balance: float
     max_daily_loss_pct: float
     max_overall_loss_pct: float
-    risk_per_trade_pct: float = 0.01
+    risk_per_trade_pct: float = 0.005  # 0.5% = $0.35
     max_positions: int = 1
     default_leverage: int = 50
 
 RISK_RULES: list[RiskRule] = [
     RiskRule(
-        account_name="25k Pro",
-        initial_balance=25_000,
-        max_daily_loss_pct=GFT_RULES_25K_PRO["daily_dd"],
-        max_overall_loss_pct=GFT_RULES_25K_PRO["max_loss"],
-    ),
-    RiskRule(
-        account_name="100k 1-Step",
-        initial_balance=100_000,
-        risk_per_trade_pct=0.005,
-        max_daily_loss_pct=GFT_RULES_100K_1STEP["daily_dd"],
-        max_overall_loss_pct=GFT_RULES_100K_1STEP["max_loss"],
+        account_name="Crypto Personal",
+        initial_balance=PERSONAL_ACCOUNT["initial_balance"],
+        max_daily_loss_pct=PERSONAL_ACCOUNT["max_daily_loss_pct"],
+        max_overall_loss_pct=PERSONAL_ACCOUNT["max_overall_loss_pct"],
     ),
 ]
 
@@ -112,17 +97,16 @@ KILL_ZONES = {
 }
 
 # ──────────────────────────────────────────────
-# Scanner
+# Scanner — Not used for crypto yet
 # ──────────────────────────────────────────────
 
 SCAN_INTERVAL_MINUTES: int = int(os.getenv("SCAN_INTERVAL_MINUTES", "5"))
 
-# LTF confirmation thresholds (5m candles)
 LTF_CONF_BASE_SCORE = 40
-LTF_RECENCY_BONUS = 15       # Max points for most recent signal
+LTF_RECENCY_BONUS = 15
 LTF_VOLUME_SPIKE_THRESHOLD = 1.5
 LTF_VOLUME_BONUS = 10
-LTF_LOOKBACK_CANDLES = 16    # Check last N 5m candles (~80 min)
+LTF_LOOKBACK_CANDLES = 16
 LTF_MIN_SCORE = 40
 
 # ──────────────────────────────────────────────
