@@ -44,6 +44,8 @@ import pandas as pd
 from backtesting.engine.base import BarData, EngineState, Strategy
 from backtesting.engine.orders import Direction, Signal
 from backtesting.engine.structure import StructureAnalyzer
+from backtesting.structure_lib.swing import swing_points
+from backtesting.structure_lib.labels import label_structure
 
 
 class TrFvg(Strategy):
@@ -68,8 +70,11 @@ class TrFvg(Strategy):
         # HTF filter
         htf_momentum_bars: int = 10,
         htf_agree: bool = True,
-        # HTF structure (HH/HL for longs, LL/LH for shorts)
-        htf_structure: bool = False,
+        # HTF structure — labeled 4H HH/HL/LH/LL trend filter
+        # Uses structure_lib.label_structure for proper SMC multi-timeframe
+        htf_structure: bool = False,       # enable 4H structure filter
+        htf_swing_length: int = 7,         # swing detection width for 4H
+        # Legacy — kept for backward compat, unused with label-based impl
         htf_struct_bars: int = 3,
         # Killzone filter (UTC hours)
         killzone: bool = False,
@@ -94,6 +99,7 @@ class TrFvg(Strategy):
         self.htf_momentum_bars = htf_momentum_bars
         self.htf_agree = htf_agree
         self.htf_structure = htf_structure
+        self.htf_swing_length = htf_swing_length
         self.htf_struct_bars = htf_struct_bars
         self.killzone = killzone
         self.kz_sessions = kz_sessions
@@ -182,6 +188,7 @@ class TrFvg(Strategy):
         self._htf_dir:   Optional[np.ndarray] = None
         self._htf_high:  Optional[np.ndarray] = None
         self._htf_low:   Optional[np.ndarray] = None
+        self._htf_trend: Optional[np.ndarray] = None   # 'bullish'/'bearish'/'neutral'/'transitional' per 4H bar
         self._htf_regime: Optional[np.ndarray] = None  # +1 bull, -1 bear, 0 neutral
 
         if "240" in data and (self.htf_agree or self.htf_structure or self.direction == "regime"):
@@ -194,6 +201,15 @@ class TrFvg(Strategy):
             self._htf_dir  = np.sign(delta).fillna(0).to_numpy()
             self._htf_high = df4h["high"].to_numpy()
             self._htf_low  = df4h["low"].to_numpy()
+
+            # Proper SMC structure labels on 4H for htf_structure filter
+            if self.htf_structure:
+                try:
+                    swings_4h, levels_4h = swing_points(df4h, swing_length=self.htf_swing_length)
+                    struct_4h = label_structure(df4h, swings_4h, levels_4h)
+                    self._htf_trend = struct_4h["trend"].to_numpy()
+                except Exception:
+                    self._htf_trend = None
 
             if self.direction == "regime":
                 # Rolling sum of momentum signs over regime_bars — positive = bull regime, negative = bear
@@ -223,26 +239,25 @@ class TrFvg(Strategy):
         return float(valid[-1]) if len(valid) > 0 else None
 
     # ── HTF structure helpers ─────────────────────────────────────────────────
+    # Uses proper label_structure engine on 4H data (installed in init()).
+    # Trend values from labeling: 'bullish', 'bearish', 'neutral', 'transitional'.
+    #
+    #   long (bear fill) allowed in: bullish, neutral, transitional
+    #   short (bull fill) allowed in: bearish, neutral, transitional
 
     def _htf_is_bullish_structure(self, idx4h: int) -> bool:
-        n = self.htf_struct_bars
-        if idx4h < n * 2 or self._htf_high is None:
-            return True
-        highs = self._htf_high[idx4h - n: idx4h]
-        lows  = self._htf_low[idx4h - n: idx4h]
-        hh = all(highs[i] >= highs[i-1] for i in range(1, len(highs)))
-        hl = all(lows[i]  >= lows[i-1]  for i in range(1, len(lows)))
-        return hh and hl
+        """4H structure supports longs."""
+        if self._htf_trend is None or idx4h < 0 or idx4h >= len(self._htf_trend):
+            return True  # no data = no filter
+        trend = self._htf_trend[idx4h]
+        return trend in ("bullish", "neutral", "transitional")
 
     def _htf_is_bearish_structure(self, idx4h: int) -> bool:
-        n = self.htf_struct_bars
-        if idx4h < n * 2 or self._htf_high is None:
+        """4H structure supports shorts."""
+        if self._htf_trend is None or idx4h < 0 or idx4h >= len(self._htf_trend):
             return True
-        highs = self._htf_high[idx4h - n: idx4h]
-        lows  = self._htf_low[idx4h - n: idx4h]
-        ll = all(lows[i]  <= lows[i-1]  for i in range(1, len(lows)))
-        lh = all(highs[i] <= highs[i-1] for i in range(1, len(highs)))
-        return ll and lh
+        trend = self._htf_trend[idx4h]
+        return trend in ("bearish", "neutral", "transitional")
 
     # ── Main logic ────────────────────────────────────────────────────────────
 
