@@ -1650,6 +1650,20 @@ def api_trade_playback(trade_id: int):
 
 # ── Visual Backtest Reviewer ──────────────────────────────────────────────────
 
+
+def _detect_asset_type(sym: str) -> str:
+    s = sym.upper()
+    if s in ("XAUUSD", "XAGUSD"):
+        return "commodity"
+    if s in ("US100", "NAS100", "SPX500", "US30"):
+        return "index"
+    if s.endswith("USDT"):
+        return "crypto"
+    if s in ("BTCUSD", "ETHUSD"):
+        return "crypto"
+    return "forex"
+
+
 @app.route("/review")
 def review_page():
     return render_template("review.html")
@@ -1673,9 +1687,7 @@ def api_review_run():
         from backtesting.engine.runner import run as bt_run
         from backtesting.engine.costs import ForexCosts
 
-        load_kw = {}
-        if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
-            load_kw["asset_type"] = "crypto"
+        load_kw = {"asset_type": _detect_asset_type(symbol)}
 
         support_tf = "240"
         data = {
@@ -1919,9 +1931,7 @@ def api_review_candles():
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from backtesting.engine.data import load_data
 
-        load_kw = {}
-        if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
-            load_kw["asset_type"] = "crypto"
+        load_kw = {"asset_type": _detect_asset_type(symbol)}
 
         # Load a wide window, then slice around center
         _ts = pd.Timestamp(center) if center else None
