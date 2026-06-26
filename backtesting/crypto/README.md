@@ -1,119 +1,189 @@
-# Crypto Engine — TrFvg Strategy ($70 Account)
+# Crypto Engine - 10x Research State
 
-## Account
-- **Single personal account**: $70 on Binance/Bybit USDT-M futures
-- **Leverage**: 50x
-- **Risk per trade**: 0.5% ($0.35)
-- **Stop**: $50 floor (29% DD hard limit)
+## Current Verdict
 
-## TrFvg Strategy
-FVG-based mean reversion: enters when price fills a FVG in the bias direction. Uses structural stop loss (below swing point) with trailing on confirmed swing levels.
+Not deployment-ready.
 
-### Key Params (from sweep)
-| Param | Best | Range Tested |
-|-------|------|-------------|
-| direction | bull | both, bull, bear |
-| sl_buffer_pips | 20 | 10, 20 |
-| tp1_r | 2.0 | 1.5, 2.0 |
-| entry_tf | 15m | 5m, 15m |
-| sl_mode | structure | fixed, structure |
-| structure_sl_lookback | 20 | - |
-| structure_sl_swing_n | 3 | - |
+The previous 50x/0.5% results were misleading for three reasons:
 
-## Backtest Results — 30 Day Window (May 26 – Jun 25 2026)
+1. They used unrealistic leverage for EU-regulated execution.
+2. They allowed far or stale structural stops, creating multi-day holds.
+3. Some structure stops collapsed to entry/tick-noise, creating bogus R-multiples.
 
-### Summary
-- **216 configs** across 9 pairs × 2 TFs × 3 directions × 2 SL × 2 TP
-- **Bull direction is the only edge**: avg PF=1.25, WR=58%
-- **Bear direction loses on every pair**: avg PF=0.65, WR=45%
-- **Both direction: diluted**: avg PF=0.89, WR=52%
-- **15m beats 5m**: less noise, higher PF (1.01 vs 0.84)
-- **SL=20 beats SL=10**: avg PF 1.04 vs 0.81
+The current branch fixes those issues for research:
 
-### Top Configs (Bull Only, SL=20, TP=2.0)
+- Development account: `$70`
+- Development leverage: `10x`
+- Research risk: `2%` per trade
+- `CryptoCosts` uses exchange-scoped market specs and funding
+- `TrFvg` rejects stops that are too tight or too far:
+  - `min_stop_pct=0.001`
+  - `min_stop_atr_mult=0.25`
+  - `max_stop_pct=0.012`
+  - `max_stop_atr_mult=2.5`
+- `tp1_frac=1.0` closes full position at TP1 for intraday review
 
-| Pair | TF | Trades | WR | PF | RR | Ret% | DD% |
-|------|----|--------|----|----|----|------|-----|
-| DOGEUSDT | 15m | 22 | 68% | 4.52 | 2.11 | 6% | 0.7% |
-| XRPUSDT | 15m | 32 | 72% | 2.61 | 1.02 | 7% | 1.6% |
-| SUIUSDT | 15m | 42 | 52% | 2.19 | 1.99 | 6% | 1.5% |
-| AVAXUSDT | 15m | 78 | 59% | 1.50 | 1.04 | 9% | 5.2% |
-| ADAUSDT | 15m | 85 | 61% | 1.51 | 0.96 | 9% | 4.4% |
-| DOGEUSDT | 5m | 43 | 67% | 3.00 | 1.45 | 9% | 1.2% |
-| SUIUSDT | 5m | 78 | 56% | 2.14 | 1.66 | 12% | 2.0% |
-| XRPUSDT | 5m | 54 | 63% | 1.88 | 1.11 | 8% | 2.0% |
+## Strategy Tested
 
-### Why Bull Direction Wins
-The 30-day window (May-Jun 2026) was a structurally bullish period across altcoins. TrFvg is a mean-reversion strategy that fades moves back to FVG — in an uptrend, bullish FVG fills buy dips that get carried higher, while bearish FVG fills catch falling knives.
+`TrFvg` remains a fair-value-gap fill reversal:
 
-Key insight: **TrFvg is not symmetric**. The signal quality differs by direction because:
-1. Uptrends have clean FVG retests that bounce
-2. Downtrend FVG fills often get swept through (trend continuation)
-3. The structural SL on bear trades gets hit more often (SL above swing high, but price keeps making new highs)
+- `bull` direction = short bullish FVG fills
+- `bear` direction = long bearish FVG fills
+- `both` direction = both sides
+- Structural SL = nearest confirmed swing, plus buffer
+- Structure updates now include the latest confirmed pivot up to `i - swing_n`
 
-### Why Losers Fail
-1. **Bear direction** — every pair, every config. 45% WR, PF=0.65. The structure-based SL is systematically too close for shorts in a bull trend. This isn't random — it's a trend bias.
+## 30D Sweep - 10x / Intraday-Capped
 
-2. **SL=10 on volatile pairs** — ADA, AAVE, LINK have high ATR relative to pip_size. SL=10 gets eaten by noise. SL=20 survives.
-
-3. **5m entry over-trades** — more signals, lower quality. WR drops 4-8% vs 15m, DD doubles.
-
-4. **Both direction drags** — the bear trades cancel the bull edge. Running both gives avg PF near 1.0.
-
-## Data Inventory (2026-06-26)
-
-### 9 Pairs Available
-
-| Pair | 30m | Structure Quality | Backtest Quality |
-|------|-----|-------------------|------------------|
-| ADAUSDT | YES | HIGH (496 pivots) | GOOD (PF 1.5) |
-| XRPUSDT | YES | HIGH (517 pivots) | GOOD (PF 1.9-2.6) |
-| SOLUSDT | YES | HIGH (524 pivots) | MEDIUM (PF 1.2) |
-| DOGEUSDT | RESAMPLE | LOW (49 pivots) | GOOD (PF 3.0-4.5) |
-| AVAXUSDT | YES | HIGH (398 pivots) | GOOD (PF 1.5) |
-| NEARUSDT | DATA | 30+ days | FAIR (PF 1.3) |
-| LINKUSDT | DATA | 30+ days | FAIR (PF 1.2) |
-| AAVEUSDT | DATA | 30+ days | FAIR (PF 1.1) |
-| SUIUSDT | RESAMPLE | untested | GOOD (PF 2.2) |
-
-### Missing or Deprecated
-- ALGO, ATOM, TRX, ARB, ENA, INJ, TIA, WLD — not in primary universe
-- BTC, ETH — 10x fewer structure events, not suitable for this strategy
-
-## Structure Pipeline Performance
-
-All 9 tested pairs run in 0.1–4s total (30-day window).
-
-| Asset | Pipeline | Sweeps | Sweep Time | Signal Gen | Total |
-|-------|----------|--------|------------|------------|-------|
-| XRP | 0.1s | 108K | 1.8s | 1.5s | 3.7s |
-| SOL | 0.1s | 105K | 1.7s | 1.5s | 3.6s |
-| ADA | 0.1s | 25K | 0.4s | 0.5s | 1.1s |
-| AVAX | 0.1s | 42K | 0.7s | 0.6s | 1.7s |
-| DOGE | 0.02s | 2K | 0.03s | 0.04s | 0.1s |
-
-## Next Actions
-
-1. **OOS validation**: Run on non-overlapping window (Apr 26 – May 25) to confirm edge
-2. **Filter bear trades**: Hard rule — only bull signals. Or add HTF trend filter (4H structure)
-3. **Test SL=30**: Higher buffer might improve bear direction too
-4. **Examine top winners on review page**: Visual check of DOGE/XRP bull 15m trades
-5. **Add ATR-based pip_size**: SL buffer proportional to ATR instead of fixed pips
-6. **Live paper trading**: Deploy best config (XRP/DOGE/AVAX 15m bull) on demo
-7. **Clean deprecated branches**: feature/ob-structure-sl, feature/prop-firm-engine
-
-## Run Commands
+Command:
 
 ```bash
-# Full backtest sweep
 python -m backtesting.crypto.scripts.run_trfvg_backtest
-
-# Data fetch
-python -m backtesting.data_pipeline.crypto --days 90 --exchange both --tfs 1,3,5,15,30,60,240,1440
-
-# Structure audit
-python -m backtesting.crypto.scripts.audit_structure
-
-# Review webapp
-cd ../../ && make webapp  # then open http://localhost:5000/review
 ```
+
+Core settings:
+
+- Account: `$70`
+- Leverage: `10x`
+- Exchange: `binance`
+- Window: latest 30D local data
+- Symbols: `ADA, XRP, SOL, AVAX, NEAR, DOGE, LINK, AAVE, SUI`
+- Timeframes: `5m`, `15m`
+- Directions: `both`, `bull`, `bear`
+- SL buffers: `10`, `20`
+- TP: `1.5R`, `2.0R`
+
+Top 30D rows after stop fixes:
+
+| Pair | TF | Dir | Trades | WR | PF | Return | DD |
+|---|---:|---|---:|---:|---:|---:|---:|
+| DOGEUSDT | 5m | bull | 5 | 40% | 5.79 | 6.4% | 0.9% |
+| SUIUSDT | 15m | bull | 7 | 43% | 2.46 | 5.0% | 3.1% |
+| AAVEUSDT | 15m | bull | 39 | 49% | 2.01 | 31.0% | 8.9% |
+| AVAXUSDT | 15m | bull | 39 | 44% | 1.98 | 37.3% | 9.2% |
+| XRPUSDT | 15m | bull | 8 | 25% | 1.75 | 3.2% | 2.8% |
+
+Important: DOGE looks good in a single 30D window, but fails rolling validation. Do not promote it.
+
+## Rolling 30D Validation
+
+Command:
+
+```bash
+python -m backtesting.crypto.scripts.run_rolling_trfvg
+```
+
+Test:
+
+- 8 rolling 30D windows
+- 7D step
+- Pairs: `XRP, DOGE, AVAX, ADA, SUI`
+- Config: `SL=20`, `TP=2R`, capped structure stops, `10x`, `2% risk`
+
+Rolling results:
+
+| Pair | Dir | Valid Windows | Mean PF | PF Std | Min PF | WR | Mean DD | Mean Trades |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| XRPUSDT | bull | 8/8 | 5.70 | 3.94 | 1.89 | 38% | 1.7% | 6 |
+| AVAXUSDT | bull | 5/8 | 3.79 | 2.70 | 2.01 | 53% | 5.6% | 24 |
+| XRPUSDT | both | 8/8 | 2.15 | 0.91 | 1.07 | 27% | 3.5% | 13 |
+| AVAXUSDT | both | 5/8 | 1.56 | 0.09 | 1.46 | 43% | 6.4% | 41 |
+| SUIUSDT | both | 8/8 | 1.05 | 0.47 | 0.55 | 25% | 22.4% | 51 |
+| DOGEUSDT | bull | 6/8 | 0.30 | 0.32 | 0.00 | 8% | 4.2% | 7 |
+
+Decision:
+
+- `AVAXUSDT 15m bull` is the best current candidate because it has usable trade count.
+- `XRPUSDT 15m bull` has strong PF but too few trades; treat as promising but under-sampled.
+- `DOGEUSDT` is rejected despite the top single-window row.
+- `SUIUSDT` is not stable enough.
+- `bear` direction remains bad.
+
+## Trade Geometry Review
+
+Generated locally:
+
+```bash
+backtesting/results/trfvg_10x_trade_review_summary.csv
+backtesting/results/trfvg_10x_trade_review.csv
+```
+
+Reviewed candidates:
+
+| Pair | TF | Dir | Trades | Median Hold | Avg Stop | Median Stop | Max Stop | Avg TP | EOD |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| XRPUSDT | 15m | bull | 8 | 37.5m | 0.76% | 0.74% | 1.13% | 1.52% | 0 |
+| AVAXUSDT | 15m | bull | 39 | 60.0m | 0.77% | 0.79% | 1.16% | 1.53% | 0 |
+| DOGEUSDT | 5m | bull | 5 | 10.0m | 0.83% | 0.88% | 1.07% | 1.67% | 0 |
+| SUIUSDT | 15m | bull | 7 | 30.0m | 0.91% | 0.97% | 1.18% | 1.37% | 0 |
+
+This fixes the original SL/TP problem:
+
+- Stops are no longer multi-percent structure guesses.
+- TPs are no longer multi-day targets.
+- No reviewed candidate exits at EOD.
+
+Remaining problem:
+
+- Trade counts are low for DOGE/XRP/SUI.
+- AVAX has better count but still needs OOS and exchange-feature filters.
+
+## Data Resources
+
+Core data:
+
+- `data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet`
+- `data/market_data/crypto/{exchange}/{SYMBOL}_funding.parquet`
+- `data/market_data/crypto/{exchange}/market_specs.parquet`
+
+Exchange-derived resources:
+
+- `data/market_data/crypto/{exchange}/resources/{SYMBOL}_mark{TF}.parquet`
+- `data/market_data/crypto/{exchange}/resources/{SYMBOL}_index{TF}.parquet`
+- `data/market_data/crypto/{exchange}/resources/{SYMBOL}_open_interest.parquet`
+
+Fetch command:
+
+```bash
+python -m backtesting.data_pipeline.crypto \
+  --days 90 \
+  --exchange both \
+  --symbols DOGEUSDT,XRPUSDT,SUIUSDT,AVAXUSDT \
+  --tfs 1,15,60 \
+  --resources mark,index,open_interest
+```
+
+## Review UI
+
+Run:
+
+```bash
+make run-web
+```
+
+Open:
+
+```text
+http://127.0.0.1:5000/review
+```
+
+Crypto defaults:
+
+- Symbol: `DOGEUSDT`
+- TF: `15m`
+- Exchange: `binance`
+- Account: `$70`
+- Leverage: `10x`
+- Strategy: `TrFvg`
+- Direction: `bull`
+- Risk: `2%`
+
+Use the UI for visual inspection, not proof. Rolling metrics decide whether a setup is worth keeping.
+
+## Next Crypto Work
+
+1. Promote `AVAXUSDT 15m bull` to deeper review.
+2. Add mark/index basis and open-interest filters.
+3. Run Binance vs Bybit comparison with the same config.
+4. Add lookahead/recursive-analysis checks inspired by Freqtrade.
+5. Reject configs that pass only one 30D window.

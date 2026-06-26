@@ -269,8 +269,9 @@ def run(
         )
 
         # ── 0. Process pending SL update from strategy.next() on previous bar ─
-        if open_positions and strategy._pending_sl_update is not None:
-            _apply_sl_update(strategy._pending_sl_update, open_positions)
+        pending_sl_update = getattr(strategy, "_pending_sl_update", None)
+        if open_positions and pending_sl_update is not None:
+            _apply_sl_update(pending_sl_update, open_positions)
             strategy._pending_sl_update = None
 
         # ── 1. Check exits on open positions ──────────────────────────────────
@@ -407,9 +408,18 @@ def run(
 
             open_positions = remaining
 
-        # ── 2. Strategy signal ────────────────────────────────────────────────
+        # ── 2. Post-bar monitoring (every bar, even with max positions) ───────
+        state = _make_state(equity, initial_equity, open_positions, closed_trades, i)
+        strategy.post_bar(bar, state)
+        # Re-read _pending_sl_update (post_bar may have set it) and apply now
+        # so the exit check on this bar's remaining positions picks it up.
+        pending_sl_update = getattr(strategy, "_pending_sl_update", None)
+        if open_positions and pending_sl_update is not None:
+            _apply_sl_update(pending_sl_update, open_positions)
+            strategy._pending_sl_update = None
+
+        # ── 3. Strategy signal ────────────────────────────────────────────────
         if len(open_positions) < max_open_positions:
-            state = _make_state(equity, initial_equity, open_positions, closed_trades, i)
             signal = strategy.next(bar, state)
 
             if signal is not None:
@@ -530,6 +540,12 @@ def _funding_for_exit(costs: CostModel, pos: Position, close_lots: float, exit_t
 def _r_mult_net(pos: Position, lots: float, costs: CostModel, pnl: float) -> float:
     original_sl = getattr(pos, "original_sl", pos.sl)
     stop_dist = abs(pos.entry_price - original_sl)
+    if hasattr(costs, "pnl"):
+        direction = pos.direction.value if hasattr(pos.direction, "value") else pos.direction
+        initial_risk = abs(costs.pnl(pos.entry_price, original_sl, direction, lots))
+        if initial_risk == 0:
+            return 0.0
+        return pnl / initial_risk
     pip_size = costs.pip_size if hasattr(costs, "pip_size") else 0.0001
     initial_risk = (stop_dist / pip_size) * costs.pip_value(lots)
     if initial_risk == 0:

@@ -1680,6 +1680,9 @@ def api_review_run():
     end      = body.get("end")
     strategy = body.get("strategy", "TrFvg")
     params   = body.get("params", {})
+    exchange = str(body.get("exchange") or "binance").lower()
+    initial_equity = float(body.get("initial_equity") or 70.0)
+    leverage = float(body.get("leverage") or 10.0)
 
     try:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1687,7 +1690,10 @@ def api_review_run():
         from backtesting.engine.runner import run as bt_run
         from backtesting.engine.costs import ForexCosts
 
-        load_kw = {"asset_type": _detect_asset_type(symbol)}
+        asset_type = _detect_asset_type(symbol)
+        load_kw = {"asset_type": asset_type}
+        if asset_type == "crypto":
+            load_kw["exchange"] = exchange
 
         support_tf = "240"
         data = {
@@ -1715,21 +1721,34 @@ def api_review_run():
                 elif _cv >= 1:   pip_size = 0.001
             params.setdefault("pip_size", pip_size)
             strat = TrFvg(**params)
-            costs = ForexCosts(
-                pip_size=pip_size,
-                pip_value_per_lot=100.0 if symbol in ("XAUUSD",) else
-                                  50.0  if symbol in ("XAGUSD",) else 10.0,
-            )
+            if asset_type == "crypto":
+                from backtesting.crypto.costs import build_crypto_costs
+                costs = build_crypto_costs(
+                    symbol,
+                    exchange=exchange,
+                    leverage=leverage,
+                    pip_size=pip_size,
+                )
+            else:
+                costs = ForexCosts(
+                    pip_size=pip_size,
+                    pip_value_per_lot=100.0 if symbol in ("XAUUSD",) else
+                                      50.0  if symbol in ("XAGUSD",) else 10.0,
+                )
         elif strategy == "TrIct":
             from backtesting.crypto.strategies.ict import TrIct
             risk_pct = float(params.get("risk_pct", 0.005))
             min_rr   = float(params.get("min_rr", 1.5))
             strat = TrIct(risk_pct=risk_pct, min_rr=min_rr, sessions_only=True)
-            costs = ForexCosts()
+            if asset_type == "crypto":
+                from backtesting.crypto.costs import build_crypto_costs
+                costs = build_crypto_costs(symbol, exchange=exchange, leverage=leverage)
+            else:
+                costs = ForexCosts()
         else:
             return jsonify({"error": f"Unknown strategy: {strategy}"}), 400
 
-        result = bt_run(strat, data, entry_tf=tf, costs=costs, initial_equity=10_000)
+        result = bt_run(strat, data, entry_tf=tf, costs=costs, initial_equity=initial_equity)
         df_trades = result.to_df()
 
         trades_json = []
@@ -1911,6 +1930,9 @@ def api_review_run():
         return jsonify({
             "symbol": symbol,
             "tf": tf,
+            "exchange": exchange if asset_type == "crypto" else None,
+            "initial_equity": initial_equity,
+            "leverage": leverage if asset_type == "crypto" else None,
             "params": params,
             "report": safe_report,
             "trades": trades_json,

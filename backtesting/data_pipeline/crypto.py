@@ -10,6 +10,9 @@ Usage:
 
 Output: data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet
 Funding rate: data/market_data/crypto/{exchange}/{SYMBOL}_funding.parquet
+Derived resources:
+  data/market_data/crypto/{exchange}/resources/{SYMBOL}_{mark|index}{TF}.parquet
+  data/market_data/crypto/{exchange}/resources/{SYMBOL}_open_interest.parquet
 """
 
 from __future__ import annotations
@@ -78,6 +81,12 @@ def _get_exchange(name: str):
 
 def _exchange_dir(exchange_name: str) -> Path:
     path = DATA_DIR / exchange_name.lower()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _resource_dir(exchange_name: str) -> Path:
+    path = _exchange_dir(exchange_name) / "resources"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -228,8 +237,8 @@ def download_symbol(
             df = df.drop_duplicates(subset=["ts"], keep="last")
             df = df.sort_values("ts").reset_index(drop=True)
 
-        # Filter to requested range
-        df = df[(df["ts"] >= start_date) & (df["ts"] <= end_date)].reset_index(drop=True)
+        if fresh:
+            df = df[(df["ts"] >= start_date) & (df["ts"] <= end_date)].reset_index(drop=True)
 
         # Save
         df.to_parquet(parquet_path, index=False)
@@ -319,9 +328,176 @@ def download_funding_rate(
         df = df.drop_duplicates(subset=["ts"], keep="last")
         df = df.sort_values("ts").reset_index(drop=True)
 
-    df = df[(df["ts"] >= start_date) & (df["ts"] <= end_date)].reset_index(drop=True)
+    if fresh:
+        df = df[(df["ts"] >= start_date) & (df["ts"] <= end_date)].reset_index(drop=True)
     df.to_parquet(parquet_path, index=False)
     print(f"  ✓ {parquet_path.name}: {len(df)} rates saved")
+    return len(df)
+
+
+def _fetch_price_ohlcv(exchange, symbol_ccxt: str, tf_ccxt: str, since_ms: int, price_type: str) -> list:
+    """Fetch mark/index price OHLCV using ccxt-specific helpers when present."""
+    method_name = f"fetch_{price_type}_ohlcv"
+    method = getattr(exchange, method_name, None)
+    if method is not None:
+        return method(symbol_ccxt, tf_ccxt, since=since_ms, limit=1000)
+    return exchange.fetch_ohlcv(symbol_ccxt, tf_ccxt, since=since_ms, limit=1000, params={"price": price_type})
+
+
+def download_price_resource(
+    exchange_name: str,
+    symbol: str,
+    resource: str,
+    tfs: list[str],
+    start_date: datetime,
+    end_date: datetime,
+    *,
+    fresh: bool = False,
+) -> dict[str, int]:
+    """Download mark/index OHLCV resources for liquidation and basis research."""
+    if resource not in {"mark", "index"}:
+        raise ValueError(f"Unsupported price resource: {resource}")
+
+    exchange = _get_exchange(exchange_name)
+    symbol_ccxt = _parse_symbol(symbol)
+    out_dir = _resource_dir(exchange_name)
+    start_ms = int(start_date.timestamp() * 1000)
+    end_ms = int(end_date.timestamp() * 1000)
+    result = {}
+
+    for tf in tfs:
+        tf_ccxt = ALL_TFS.get(tf, tf)
+        out = out_dir / f"{symbol}_{resource}{tf}.parquet"
+        existing = pd.DataFrame()
+        if out.exists() and not fresh:
+            try:
+                existing = pd.read_parquet(out)
+                existing["ts"] = pd.to_datetime(existing["ts"], utc=True)
+            except Exception:
+                pass
+
+        since_ms = start_ms
+        if not existing.empty:
+            since_ms = int(existing["ts"].max().timestamp() * 1000) + 1
+            if since_ms >= end_ms:
+                result[tf] = 0
+                continue
+
+        bars = []
+        current_since = since_ms
+        batches = 0
+        print(f"  {symbol} {resource} {tf}: fetching {exchange_name}...", end="", flush=True)
+        while current_since < end_ms and batches < 2500:
+            try:
+                batch = _fetch_price_ohlcv(exchange, symbol_ccxt, tf_ccxt, current_since, resource)
+            except Exception as e:
+                print(f"\n  ⚠ {resource} {tf} error: {e}")
+                break
+            if not batch:
+                break
+            bars.extend(batch)
+            batches += 1
+            current_since = batch[-1][0] + 1
+            if len(batch) < 10:
+                break
+            if batches % 10 == 0:
+                time.sleep(0.5)
+
+        if not bars:
+            print(" no data" if existing.empty else " up to date")
+            result[tf] = 0
+            continue
+
+        df = pd.DataFrame(bars, columns=["ts", "open", "high", "low", "close", "volume"])
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+        for col in ["open", "high", "low", "close", "volume"]:
+            df[col] = df[col].astype(float)
+        if not existing.empty:
+            df = pd.concat([existing, df], ignore_index=True)
+            df = df.drop_duplicates(subset=["ts"], keep="last")
+        if fresh:
+            df = df[(df["ts"] >= start_date) & (df["ts"] <= end_date)].reset_index(drop=True)
+        df = df.sort_values("ts").reset_index(drop=True)
+        df.to_parquet(out, index=False)
+        result[tf] = len(df)
+        print(f" {len(df)} bars saved")
+
+    return result
+
+
+def download_open_interest(
+    exchange_name: str,
+    symbol: str,
+    start_date: datetime,
+    end_date: datetime,
+    *,
+    fresh: bool = False,
+) -> int:
+    """Download open-interest history where the exchange exposes it via ccxt."""
+    exchange = _get_exchange(exchange_name)
+    if not hasattr(exchange, "fetch_open_interest_history"):
+        print(f"  {symbol} open_interest: {exchange_name} does not expose history via ccxt")
+        return 0
+
+    symbol_ccxt = _parse_symbol(symbol)
+    out = _resource_dir(exchange_name) / f"{symbol}_open_interest.parquet"
+    existing = pd.DataFrame()
+    if out.exists() and not fresh:
+        try:
+            existing = pd.read_parquet(out)
+            existing["ts"] = pd.to_datetime(existing["ts"], utc=True)
+        except Exception:
+            pass
+
+    start_ms = int(start_date.timestamp() * 1000)
+    end_ms = int(end_date.timestamp() * 1000)
+    since_ms = start_ms
+    if not existing.empty:
+        since_ms = int(existing["ts"].max().timestamp() * 1000) + 1
+        if since_ms >= end_ms:
+            print(f"  {symbol} open_interest: already up to date")
+            return 0
+
+    rows = []
+    current_since = since_ms
+    print(f"  {symbol} open_interest: fetching {exchange_name}...", end="", flush=True)
+    while current_since < end_ms:
+        try:
+            batch = exchange.fetch_open_interest_history(symbol_ccxt, since=current_since, limit=100)
+        except Exception as e:
+            print(f"\n  ⚠ Open interest error: {e}")
+            break
+        if not batch:
+            break
+        rows.extend(batch)
+        last_ts = batch[-1].get("timestamp")
+        if last_ts is None:
+            break
+        current_since = int(last_ts) + 1
+        if len(batch) < 10:
+            break
+        time.sleep(0.3)
+
+    if not rows:
+        print(" no data" if existing.empty else " up to date")
+        return 0
+
+    df = pd.DataFrame(rows)
+    df["ts"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    keep = ["ts"]
+    for col in ["openInterestAmount", "openInterestValue", "baseVolume", "quoteVolume"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+            keep.append(col)
+    df = df[keep].sort_values("ts").drop_duplicates(subset=["ts"])
+    if not existing.empty:
+        df = pd.concat([existing, df], ignore_index=True)
+        df = df.drop_duplicates(subset=["ts"], keep="last")
+    if fresh:
+        df = df[(df["ts"] >= start_date) & (df["ts"] <= end_date)].reset_index(drop=True)
+    df = df.sort_values("ts").reset_index(drop=True)
+    df.to_parquet(out, index=False)
+    print(f" {len(df)} rows saved")
     return len(df)
 
 
@@ -430,6 +606,8 @@ def main():
                         help="Ignore existing OHLCV/funding files and replace the requested date window")
     parser.add_argument("--resample-from-1m", action=argparse.BooleanOptionalAction, default=True,
                         help="When 1m is requested, download only 1m and derive higher TFs locally (default: true)")
+    parser.add_argument("--resources", default="",
+                        help="Comma-separated extra resources: mark,index,open_interest")
     args = parser.parse_args()
 
     symbols = [s.strip().upper() for s in args.symbols.split(",")]
@@ -439,6 +617,7 @@ def main():
 
     exchanges = ["binance", "bybit"] if args.exchange == "both" else [args.exchange]
     download_tfs = ["1"] if args.resample_from_1m and "1" in tfs else tfs
+    resources = [r.strip().lower().replace("-", "_") for r in args.resources.split(",") if r.strip()]
 
     print(f"Downloading {symbols} from {exchanges}")
     print(f"  Period: {start_date.date()} → {end_date.date()}")
@@ -468,9 +647,9 @@ def main():
                 try:
                     df = pd.read_parquet(one_min_path)
                     df["ts"] = pd.to_datetime(df["ts"], utc=True)
-                    df = df[(df["ts"] >= start_date) & (df["ts"] <= end_date)].reset_index(drop=True)
+                    df_window = df[(df["ts"] >= start_date) & (df["ts"] <= end_date)].reset_index(drop=True)
                     higher_tfs = [tf for tf in tfs if tf != "1"]
-                    resampled = resample_to_tfs(df, "1", higher_tfs)
+                    resampled = resample_to_tfs(df_window, "1", higher_tfs)
                     for tf, rdf in resampled.items():
                         out_path = _exchange_dir(exchange_name) / f"{symbol}{tf}.parquet"
 
@@ -498,6 +677,17 @@ def main():
                     download_funding_rate(exchange_name, symbol, start_date, end_date, fresh=args.fresh)
                 except Exception as e:
                     print(f"  ⚠ Funding rate error: {e}")
+
+            for resource in resources:
+                try:
+                    if resource in {"mark", "index"}:
+                        download_price_resource(exchange_name, symbol, resource, download_tfs, start_date, end_date, fresh=args.fresh)
+                    elif resource in {"open_interest", "oi"}:
+                        download_open_interest(exchange_name, symbol, start_date, end_date, fresh=args.fresh)
+                    else:
+                        print(f"  ⚠ Unknown resource skipped: {resource}")
+                except Exception as e:
+                    print(f"  ⚠ Resource {resource} error: {e}")
 
     if args.specs:
         for exchange_name in exchanges:

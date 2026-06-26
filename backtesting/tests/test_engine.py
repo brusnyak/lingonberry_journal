@@ -114,6 +114,29 @@ class _SingleShortAtBar(Strategy):
         return None
 
 
+class _SingleLongFullTpAtBar(Strategy):
+    """Opens one long and fully closes at TP1."""
+    def __init__(self, trigger_bar=5, entry=100.0, sl=99.0, tp1=102.0):
+        self.trigger_bar = trigger_bar
+        self._entry = entry
+        self._sl = sl
+        self._tp1 = tp1
+
+    def next(self, bar, state):
+        if bar.index == self.trigger_bar and not state.has_open_position:
+            return Signal(
+                direction=Direction.LONG,
+                entry=self._entry,
+                sl=self._sl,
+                tp1=self._tp1,
+                risk_pct=0.01,
+                tp1_frac=1.0,
+                tp2_frac=0.0,
+                trail=False,
+            )
+        return None
+
+
 class _NullStrategy(Strategy):
     def next(self, bar, state):
         return None
@@ -369,6 +392,27 @@ def test_r_multiple_sign():
     print("PASS test_r_multiple_sign")
 
 
+def test_crypto_r_multiple_uses_price_risk_not_pips():
+    """Crypto R must use linear-perp price risk, not forex pip math."""
+    rows = [{"open": 100.0, "high": 100.2, "low": 99.8, "close": 100.0}] * 5
+    rows.append({"open": 100.0, "high": 100.2, "low": 99.8, "close": 100.0})
+    rows.append({"open": 102.0, "high": 102.2, "low": 101.8, "close": 102.0})
+
+    costs = CryptoCosts(
+        maker_fee=0.0,
+        taker_fee=0.0,
+        leverage=10.0,
+        pip_size=0.01,
+    )
+    result = run(
+        _SingleLongFullTpAtBar(trigger_bar=5, entry=100.0, sl=99.0, tp1=102.0),
+        {"1": _make_bars_custom(rows)}, entry_tf="1", costs=costs, initial_equity=10_000,
+    )
+    assert len(result.trades) == 1
+    assert abs(result.trades[0].r_multiple - 2.0) < 1e-9, result.trades[0].r_multiple
+    print("PASS test_crypto_r_multiple_uses_price_risk_not_pips")
+
+
 # ── Test 7: CryptoCosts margin cap ───────────────────────────────────────────
 
 def test_crypto_margin_cap():
@@ -559,6 +603,7 @@ TESTS = [
     test_sl_pnl_sign,
     test_be_move_after_tp1,
     test_r_multiple_sign,
+    test_crypto_r_multiple_uses_price_risk_not_pips,
     test_crypto_margin_cap,
     test_crypto_exchange_constraints,
     test_crypto_funding_and_liquidation,

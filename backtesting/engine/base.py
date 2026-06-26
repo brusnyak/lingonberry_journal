@@ -87,6 +87,20 @@ class Strategy(ABC):
         Never look ahead: only access data up to bar.index.
         """
 
+    def post_bar(self, bar: BarData, state: EngineState) -> None:
+        """
+        Called on EVERY bar, even when next() is skipped due to max positions.
+
+        Override to implement position monitoring, structure-based trailing,
+        early exit on structure break, or pre-entry analysis.
+
+        The runner calls post_bar() after exit checks but before next().
+        Use update_sl() here to adjust stops — it will be applied on the
+        next bar's exit check.
+
+        Default: no-op.
+        """
+
     def on_close(self, trade: object, state: EngineState) -> None:
         """Called after each trade is closed. Override for custom logging."""
 

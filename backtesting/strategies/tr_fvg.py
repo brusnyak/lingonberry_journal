@@ -87,6 +87,14 @@ class TrFvg(Strategy):
         ob_sl_strict: bool = False,        # if True, skip trade when no valid OB (no fallback to fixed)
         # Regime-direction params (only used when direction="regime")
         regime_bars: int = 20,            # rolling 4H bars for regime scoring
+        # Intraday stop gates: skip trades whose structural stop is too far away.
+        min_stop_pct: float = 0.001,       # reject near-zero structure stops (0.10%)
+        min_stop_atr_mult: float = 0.25,   # reject stops too tight vs local ATR
+        max_stop_pct: float = 0.012,       # max stop distance as fraction of entry price (1.2%)
+        max_stop_atr_mult: float = 2.5,    # max stop distance vs local ATR
+        # Smart monitoring (post_bar)
+        monitor_structure_break: bool = True,  # early exit on structure break
+        monitor_breakeven: bool = True,        # move SL to BE on structure flip
     ):
         super().__init__()
         self.sl_buffer_pips = sl_buffer_pips
@@ -109,6 +117,17 @@ class TrFvg(Strategy):
         self.ob_sl_min_stop = ob_sl_min_stop
         self.ob_sl_strict = ob_sl_strict
         self.regime_bars = regime_bars
+        self.min_stop_pct = min_stop_pct
+        self.min_stop_atr_mult = min_stop_atr_mult
+        self.max_stop_pct = max_stop_pct
+        self.max_stop_atr_mult = max_stop_atr_mult
+        self.monitor_structure_break = monitor_structure_break
+        self.monitor_breakeven = monitor_breakeven
+
+        # Entry context for post_bar monitoring
+        self._entry_bar_index: int = -1
+        self._entry_swing_level: Optional[float] = None
+        self._entry_direction: Optional[str] = None  # "LONG" or "SHORT"
 
     def _in_killzone(self, ts) -> bool:
         try:
@@ -226,7 +245,8 @@ class TrFvg(Strategy):
         """Nearest confirmed swing low within lookback, excluding last swing_n bars."""
         confirmed = before_i - self.structure_sl_swing_n
         lo = max(0, confirmed - self.structure_sl_lookback)
-        arr = self._swing_low[lo:confirmed]
+        hi = max(lo, confirmed + 1)
+        arr = self._swing_low[lo:hi]
         valid = arr[~np.isnan(arr)]
         return float(valid[-1]) if len(valid) > 0 else None
 
@@ -234,9 +254,36 @@ class TrFvg(Strategy):
         """Nearest confirmed swing high within lookback."""
         confirmed = before_i - self.structure_sl_swing_n
         lo = max(0, confirmed - self.structure_sl_lookback)
-        arr = self._swing_high[lo:confirmed]
+        hi = max(lo, confirmed + 1)
+        arr = self._swing_high[lo:hi]
         valid = arr[~np.isnan(arr)]
         return float(valid[-1]) if len(valid) > 0 else None
+
+    def _max_stop_distance(self, entry_price: float, atr: float) -> Optional[float]:
+        """Maximum intraday stop distance allowed for a new trade."""
+        caps = []
+        if self.max_stop_pct and self.max_stop_pct > 0:
+            caps.append(entry_price * self.max_stop_pct)
+        if self.max_stop_atr_mult and self.max_stop_atr_mult > 0 and not np.isnan(atr) and atr > 0:
+            caps.append(atr * self.max_stop_atr_mult)
+        return min(caps) if caps else None
+
+    def _min_stop_distance(self, entry_price: float, atr: float) -> Optional[float]:
+        """Minimum valid stop distance to avoid zero-risk/tick-noise trades."""
+        floors = []
+        if self.min_stop_pct and self.min_stop_pct > 0:
+            floors.append(entry_price * self.min_stop_pct)
+        if self.min_stop_atr_mult and self.min_stop_atr_mult > 0 and not np.isnan(atr) and atr > 0:
+            floors.append(atr * self.min_stop_atr_mult)
+        return max(floors) if floors else None
+
+    def _stop_distance_ok(self, entry_price: float, sl: float, atr: float) -> bool:
+        dist = abs(entry_price - sl)
+        floor = self._min_stop_distance(entry_price, atr)
+        if floor is not None and dist < floor:
+            return False
+        cap = self._max_stop_distance(entry_price, atr)
+        return cap is None or dist <= cap
 
     # ── HTF structure helpers ─────────────────────────────────────────────────
     # Uses proper label_structure engine on 4H data (installed in init()).
@@ -261,33 +308,70 @@ class TrFvg(Strategy):
 
     # ── Main logic ────────────────────────────────────────────────────────────
 
+    # ── Smart monitoring (post_bar) ──────────────────────────────────────────
+
+    def post_bar(self, bar: BarData, state: EngineState) -> None:
+        """Structure-based trailing + break detection on EVERY bar."""
+        if not state.has_open_position:
+            self._entry_bar_index = -1
+            self._entry_swing_level = None
+            self._entry_direction = None
+            return
+
+        i = bar.index
+        pos = state.open_positions[0]
+        confirmed = max(0, i - self.structure_sl_swing_n)
+
+        # Determine direction
+        dir_val = (
+            pos.direction.value
+            if hasattr(pos.direction, "value")
+            else (1 if pos.direction == "LONG" else -1)
+        )
+        is_long = dir_val in (1, "long", "LONG", "Direction.LONG")
+
+        # ── Structure trailing ──────────────────────────────────────────
+        if hasattr(self, "_swing_high") and hasattr(self, "_swing_low"):
+            lo = max(0, confirmed - self.structure_sl_lookback)
+            hi = min(len(self._swing_high), confirmed + 1)
+            if is_long:
+                lows = self._swing_low[lo:hi]
+                valid = lows[~np.isnan(lows)]
+                if len(valid) > 0:
+                    new_sl = float(valid[-1]) - self.sl_buffer_pips * self.pip_size
+                    if new_sl > pos.sl and bar.close > new_sl:
+                        self.update_sl(pos.id, new_sl)
+            else:
+                highs = self._swing_high[lo:hi]
+                valid = highs[~np.isnan(highs)]
+                if len(valid) > 0:
+                    new_sl = float(valid[-1]) + self.sl_buffer_pips * self.pip_size
+                    if new_sl < pos.sl and bar.close < new_sl:
+                        self.update_sl(pos.id, new_sl)
+
+        # ── Structure break detection ───────────────────────────────────
+        if not self.monitor_structure_break or self._entry_swing_level is None:
+            return
+
+        if self._entry_direction == "SHORT":
+            # Entry thesis: SHORT the bullish FVG fill.
+            # Structure break = new swing high above entry swing high.
+            if bar.high > self._entry_swing_level:
+                be = pos.entry_price + self.pip_size  # tight BE
+                if be < pos.sl:
+                    self.update_sl(pos.id, be)
+        else:
+            # Entry thesis: LONG the bearish FVG fill.
+            # Structure break = new swing low below entry swing low.
+            if bar.low < self._entry_swing_level:
+                be = pos.entry_price - self.pip_size  # tight BE
+                if be > pos.sl:
+                    self.update_sl(pos.id, be)
+
+    # ── Main logic ───────────────────────────────────────────────────────────
+
     def next(self, bar: BarData, state: EngineState) -> Optional[Signal]:
         i = bar.index
-
-        # ── Structure-based trailing on open position ──────────────────────
-        if state.has_open_position:
-            pos = state.open_positions[0]
-            if hasattr(self, "_swing_high") and hasattr(self, "_swing_low"):
-                confirmed = max(0, i - self.structure_sl_swing_n - 1)
-                if pos.direction == 1 or (hasattr(pos.direction, 'value') and pos.direction.value == 1) or str(pos.direction) == 'Direction.LONG':
-                    # Long: trail on most recent swing low above current SL
-                    lo = max(0, confirmed - self.structure_sl_lookback)
-                    lows = self._swing_low[lo:confirmed]
-                    valid = lows[~np.isnan(lows)]
-                    if len(valid) > 0:
-                        new_sl = float(valid[-1]) - self.sl_buffer_pips * self.pip_size
-                        if new_sl > pos.sl and bar.close > new_sl:
-                            self.update_sl(pos.id, new_sl)
-                else:
-                    # Short: trail on most recent swing high below current SL
-                    lo = max(0, confirmed - self.structure_sl_lookback)
-                    highs = self._swing_high[lo:confirmed]
-                    valid = highs[~np.isnan(highs)]
-                    if len(valid) > 0:
-                        new_sl = float(valid[-1]) + self.sl_buffer_pips * self.pip_size
-                        if new_sl < pos.sl and bar.close < new_sl:
-                            self.update_sl(pos.id, new_sl)
-            return None
 
         if i < max(3, self.structure_sl_swing_n * 2 + 2):
             return None
@@ -362,7 +446,14 @@ class TrFvg(Strategy):
                             sl = b0_low - (200 * self.pip_size)  # fallback to fixed 200-pip
 
                         stop = b0_close - sl
-                        if stop > 0:
+                        if stop > 0 and self._stop_distance_ok(b0_close, sl, atr):
+                            # Store entry context for post_bar structure monitor
+                            self._entry_bar_index = i
+                            self._entry_swing_level = (
+                                sw if self.sl_mode == "structure" and sw is not None
+                                else None
+                            )
+                            self._entry_direction = "LONG"
                             return Signal(
                                 direction=Direction.LONG,
                                 entry=b0_close,
@@ -405,7 +496,14 @@ class TrFvg(Strategy):
                             sl = b0_high + (200 * self.pip_size)
 
                         stop = sl - b0_close
-                        if stop > 0:
+                        if stop > 0 and self._stop_distance_ok(b0_close, sl, atr):
+                            # Store entry context for post_bar structure monitor
+                            self._entry_bar_index = i
+                            self._entry_swing_level = (
+                                sw if self.sl_mode == "structure" and sw is not None
+                                else None
+                            )
+                            self._entry_direction = "SHORT"
                             return Signal(
                                 direction=Direction.SHORT,
                                 entry=b0_close,
@@ -419,3 +517,9 @@ class TrFvg(Strategy):
                             )
 
         return None
+
+    def on_close(self, trade: object, state: EngineState) -> None:
+        """Clear entry context when trade closes."""
+        self._entry_bar_index = -1
+        self._entry_swing_level = None
+        self._entry_direction = None

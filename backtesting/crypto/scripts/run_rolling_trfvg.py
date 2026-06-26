@@ -20,13 +20,14 @@ import numpy as np
 import pandas as pd
 
 from backtesting.engine.data import load_data
-from backtesting.engine.costs import CryptoCosts
 from backtesting.engine.runner import run
 from backtesting.strategies.tr_fvg import TrFvg
+from backtesting.crypto.costs import build_crypto_costs
 
 # ── Config ────────────────────────────────────────────────────────────────
 ACCOUNT = 70.0
-LEVERAGE = 50
+LEVERAGE = 10
+EXCHANGE = "binance"
 
 WINDOW_DAYS = 30   # size of each window
 STEP_DAYS = 7      # slide forward this many days between windows
@@ -46,6 +47,12 @@ PARAM_GRID = {
     "structure_sl_lookback": [20],
     "structure_sl_swing_n": [3],
     "htf_structure": [False, True],
+    "min_stop_pct": [0.001],
+    "min_stop_atr_mult": [0.25],
+    "max_stop_pct": [0.012],
+    "max_stop_atr_mult": [2.5],
+    "risk_pct": [0.02],
+    "tp1_frac": [1.0],
 }
 
 # ── Data ──────────────────────────────────────────────────────────────────
@@ -74,9 +81,9 @@ def load_pair_data(pair: str, start: str, end: str, tfs: list[str]) -> Optional[
     """Load all TFs for one pair+window. Returns None if any TF missing."""
     data = {}
     for tf in tfs:
-        df = load_data(pair, tf=tf, start=start, end=end, exchange="binance")
+        df = load_data(pair, tf=tf, start=start, end=end, asset_type="crypto", exchange=EXCHANGE)
         if df.empty:
-            df = load_data(pair, tf=tf, start=start, end=end, exchange="bybit")
+            df = load_data(pair, tf=tf, start=start, end=end, asset_type="crypto", exchange="bybit")
         if df.empty:
             return None
         data[tf] = df
@@ -95,7 +102,7 @@ def run_one(pair: str, params: dict, start: str, end: str) -> Optional[dict]:
         pip_size = detect_pip_size(data[entry_tf])
         strat_params = {k: v for k, v in params.items() if not k.startswith("_")}
         strat = TrFvg(pip_size=pip_size, **strat_params)
-        costs = CryptoCosts(leverage=LEVERAGE)
+        costs = build_crypto_costs(pair, exchange=EXCHANGE, leverage=LEVERAGE, pip_size=pip_size)
         result = run(strat, data, entry_tf=entry_tf, costs=costs, initial_equity=ACCOUNT)
         rep = result.report
 
@@ -125,8 +132,8 @@ def main():
     windows = build_windows()
     print(f"\n{'='*100}")
     print(f"  ROLLING 30D TRFVG  |  ${ACCOUNT} @ {LEVERAGE}x  |  "
-          f"{len(windows)} windows  |  step={STEP_DAYS}d")
-    print(f"  Windows: {windows[0][0]} → {windows[-1][1]}")
+          f"{EXCHANGE}  |  {len(windows)} windows  |  step={STEP_DAYS}d")
+    print(f"  Windows: {windows[-1][0]} → {windows[0][1]}")
     print(f"{'='*100}\n")
 
     keys = list(PARAM_GRID.keys())
@@ -271,7 +278,7 @@ def main():
               f"avg WR={np.mean([r['mean_WR'] for r in bull_htf]):.0%}")
 
     # ── Save ──────────────────────────────────────────────────────────────
-    out_path = ROOT / "results" / "rolling_trfvg_results.csv"
+    out_path = ROOT / "backtesting" / "results" / "rolling_trfvg_results.csv"
     out_path.parent.mkdir(exist_ok=True)
     df.to_csv(out_path, index=False)
     print(f"\n  Full results: {out_path}")

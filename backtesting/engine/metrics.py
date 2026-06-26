@@ -19,7 +19,7 @@ def compute(trades: Sequence[ClosedTrade], initial_equity: float = 10_000.0) -> 
     Returns a flat dict suitable for printing or DataFrame insertion.
     """
     if not trades:
-        return _empty_report()
+        return _empty_report(initial_equity)
 
     pnls = [t.pnl for t in trades]
     r_multiples = [t.r_multiple for t in trades]
@@ -87,14 +87,14 @@ def compute(trades: Sequence[ClosedTrade], initial_equity: float = 10_000.0) -> 
     }
 
 
-def _empty_report() -> dict:
+def _empty_report(initial_equity: float = 0.0) -> dict:
     return {
         "trades": 0,
         "win_rate": 0.0,
         "profit_factor": 0.0,
         "expectancy": 0.0,
         "total_pnl": 0.0,
-        "final_equity": 0.0,
+        "final_equity": round(initial_equity, 2),
         "return_pct": 0.0,
         "avg_win": 0.0,
         "avg_loss": 0.0,
@@ -111,7 +111,7 @@ def _empty_report() -> dict:
         "max_consec_wins": 0,
         "max_consec_losses": 0,
         "exit_counts": {},
-        "equity_curve": [],
+        "equity_curve": [initial_equity] if initial_equity else [],
         "trade_pnls": [],
         "trade_r_multiples": [],
     }

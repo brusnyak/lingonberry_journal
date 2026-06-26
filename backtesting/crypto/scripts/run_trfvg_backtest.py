@@ -1,5 +1,5 @@
 """
-Run TrFvg backtest across crypto pairs with $70 account, 50x leverage.
+Run TrFvg backtest across crypto pairs with $70 account, 10x leverage.
 Analyze: best winners, why losers fail.
 """
 import sys, os, json, time
@@ -13,15 +13,16 @@ import pandas as pd
 
 from backtesting.engine.base import Strategy
 from backtesting.engine.orders import Direction
-from backtesting.engine.costs import CryptoCosts
 from backtesting.engine.data import load_data, load_funding_rate
 from backtesting.engine.runner import run, BacktestResult
 from backtesting.strategies.tr_fvg import TrFvg
 from backtesting.engine.metrics import compute as compute_metrics
+from backtesting.crypto.costs import build_crypto_costs
 
 # ── Config ────────────────────────────────────────────────────────────────
 ACCOUNT = 70.0
-LEVERAGE = 50
+LEVERAGE = 10
+EXCHANGE = "binance"
 DAYS = 30
 ENTRY_TFS = ["5", "15"]
 SUPPORT_TFS = {"5": ["60", "240"], "15": ["60", "240"]}
@@ -42,6 +43,12 @@ PARAM_GRID = {
     "sl_mode": ["structure"],  # use structural SL from swing point
     "structure_sl_lookback": [20],
     "structure_sl_swing_n": [3],
+    "min_stop_pct": [0.001],
+    "min_stop_atr_mult": [0.25],
+    "max_stop_pct": [0.012],
+    "max_stop_atr_mult": [2.5],
+    "risk_pct": [0.02],
+    "tp1_frac": [1.0],
 }
 
 
@@ -50,9 +57,9 @@ def run_one(pair: str, entry_tf: str, params: dict) -> dict:
         tfs = list(dict.fromkeys([entry_tf] + SUPPORT_TFS.get(entry_tf, ["240"])))
         data = {}
         for tf in tfs:
-            df = load_data(pair, tf=tf, days=DAYS, exchange="binance")
+            df = load_data(pair, tf=tf, days=DAYS, asset_type="crypto", exchange=EXCHANGE)
             if df.empty:
-                df = load_data(pair, tf=tf, days=DAYS, exchange="bybit")
+                df = load_data(pair, tf=tf, days=DAYS, asset_type="crypto", exchange="bybit")
             if df.empty:
                 return {"pair": pair, "entry_tf": entry_tf, **params, "error": f"no data {tf}"}
             data[tf] = df
@@ -69,11 +76,11 @@ def run_one(pair: str, entry_tf: str, params: dict) -> dict:
             pip_size = 0.001
 
         strat = TrFvg(pip_size=pip_size, **params)
-        costs = CryptoCosts(leverage=LEVERAGE)
+        costs = build_crypto_costs(pair, exchange=EXCHANGE, leverage=LEVERAGE, pip_size=pip_size)
         result = run(strat, data, entry_tf=entry_tf, costs=costs, initial_equity=ACCOUNT)
         rep = result.report
         return {
-            "pair": pair, "entry_tf": entry_tf, **params,
+            "pair": pair, "exchange": EXCHANGE, "entry_tf": entry_tf, **params,
             "pip_size": pip_size,
             "trades": rep["trades"],
             "win_rate": rep["win_rate"],
@@ -100,7 +107,7 @@ def main():
     total = len(PAIRS) * len(ENTRY_TFS) * len(combos)
 
     print(f"\n{'='*100}")
-    print(f"  TrFvg Backtest | ${ACCOUNT} @ {LEVERAGE}x | {DAYS}d | {total} configs")
+    print(f"  TrFvg Backtest | ${ACCOUNT} @ {LEVERAGE}x | {EXCHANGE} | {DAYS}d | {total} configs")
     print(f"{'='*100}\n")
 
     results = []
@@ -125,7 +132,7 @@ def main():
 
     # ── Print summary ────────────────────────────────────────────────────
     print(f"\n{'='*110}")
-    print(f"  TRFVG BACKTEST RESULTS  |  ${ACCOUNT} @ {LEVERAGE}x  |  {DAYS}d  |  {elapsed:.0f}s")
+    print(f"  TRFVG BACKTEST RESULTS  |  ${ACCOUNT} @ {LEVERAGE}x  |  {EXCHANGE}  |  {DAYS}d  |  {elapsed:.0f}s")
     print(f"{'='*110}")
 
     # Filter: at least 3 trades, no errors
