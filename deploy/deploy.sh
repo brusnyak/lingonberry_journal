@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy cTrader services to Oracle VM
+# Deploy services to Oracle VM (cTrader + TradeLocker)
 set -euo pipefail
 
 APP_USER="${APP_USER:-ubuntu}"
@@ -38,6 +38,19 @@ ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$APP_USER@$REMOTE_HOST" \
      grep -q '^TREND_POSITION_SIZE=' $APP_DIR/.env 2>/dev/null || echo 'TREND_POSITION_SIZE=0.001' >> $APP_DIR/.env && \
      echo '  Done: cTrader creds + bundle vars injected'"
 
+# 3b. Inject TradeLocker trading env vars (conditional — won't overwrite existing)
+echo "--- Injecting TradeLocker env vars ---"
+ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$APP_USER@$REMOTE_HOST" \
+    "grep -q '^TL_ACC_NUM_MASTER=' $APP_DIR/.env 2>/dev/null || echo 'TL_ACC_NUM_MASTER=2165806' >> $APP_DIR/.env && \
+     grep -q '^TL_ACC_NUM_SLAVE=' $APP_DIR/.env 2>/dev/null || echo 'TL_ACC_NUM_SLAVE=2165807' >> $APP_DIR/.env && \
+     grep -q '^TL_MASTER_ACCOUNT=' $APP_DIR/.env 2>/dev/null || echo 'TL_MASTER_ACCOUNT=2165806' >> $APP_DIR/.env && \
+     grep -q '^TL_SLAVE_ACCOUNT=' $APP_DIR/.env 2>/dev/null || echo 'TL_SLAVE_ACCOUNT=2165807' >> $APP_DIR/.env && \
+     grep -q '^COPY_RISK_PCT=' $APP_DIR/.env 2>/dev/null || echo 'COPY_RISK_PCT=0.005' >> $APP_DIR/.env && \
+     grep -q '^COPY_DRY_RUN=' $APP_DIR/.env 2>/dev/null || echo 'COPY_DRY_RUN=true' >> $APP_DIR/.env && \
+     grep -q '^TL_ACTIVE_ENV=' $APP_DIR/.env 2>/dev/null || echo 'TL_ACTIVE_ENV=demo' >> $APP_DIR/.env && \
+     grep -q '^PM_DRY_RUN=' $APP_DIR/.env 2>/dev/null || echo 'PM_DRY_RUN=true' >> $APP_DIR/.env && \
+     echo '  Done: TL trading vars injected'"
+
 # 4. Create data directories for trade logs
 echo "--- Creating data directories ---"
 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$APP_USER@$REMOTE_HOST" \
@@ -65,10 +78,20 @@ for svc in ctrader-strategy.service ctrader-mirror.service position-manager.serv
         echo "  WARNING: $svc restart failed (might not exist yet)"
 done
 
+# 6b. Restart TradeLocker services (if templates exist)
+echo "--- Restarting TradeLocker services ---"
+for svc in tl-copy-trader.service tl-position-manager.service; do
+    echo "  Enabling/restarting $svc..."
+    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$APP_USER@$REMOTE_HOST" \
+        "sudo systemctl enable $svc && sudo systemctl restart $svc" 2>&1 || \
+        echo "  WARNING: $svc restart failed (might not exist yet)"
+done
+
 # 7. Status check
 echo "--- Service status ---"
 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$APP_USER@$REMOTE_HOST" \
-    "systemctl status ctrader-strategy.service ctrader-mirror.service position-manager.service --no-pager 2>&1 \
+    "systemctl status ctrader-strategy.service ctrader-mirror.service position-manager.service \
+                 tl-copy-trader.service tl-position-manager.service --no-pager 2>&1 \
      | grep -E '(●|Active:)' || true"
 
 echo ""
@@ -77,3 +100,5 @@ echo "Monitor:"
 echo "  journalctl -u ctrader-strategy.service -f --no-pager -n 50"
 echo "  journalctl -u ctrader-mirror.service -f --no-pager -n 50"
 echo "  journalctl -u position-manager.service -f --no-pager -n 50"
+echo "  journalctl -u tl-copy-trader.service -f --no-pager -n 50"
+echo "  journalctl -u tl-position-manager.service -f --no-pager -n 50"
