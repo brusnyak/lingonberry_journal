@@ -62,13 +62,19 @@ def _create_tlapi(label: str, acc_num: int):
     """Create an independent TLAPI instance for one account."""
     from tradelocker import TLAPI
 
-    env = os.getenv("TL_ENVIRONMENT_LIVE", "https://live.tradelocker.com")
-    username = os.getenv("TL_USERNAME_LIVE", "")
-    password = os.getenv("TL_PASSWORD_LIVE", "")
-    server = os.getenv("TL_SERVER_LIVE", "GFTTL")
+    active_env = os.getenv("TL_ACTIVE_ENV", "demo").lower()
+    suffix = active_env.upper()
+    env = os.getenv(f"TL_ENVIRONMENT_{suffix}", "")
+    username = os.getenv(f"TL_USERNAME_{suffix}", "")
+    password = os.getenv(f"TL_PASSWORD_{suffix}", "")
+    server = os.getenv(f"TL_SERVER_{suffix}", "")
 
-    if not all([username, password, server]):
-        raise RuntimeError(f"Missing TL credentials for {label}")
+    if not all([env, username, password, server]):
+        raise RuntimeError(
+            f"Missing TL credentials for '{active_env}' environment. "
+            f"Set TL_ENVIRONMENT_{suffix}, TL_USERNAME_{suffix}, TL_PASSWORD_{suffix}, "
+            f"and TL_SERVER_{suffix} in .env"
+        )
 
     tl = TLAPI(
         environment=env,
@@ -180,10 +186,17 @@ def _snapshot_positions(tl, instrument_cache: dict, symbol_cache: dict) -> dict[
             qty = float(row.get("qty", 0))
             avg_price = float(row.get("avgPrice", 0))
 
-            # SL/TP prices come from the orders table (positions only have stopLossId/takeProfitId)
+            # Prefer linked orders, but some TLAPI responses include absolute
+            # stopLoss/takeProfit prices directly on the position row.
             sl_tp = sl_tp_by_position.get(pid, {"sl": None, "tp": None})
             sl = sl_tp["sl"]
             tp = sl_tp["tp"]
+            if sl is None:
+                row_sl = float(row.get("stopLoss", 0) or 0)
+                sl = row_sl if row_sl > 0 else None
+            if tp is None:
+                row_tp = float(row.get("takeProfit", 0) or 0)
+                tp = row_tp if row_tp > 0 else None
 
             result[pid] = PosSnapshot(
                 position_id=pid,

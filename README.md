@@ -1,17 +1,26 @@
-# Trading Journal Bot 📊
+# Trading Journal
 
-A comprehensive trading journal system with Telegram bot integration, web dashboard, and TradeLocker market data.
+Automated trading system for prop firm challenges. Runs three microservices
+on Oracle Cloud Free Tier — strategy execution, position mirroring, and
+trailing stop management — via cTrader OpenAPI.
 
-## Features
+```
+ctrader-strategy ──▶ ctrader-mirror ──▶ position-manager
+(MA cross, 15s)       (copy 25K→100K)    (trailing SL, 5s)
+```
 
-- 📱 **Telegram Bot** - Conversational trade logging with guided flow
-- 🌐 **Web Dashboard** - Analytics, charts, and performance tracking
-- 📈 **Chart Generation** - Automatic candlestick charts with entry/SL/TP markers
-- 🔄 **TradeLocker Integration** - Live forex data and quotes
-- 📊 **Advanced Analytics** - Win rate, expectancy, Sharpe ratio, Monte Carlo simulation
-- 🎯 **Weekly Goals** - Track adherence to trading plans
-- 🧠 **Psychology Tracking** - Mood, stress, confidence metrics
-- 💼 **Multi-Account Support** - Manage multiple prop firm accounts
+Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+
+## Components
+
+- **ctrader-strategy** — EMA crossover on BTCUSD M5, places orders on master account
+- **ctrader-mirror** — Copies master positions to slave with risk-based sizing (0.5%)
+- **position-manager** — Trailing stop loss via swing points, breakeven at 1.0R
+- **ctrader-client** — Shared cTrader OpenAPI protobuf WebSocket client
+- **trade-logger** — JSONL trade journal (signals, opens, closes, errors)
+- **Web Dashboard** — Flask webapp with analytics, charts, performance tracking
+- **Backtesting** — Multi-strategy engine with Parquet data (EMA, RSI, ICT structure)
+- **Telegram Bot** — Trade logging, account management, reporting
 
 ## Quick Start
 
@@ -121,7 +130,8 @@ make deploy
 
 | Source | Asset Class | Status |
 |--------|-------------|--------|
-| TradeLocker | Forex, Commodities | ✅ Live |
+| cTrader OpenAPI | Crypto (BTCUSD), Forex, Commodities | ✅ Live |
+| TradeLocker | Forex, Commodities | ⏸️ Legacy (disabled) |
 | Broker CSV | NAS100 (USATECHIDXUSD) | ✅ Live |
 | yFinance | Stocks, Crypto | ✅ Fallback |
 | Local CSV/Parquet | All | ✅ Cached |
@@ -142,8 +152,11 @@ make nas100-monthly # rolling monthly validation
 
 ## Architecture
 
-| App | Port | Role |
-|-----|------|------|
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete system
+design, service descriptions, and environment variable reference.
+
+| Service | Port | Role |
+|---------|------|------|
 | **trading-journal** (this) | 5000 | Trade logging, dashboard, backtesting |
 | **pine review** (`pine-review/`) | 8000 | Market structure analysis, trade review |
 | **vibe-trading** (`../vibe-trading/`) | CLI | Exchange connectors, execution |
