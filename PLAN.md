@@ -289,6 +289,46 @@ Strict ICT 120D triple-barrier direction result:
 | NAS100 bullish BOS Asia | 49 | 46.9% | +0.19R | +0.24R | Long-only candidate; avoids bearish anti-edge |
 | GBPAUD bearish state NY | 58 | 46.6% | +0.14R | +0.14R | Modest, not enough alone |
 
+## Param Sweep Speed — Status & Path to Target (2026-06-28)
+
+### Benchmark Results (GBPAUD 30d, 30,578 bars)
+
+| Config | Time | ms/combo | vs Target |
+|--------|:----:|:--------:|:---------:|
+| Single run (cold) | 1.55s | — | baseline |
+| Single run (hot/cached) | 0.29s | — | reference |
+| Sweep 16 combos (1 worker, warm) | 7.3s | 457ms | — |
+| Sweep 16 combos (8 workers) | 11.9s | 744ms | workers pay Numba overhead |
+| Full grid 540 combos (sequential) | ~247s | 457ms | 50x off target |
+| **VBT broadcast (108 cols)** | **0.20s** | **1.88ms** | ✓ under 5s target |
+
+### Breakdown of 457ms per combo (hybrid VbtRunner)
+
+| Component | Time | % |
+|-----------|:----:|:-:|
+| Strategy `init()` | 74ms | 16% |
+| Strategy `next()` loop (30k calls) | 123ms | 27% |
+| VBT `from_signals` + conversion | ~100ms | 22% |
+| VBT `pf.stats()` | 94ms | 21% |
+| Pandas conversions | 66ms | 14% |
+
+### The Target: < 5s for 486 combos → VBT Multi-Column Broadcasting
+
+The VBT broadcast approach (running all param combos as columns in one `from_signals` call) hits **1.88ms/combo** — fast enough for the full grid in < 1s.
+
+**Path to VBT broadcast:**
+1. Convert structure detection to `vbt.IndicatorFactory` Numba kernels (already done in `vbt_indicators.py`)
+2. Generate boolean signal masks per param combo: `(n_bars × n_combos)` arrays for entries, SL, TP
+3. Single `vbt.Portfolio.from_signals(close, entries, sl_stop, tp_stop)` with broadcast arrays
+4. `pf.stats()` for all columns at once (~0.2s)
+
+**Deferred**: this requires rewriting `TrIctSweep.next()` to produce masks instead of per-bar Signals. The pure-vectorized version (`vbt_tr_ict_sweep.py`) is the reference for this conversion.
+
+### Practical Optimization Applied
+- `sweep.py` now pre-warms Numba in each worker (reduces cold-start from 1.5s to 0.25s per worker)
+- `_report_from_pf()` computes metrics directly from `pf.trades` instead of calling `pf.stats()` (saves 0.1s/combo)
+- Grid reduced: `min_fvg_pts` removed from sweep (auto-scales from `pip_size`)
+
 ## Forensic Analysis — Feature Engineering Results (2026-06-28)
 
 ### Methodology

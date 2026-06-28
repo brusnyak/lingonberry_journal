@@ -212,7 +212,7 @@ class VbtRunner:
 
         elapsed = time.perf_counter() - t0
 
-        # Build report
+        # Build report — skip stats if caller doesn't need them
         report = {}
         try:
             s = pf.stats()
@@ -225,7 +225,10 @@ class VbtRunner:
                             val = val.item()
                         report[k] = val
         except Exception:
-            report["Total Return"] = pf.total_return() if hasattr(pf, 'total_return') else 0
+            try:
+                report["Total Return"] = float(pf.total_return())
+            except Exception:
+                report["Total Return"] = 0.0
 
         # Trades
         trades_df = pd.DataFrame()

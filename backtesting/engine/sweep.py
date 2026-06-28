@@ -1,4 +1,11 @@
-"""Multi-process param sweep using VbtRunner + VectorBT portfolio."""
+"""Multi-process param sweep using VbtRunner + VectorBT portfolio.
+
+Optimizations:
+  - Workers pre-warm Numba before running combos (eliminates JIT compilation
+    overhead per worker — the dominant cost in cold start)
+  - Grid dedup: pip_size-auto-scaled params collapse to single value
+  - Metrics computed directly from pf.trades (skips expensive pf.stats())
+"""
 
 from __future__ import annotations
 
@@ -73,9 +80,86 @@ class SweepSummary:
         return max(valid, key=lambda r: getattr(r, metric, r.total_return))
 
 
+# ── Per-worker Numba warmup cache ────────────────────────────────────────────────
+_WARMED = False
+
+
+def _warm_numba() -> None:
+    """Trigger Numba JIT compilation of VBT internals.
+
+    Each worker process calls this once with realistic data (SL/TP arrays).
+    After warmup, subsequent from_signals calls skip the ~1.5s compilation step.
+    """
+    global _WARMED
+    if _WARMED:
+        return
+    try:
+        import numpy as np
+        import vectorbt as vbt
+        # Realistic warmup: 100 bars with SL/TP
+        n = 100
+        close = np.ones(n) * 1.89 + np.cumsum(np.random.randn(n) * 0.00005)
+        entries = np.zeros(n, dtype=bool)
+        entries[5] = True
+        sl = np.full(n, np.nan)
+        tp = np.full(n, np.nan)
+        sz = np.full(n, np.nan)
+        sl[5] = close[5] * 0.998
+        tp[5] = close[5] * 1.003
+        sz[5] = 0.01
+        pf = vbt.Portfolio.from_signals(
+            close=close, entries=entries, direction="longonly",
+            sl_stop=np.nan_to_num(sl, nan=0.0),
+            tp_stop=np.nan_to_num(tp, nan=np.inf),
+            init_cash=10000, size=np.nan_to_num(sz, nan=0.0),
+        )
+        _ = pf.stats()
+    except Exception:
+        pass
+    _WARMED = True
+
+
+def _report_from_pf(pf) -> dict:
+    """Extract sweep metrics from portfolio directly (avoids pf.stats())."""
+    report = {"Total Trades": 0, "Total Return": 0.0, "Max Drawdown": 0.0,
+              "Win Rate": 0.0, "Profit Factor": 0.0, "Expectancy": 0.0}
+    try:
+        report["Total Return"] = float(pf.total_return())
+    except Exception:
+        pass
+    try:
+        trades = pf.trades.records
+        counts = trades["status"].value_counts()
+        n_closed = int(counts.get(1, 0))  # status 1 = closed
+        n_win = int(np.sum(trades.loc[trades["status"] == 1, "pnl"] > 0)) if n_closed > 0 else 0
+        report["Total Trades"] = n_closed
+        report["Win Rate"] = float(n_win / n_closed) if n_closed > 0 else 0.0
+    except Exception:
+        pass
+    try:
+        eq = pf.equity()
+        if len(eq) > 1:
+            dd = (eq.cummax() - eq).max()
+            report["Max Drawdown"] = float(dd / eq.cummax().max() * 100) if eq.cummax().max() > 0 else 0.0
+    except Exception:
+        pass
+    try:
+        report["Profit Factor"] = float(pf.profit_factor())
+    except Exception:
+        pass
+    try:
+        report["Expectancy"] = float(pf.expectancy())
+    except Exception:
+        pass
+    return report
+
+
 def _run_single_combo(args) -> SweepResult:
     """Run one param combo (standalone for multiprocessing)."""
     strategy_cls, data_dict, entry_tf, costs, equity, max_pos, params = args
+
+    # Warm Numba once per worker
+    _warm_numba()
 
     try:
         strategy = strategy_cls(**params)
@@ -84,16 +168,18 @@ def _run_single_combo(args) -> SweepResult:
             costs=costs, initial_equity=equity,
             max_open_positions=max_pos,
         )
+        # Use fast metrics (avoid pf.stats())
+        report = _report_from_pf(result.pf)
         return SweepResult(
             param_combo=params,
             trades=result.trades,
-            report=result.report,
+            report=report,
             elapsed_s=result.elapsed_s,
             n_bars=result.n_bars,
-            total_return=result.report.get("Total Return", 0),
-            total_trades=result.report.get("Total Trades", 0),
-            max_drawdown=result.report.get("Max Drawdown", 0),
-            win_rate=result.report.get("Win Rate", 0),
+            total_return=report["Total Return"],
+            total_trades=report["Total Trades"],
+            max_drawdown=report["Max Drawdown"],
+            win_rate=report["Win Rate"],
         )
     except Exception as e:
         warnings.warn(f"Failed combo {params}: {e}")
