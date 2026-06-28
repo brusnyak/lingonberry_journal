@@ -53,7 +53,7 @@ class TrIctSweep(Strategy):
         "fvg_expiry_bars":[20, 40, 80],
         "sl_buffer_pips": [5, 10, 20, 50, 200],
         "tp1_r":          [1.5, 2.0, 3.0],
-        "min_fvg_pts":    [3, 5, 10, 20],
+        "min_fvg_pts":    [0.5, 1, 2, 5],  # in price units, scaled by pip_size
     }
 
     def __init__(
@@ -63,24 +63,30 @@ class TrIctSweep(Strategy):
         fvg_expiry_bars: int = 40,     # 1 bar = 1 entry-TF bar; cancel if not filled
         sl_buffer_pips: float = 10.0,
         tp1_r: float          = 2.0,
-        min_fvg_pts: float    = 5.0,   # minimum FVG gap size in price units
+        min_fvg_pts: Optional[float] = None,  # FVG min gap in price units; defaults to pip_size * 1
         risk_pct: float       = 0.003,
         pip_size: float       = 0.0001,
         direction: str        = "bear", # "bull", "bear", "both"
         htf_agree: bool       = True,
         htf_bars: int         = 10,
+        ml_predictor: Optional[object] = None,  # Mlpredictor for signal filtering
+        ml_tf: str            = "5",   # ML feature timeframe
     ):
         self.swing_n        = swing_n
         self.mss_bars       = mss_bars
         self.fvg_expiry_bars= fvg_expiry_bars
         self.sl_buffer_pips = sl_buffer_pips
         self.tp1_r          = tp1_r
-        self.min_fvg_pts    = min_fvg_pts
+        self.min_fvg_pts    = min_fvg_pts if min_fvg_pts is not None else pip_size
         self.risk_pct       = risk_pct
         self.pip_size       = pip_size
         self.direction      = direction
         self.htf_agree      = htf_agree
         self.htf_bars       = htf_bars
+        self.ml_predictor   = ml_predictor
+        self.ml_tf          = ml_tf
+        self._ml_feat       = None   # (n_bars, n_features) array
+        self._ml_feat_ts    = None   # timestamps for alignment
 
     def init(self, data: dict) -> None:
         entry_key = next(iter(data))
@@ -125,6 +131,10 @@ class TrIctSweep(Strategy):
         self._sweep_state_long:  Optional[tuple] = None  # (sweep_idx, sweep_sl, swing_hi_level)
         self._sweep_state_short: Optional[tuple] = None  # (sweep_idx, sweep_sl, swing_lo_level)
 
+        # ── ML feature precomputation ──────────────────────────────────────
+        if self.ml_predictor is not None:
+            self._init_ml(data)
+
     def _htf_dir_at(self, ts) -> int:
         if self._htf_ts is None:
             return 0
@@ -132,6 +142,51 @@ class TrIctSweep(Strategy):
         if idx < 0:
             return 0
         return int(self._htf_dir[idx])
+
+    def _init_ml(self, data: dict) -> None:
+        """Precompute ML features and build bar-index→feature-row mapping."""
+        from backtesting.ml.features import features_from_ohlc
+
+        # Build feature matrix on ML timeframe data
+        if self.ml_tf in data:
+            df_ml = data[self.ml_tf].copy()
+        else:
+            entry_key = next(iter(data))
+            df_ml = data[entry_key].copy()
+
+        if "ts" in df_ml.columns:
+            df_ml["ts"] = pd.to_datetime(df_ml["ts"], utc=True)
+            df_ml = df_ml.sort_values("ts").reset_index(drop=True)
+
+        feat_df = features_from_ohlc(df_ml)
+        feat_cols = self.ml_predictor.feature_names
+
+        self._ml_feat = feat_df[feat_cols].values
+        self._ml_feat_ts = df_ml["ts"].values.astype("datetime64[ns]")
+
+        # Build index map: for each entry-TF bar index → closest ML bar index
+        # Use entry TF timestamps if available
+        entry_key = next(iter(data))
+        df_entry = data[entry_key]
+        entry_ts = pd.to_datetime(df_entry["ts"].values, utc=True).values.astype("datetime64[ns]")
+        self._ml_bar_for_entry = np.searchsorted(
+            self._ml_feat_ts, entry_ts, side="right"
+        ) - 1
+
+    def _ml_agree(self, i: int, direction: Direction) -> tuple[bool, float]:
+        """Check if ML model agrees with structure signal at 1m bar index i."""
+        if self._ml_feat is None:
+            return True, 0.0
+
+        # Map 1m bar index → 5m feature row
+        feat_i = self._ml_bar_for_entry[i] if i < len(self._ml_bar_for_entry) else -1
+        if feat_i < 0 or feat_i >= len(self._ml_feat):
+            return True, 0.0
+
+        feat_row = self._ml_feat[feat_i]
+        struct_dir = 1 if direction == Direction.LONG else -1
+        take, prob = self.ml_predictor.filter_signal(struct_dir, feat_row)
+        return take, prob
 
     def _last_swing_high(self, before_i: int, lookback: int = 50) -> Optional[float]:
         # Only look at swings confirmed at least swing_n bars ago (no look-ahead)
@@ -193,6 +248,10 @@ class TrIctSweep(Strategy):
                     sl = p.sweep_sl - self.sl_buffer_pips * self.pip_size
                     stop = p.fvg_mid - sl
                     if stop > 0:
+                        if self.ml_predictor is not None:
+                            take, _ = self._ml_agree(i, Direction.LONG)
+                            if not take:
+                                return None
                         return Signal(
                             direction=Direction.LONG,
                             entry=p.fvg_mid,
@@ -210,6 +269,10 @@ class TrIctSweep(Strategy):
                     sl = p.sweep_sl + self.sl_buffer_pips * self.pip_size
                     stop = sl - p.fvg_mid
                     if stop > 0:
+                        if self.ml_predictor is not None:
+                            take, _ = self._ml_agree(i, Direction.SHORT)
+                            if not take:
+                                return None
                         return Signal(
                             direction=Direction.SHORT,
                             entry=p.fvg_mid,

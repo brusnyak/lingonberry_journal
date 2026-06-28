@@ -1,6 +1,6 @@
 # Prop Firm Engine — Development Plan
 
-Last updated: 2026-06-26
+Last updated: 2026-06-28
 
 ## Goal
 
@@ -186,45 +186,51 @@ Action: archive old content, rebuild with only validated results from our own sw
 
 ## Work Plan
 
-### Phase 1: Correctness + Review Surface
-- [x] Review UI can run TrFvg and TrIct without crypto leverage controls.
-- [x] TrIct review API uses structure warmup before the selected test window.
-- [x] Remove hardcoded cTrader credentials from data fetch script.
-- [x] Normalize NAS100 data into standard `ts/open/high/low/close/volume` schema.
-- [x] Add GFT account presets to reporting: 25k 2-step GOAT and 100k 1-step.
-- [ ] Add rule-breach columns to every result: return target hit, max daily loss, static max loss, min valid days.
+### Phase 1: Infrastructure & Speed (Jun 28 — Done)
+- [x] Conda env `trade` with Python 3.11, Numba, LLVM, Apple vecLib BLAS pinned
+- [x] VectorBT 1.0.0 with Rust engine (M1 Pro optimized)
+- [x] TA-Lib (61 candlestick patterns), Polars 1.42, LightGBM/XGBoost/CatBoost
+- [x] Baseline benchmark: 0.34s for 30k bars (single run), ~5min for 486 combos
 
-### Phase 2: Engine Candidate
-- [x] Build first `backtesting/strategies/prop_firm_structure_v1.py` candidate.
+### Phase 2: VectorBT Migration (Jun 28 — Done)
+- [x] Structure lib → `vbt.IndicatorFactory` wrappers (SwingPoints, FVGInd, StructureLabels, LiquiditySweeps)
+- [x] `compute_all()` helper: runs all indicators in one call
+- [x] `VbtRunner` hybrid runner: strategy.next() collects signals → `vbt.Portfolio.from_signals`
+- [x] `sweep.py`: multiprocessing param grid sweep
+- [x] Performance: single run 0.37s (matches original, VectorBT handles exits)
+
+### Phase 3: ML Pipeline (Jun 28 — Done)
+- [x] `ml/labels.py`: Triple-barrier 3-class labeling (HOLD/LONG/SHORT)
+- [x] `ml/features.py`: Feature matrix from structure_lib (trend, FVG, sweeps, session/volatility)
+- [x] `ml/train.py`: LightGBM+XGBoost+CatBoost ensemble, walk-forward expanding window, purged CV
+- [x] `ml/predict.py`: Mlpredictor → filter strategy signals by ML probability > threshold
+- [x] Training test: 60d GBPAUD 5m, 264 signals, 28 features, 48.8% accuracy
+- [ ] More data for training (120d+)
+- [ ] Sensitivity analysis on threshold (0.5–0.8)
+- [ ] Feature importance: drop low-importance features, retrain
+
+### Phase 4: Engine Candidate — Complete Integration
 - [ ] Implement state machine: HTF bias -> liquidity sweep -> MSS/ChoCH -> FVG/OB retest -> entry.
 - [ ] Add active structure monitor: exit/reduce if 1m/5m structure flips against the trade.
-- [x] Add direction/session/no-structure-cut controls to the V1 runner.
-- [x] Add direction accuracy test for causal structure predictors.
-- [x] Add target-before-stop study for 0.5R/1R/1.5R/2R/3R.
-- [x] Add strict ICT structure module: HH/HL -> CHoCH -> LL/LH -> BOS down, and mirror for bullish.
-- [x] Add SMC/zigzag audit script for structure sanity checks.
-- [x] Add strict ICT triple-barrier direction accuracy script.
+- [ ] Add ML filter to strategy: `if Mlpredictor.filter_signal(structure_dir, features): place_trade()`
 - [ ] Add intraday re-entry: max 1-2 attempts per thesis, only after fresh sweep/MSS.
 - [ ] Add target hierarchy: opposing liquidity first, then partials, then structure runner.
 - [ ] Run first sweep on XAUUSD, then NAS100 after normalization, then FX basket.
 
-### Phase 3: Validate (This Week)
+### Phase 5: Validate
 - [ ] Review sweep results, fix bugs
 - [ ] Run rolling 30D windows with 7-14D structure warmup.
 - [x] Add first online parity check for causal structure features.
 - [ ] Expand parity checks across all target assets/timeframes before trusting any result.
+- [ ] OOS test on 2024-2025 data (unseen)
+- [ ] Prop firm simulation (daily DD, max loss limits)
 - [ ] Test account sizes/rules separately: 25k 2-step GOAT, 100k 1-step
-- [ ] Archive deprecated Obsidian content
-- [ ] Document validated configs
 
-### Phase 4: Deploy (Next Week)
-- [ ] cTrader demo adapter: read account, quotes, positions, and orders.
-- [ ] cTrader demo paper execution only: place/modify/close micro trades behind a hard safety flag.
-- [ ] Run 2-4 weeks on cTrader demo with full audit logs.
-- [ ] Only after cTrader demo stability: wire TradeLocker demo.
-- [ ] Only after TradeLocker demo stability: consider GFT live account interaction.
-- [ ] Obsidian trade journal from validated data.
-- [ ] LLM-assisted post-trade review pipeline.
+### Phase 6: Deploy
+- [ ] Document validated configs
+- [ ] TradeLocker demo paper execution with ML filter
+- [ ] GFT live account after demo stability
+- [ ] LLM-assisted post-trade review pipeline
 
 ## Non-Goals (Removed from Scope)
 
@@ -233,7 +239,6 @@ Action: archive old content, rebuild with only validated results from our own sw
 - Session filters as blind optimization (sessions are context, not edge by themselves)
 - Telegram scraper (visual content not reliably extractable)
 - Fixed R:R-only exits (adaptive hybrid exit remains in scope)
-- ML before OOS-stable structure rules
 
 ## Latest Structure Findings
 
@@ -288,12 +293,18 @@ Strict ICT 120D triple-barrier direction result:
 
 | Component | Path |
 |-----------|------|
-| Structure lib | `backtesting/structure_lib/` |
-| Engine | `backtesting/engine/` |
-| Forex V1 | `backtesting/forex_v1.py` |
-| Webapp | `webapp/app.py` |
-| Structure overlay JS | `webapp/static/js/structure-overlay.js` |
-| TradeLocker client | `infra/tradelocker_client.py` |
+| Structure lib (Numba) | `backtesting/structure_lib/vbt_indicators.py` |
+| Engine (hybrid) | `backtesting/engine/vbt_runner.py` |
+| Param sweep | `backtesting/engine/sweep.py` |
+| ML: labels | `backtesting/ml/labels.py` |
+| ML: features | `backtesting/ml/features.py` |
+| ML: train | `backtesting/ml/train.py` |
+| ML: inference | `backtesting/ml/predict.py` |
+| Strategy: TrIctSweep | `backtesting/strategies/tr_ict_sweep.py` |
+| Strategy: SMC v1 | `backtesting/strategies/smc_v1.py` |
+| Strategy: VBT (WIP) | `backtesting/strategies/vbt_tr_ict_sweep.py` |
+| ICT state machine | `backtesting/features/ict_structure.py` |
+| Direction accuracy | `backtesting/scripts/ict_direction_accuracy.py` |
 
 ## Obsidian References
 

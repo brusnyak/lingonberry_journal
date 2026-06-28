@@ -1,68 +1,45 @@
-# Trading Journal
+# Trading Journal — Prop Firm Trading Engine
 
-Automated trading system for prop firm challenges. Runs three microservices
-on Oracle Cloud Free Tier — strategy execution, position mirroring, and
-trailing stop management — via cTrader OpenAPI.
+ICT/SMC mechanical trading engine for Goat Funded Trader challenges (25k 2-Step, 100k 1-Step).
+Backtest + ML pipeline on Python 3.11 / VectorBT / Numba / Polars / M1 Pro.
 
-```
-ctrader-strategy ──▶ ctrader-mirror ──▶ position-manager
-(MA cross, 15s)       (copy 25K→100K)    (trailing SL, 5s)
-```
+## Stack
 
-Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-
-## Components
-
-- **ctrader-strategy** — EMA crossover on BTCUSD M5, places orders on master account
-- **ctrader-mirror** — Copies master positions to slave with risk-based sizing (0.5%)
-- **position-manager** — Trailing stop loss via swing points, breakeven at 1.0R
-- **ctrader-client** — Shared cTrader OpenAPI protobuf WebSocket client
-- **trade-logger** — JSONL trade journal (signals, opens, closes, errors)
-- **Web Dashboard** — Flask webapp with analytics, charts, performance tracking
-- **Backtesting** — Multi-strategy engine with Parquet data (EMA, RSI, ICT structure)
-- **Telegram Bot** — Trade logging, account management, reporting
+| Layer | Tool |
+|-------|------|
+| Backtest engine | `vbt.Portfolio.from_signals` (VectorBT broadcast, Numba JIT) |
+| Structure indicators | `backtesting/structure_lib/vbt_indicators.py` (Numba kernels) |
+| Feature engineering | Polars LazyFrame → NumPy |
+| ML ensemble | LightGBM + XGBoost + CatBoost (3-class direction, walk-forward CV) |
+| Data storage | Parquet (columnar, daily refresh via TradeLocker) |
+| Live execution | TradeLocker API (Oracle Cloud VM, 24/7) |
+| Environment | conda `trade`, Python 3.11, Apple vecLib, Numba 0.65.1 |
 
 ## Quick Start
 
-### 1. Installation
+### Environment (M1 Pro optimized)
 
 ```bash
-# Clone repository
-git clone https://github.com/YOUR_USERNAME/trading-journal.git
-cd trading-journal
-
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+conda create -n trade python=3.11
+conda activate trade
+conda install -c conda-forge "libblas=*=*accelerate" numba ta-lib polars
+conda install -c conda-forge lightgbm xgboost catboost scikit-learn
+pip install "vectorbt[full,rust]"
+echo "libblas=*=*accelerate" >> ~/miniconda3/envs/trade/conda-meta/pinned
 ```
 
-### 2. Configuration
+### Backtest
 
 ```bash
-# Copy environment template
-cp .env.example .env
-
-# Edit .env and add your credentials:
-# - TELEGRAM_JOURAL (bot token from @BotFather)
-# - TELEGRAM_JOURNAL_CHAT (your chat ID)
-# - WEBAPP_URL (public URL for mini app)
-# - TL_* credentials (see .env.example)
+conda activate trade
+python -c "from backtesting.engine.vbt_runner import VbtRunner; from backtesting.strategies.tr_ict_sweep import TrIctSweep; print('Ready')"
 ```
 
-### 3. Run
+### ML Pipeline
 
 ```bash
-# Start Telegram bot
-make bot
-
-# Start web app (in another terminal)
-make webapp
-
-# Run tests
-make test
+# Build feature matrix + train ensemble
+python -c "from backtesting.ml import run_pipeline; result, feat, labels = run_pipeline('GBPAUD', '5', days=120)"
 ```
 
 ## TradeLocker Integration
@@ -130,25 +107,42 @@ make deploy
 
 | Source | Asset Class | Status |
 |--------|-------------|--------|
-| cTrader OpenAPI | Crypto (BTCUSD), Forex, Commodities | ✅ Live |
-| TradeLocker | Forex, Commodities | ⏸️ Legacy (disabled) |
+| TradeLocker | Forex, Commodities, Indices | ✅ Live |
 | Broker CSV | NAS100 (USATECHIDXUSD) | ✅ Live |
-| yFinance | Stocks, Crypto | ✅ Fallback |
-| Local CSV/Parquet | All | ✅ Cached |
+| Parquet (local) | All cached daily | ✅ Active |
 
-## Backtesting
+## Backtesting (VectorBT)
 
-### Forex V1 (ICT/SMC)
-Multi-timeframe structure strategy using 4H/1H/15m/1m with sweep + MSS + FVG retest. See `backtesting/forex_v1.py`.
+### Architecture
 
-### NAS100 Test
-Multi-strategy backtest for NAS100 index data. Tests EMA crossover, RSI mean reversion, SMA pullback, and breakout strategies across timeframes and RR settings. See `backtesting/nas100_test.py`.
-
-```bash
-make nas100         # 30-day single run
-make nas100-sweep   # full config sweep
-make nas100-monthly # rolling monthly validation
 ```
+run_strategy()  →  vbt.Portfolio.from_signals(entries, exits, sl_stop, tp_stop)
+                        └── Numba-compiled signal masks
+                        └── Multi-column broadcast for param sweeps
+                        └── Walk-forward split + metrics in one pass
+
+ML pipeline:
+build_feature_matrix() → walk_forward_train() → Mlpredictor.filter_signal()
+```
+
+### Active Strategies
+
+| Strategy | Engine | Status |
+|----------|--------|--------|
+| TrIctSweep | VbtRunner (hybrid) | VectorBT signal gen working |
+| SMC v1 | VbtRunner (hybrid) | On deck |
+| Mean reversion | TradeLocker bot (live only) | Not migrated |
+
+### Performance Baseline
+
+| Test | Bars | Trades | Time |
+|------|------|--------|------|
+| Single backtest (30d) | 30,578 | 0-5 | 0.4s |
+| Single backtest (90d) | 91,523 | 3-25 | 0.9s |
+| Param sweep (486 combos) | 30,578 | — | ~5 min (target) |
+| ML training (60d 5m) | ~6,300 | 264 signals | ~30s |
+
+Target: param sweeps sub-5s via VectorBT multi-column broadcast + multiprocessing.
 
 ## Architecture
 
@@ -165,33 +159,45 @@ design, service descriptions, and environment variable reference.
 
 ```
 trading-journal/
-├── backtesting/            # Strategy backtesting
-│   ├── forex_v1.py        # ICT/SMC structure strategy
-│   ├── nas100_test.py     # NAS100 multi-strategy test
-│   ├── rolling_analysis.py# Walk-forward analysis
-│   ├── visualize.py       # Interactive structure viz
-│   └── structure_lib/     # Shared ICT/SMC engine
-├── bot/                    # Telegram bot
-│   ├── journal_daemon.py  # Main bot logic
-│   ├── journal_db.py      # Database operations
-│   ├── mean_reversion_bot.py # V1 MR bot
-│   └── session_detector.py # Session detection
-├── webapp/                 # Flask web app
-│   ├── app.py             # Main app (30+ API routes)
-│   ├── templates/         # HTML templates
-│   └── static/js/         # Frontend JS
-├── infra/                  # Infrastructure
-│   ├── tradelocker_client.py  # TradeLocker client
-│   ├── market_data.py         # Market data fetching
-│   └── pine_bridge.py         # TradingView webhook
-├── core/                   # Core logic
-│   ├── exporter.py         # ML dataset export
-│   └── monte_carlo.py      # Monte Carlo simulation
-├── backtesting_config/     # GFT account rules
+├── backtesting/
+│   ├── engine/
+│   │   ├── vbt_runner.py       # VectorBT hybrid runner (strategy->from_signals)
+│   │   ├── sweep.py            # Multiprocessing param sweep
+│   │   ├── runner.py           # Original bar-loop runner (reference)
+│   │   ├── base.py             # Strategy/EngineState interfaces
+│   │   ├── costs.py            # Spread/slippage/commission model
+│   │   ├── data.py             # TradeLocker data load
+│   │   ├── metrics.py          # Performance metrics
+│   │   └── orders.py           # Signal dataclass
+│   ├── structure_lib/
+│   │   ├── vbt_indicators.py   # VectorBT Numba wrappers (swing, FVG, OB, sweep, labels)
+│   │   ├── swing.py            # Causal swing detection
+│   │   ├── fvg.py              # FVG detection
+│   │   ├── sweep.py            # Liquidity sweep detection
+│   │   ├── ob.py               # Order block detection
+│   │   ├── labels.py           # HH/HL/LH/LL structure labels
+│   │   ├── sessions.py         # Session range tracking
+│   │   └── viz.py              # Structure visualization
+│   ├── ml/
+│   │   ├── labels.py           # Triple-barrier 3-class labels
+│   │   ├── features.py         # Causal feature matrix from structure_lib
+│   │   ├── train.py            # LightGBM+XGBoost+CatBoost ensemble, walk-forward
+│   │   └── predict.py          # Mlpredictor inference wrapper
+│   ├── strategies/
+│   │   ├── tr_ict_sweep.py     # ICT sweep + FVG retest (main active)
+│   │   ├── smc_v1.py           # SMC structure strategy
+│   │   ├── vbt_tr_ict_sweep.py # Pure Numba signal mask version (WIP)
+│   │   ├── prop_firm_structure_v1.py
+│   │   └── ... (15+ strategy variants)
+│   ├── features/
+│   │   ├── ict_structure.py    # Strict ICT state machine
+│   │   └── core.py             # Base feature builder
+│   └── scripts/
+│       ├── ict_direction_accuracy.py  # Triple-barrier analysis
+│       └── ... (25+ analysis scripts)
+├── core/                   # GFT account config, Monte Carlo
 ├── scripts/                # Utility scripts
-├── docs/                   # Documentation
-├── data/                   # Database and market data
-└── pine-review/            # Structure analysis app
+└── docs/                   # Architecture docs
 ```
 
 ## Database Schema
