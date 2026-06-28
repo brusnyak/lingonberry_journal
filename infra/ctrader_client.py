@@ -428,7 +428,7 @@ class CtraderClient(ClientInterface):
         For LIMIT/STOP orders, absolute SL/TP values are used directly.
         """
         aid = account_id or self._primary_account
-        self._ensure_aid(aid)
+        self._ensure_auth(aid)
         from ctrader_open_api import Protobuf
 
         sym_id = self.get_symbol_id(symbol, account_id=aid)
@@ -669,7 +669,7 @@ class CtraderClient(ClientInterface):
         symbol's decimal digits before sending.
         """
         aid = account_id or self._primary_account
-        self._ensure_aid(aid)
+        self._ensure_auth(aid)
         from ctrader_open_api import Protobuf
 
         # Round to symbol digits if we know the symbol
