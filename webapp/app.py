@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from html import escape
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -1655,10 +1656,133 @@ def review_page():
     return render_template("review.html")
 
 
+def _review_asset_type(symbol: str) -> str:
+    if symbol in ("XAUUSD", "XAGUSD"):
+        return "commodity"
+    if symbol in ("NAS100", "US100", "USATECHIDXUSD"):
+        return "index"
+    if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
+        return "crypto"
+    return "forex"
+
+
+def _candles_json_from_df(df) -> list[dict]:
+    return [
+        {
+            "time": int(row["ts"].timestamp()),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+        }
+        for _, row in df.iterrows()
+    ]
+
+
+def _strict_ict_structure_overlay(df, left: int = 3, right: int = 3) -> dict:
+    import pandas as pd
+
+    from backtesting.features.ict_structure import IctStructureConfig, build_ict_structure_index
+
+    st = build_ict_structure_index(df, IctStructureConfig(left=left, right=right))
+    structure_data = {
+        "source": "strict_ict",
+        "left": left,
+        "right": right,
+        "pivots": [],
+        "bos_events": [],
+    }
+    pivot_list = []
+    for _, row in st.iterrows():
+        lbl = row.get("structure_label")
+        if lbl in ("HH", "HL", "LL", "LH") and pd.notna(row.get("swing_price")):
+            ts_val = pd.Timestamp(row["ts"])
+            pivot = {
+                "time": int(ts_val.timestamp()),
+                "price": float(row["swing_price"]),
+                "kind": str(lbl),
+                "state": str(row.get("ict_state", "")),
+            }
+            structure_data["pivots"].append(pivot)
+            pivot_list.append((ts_val, str(lbl), float(row["swing_price"])))
+
+    event_specs = [
+        ("bullish_bos", "bos", "bullish", "bos_level"),
+        ("bearish_bos", "bos", "bearish", "bos_level"),
+        ("bullish_choch", "choch", "bullish", "choch_level"),
+        ("bearish_choch", "choch", "bearish", "choch_level"),
+    ]
+    for _, row in st.iterrows():
+        ts_val = pd.Timestamp(row["ts"])
+        for flag_col, ev_type, direction, level_col in event_specs:
+            if not bool(row.get(flag_col, False)):
+                continue
+            level = row.get(level_col)
+            if pd.isna(level):
+                continue
+            level = float(level)
+            level_time = None
+            for p_ts, _p_kind, p_price in reversed(pivot_list):
+                if p_ts >= ts_val:
+                    continue
+                if abs(p_price - level) <= max(abs(level) * 0.00001, 0.01):
+                    level_time = int(p_ts.timestamp())
+                    break
+            structure_data["bos_events"].append(
+                {
+                    "time": int(ts_val.timestamp()),
+                    "level": level,
+                    "level_time": level_time,
+                    "direction": direction,
+                    "event_type": ev_type,
+                    "state": str(row.get("ict_state", "")),
+                }
+            )
+    return structure_data
+
+
+@app.route("/callback")
+def oauth_callback_page():
+    """OAuth landing page for cTrader Open API demo authentication."""
+    code = request.args.get("code", "")
+    error = request.args.get("error") or request.args.get("errorCode") or ""
+    description = request.args.get("description", "")
+    if error:
+        return (
+            "<!doctype html><title>OAuth Error</title>"
+            "<body style='font-family:system-ui;margin:40px;max-width:760px'>"
+            "<h1>OAuth Error</h1>"
+            f"<p><strong>{escape(error)}</strong></p>"
+            f"<p>{escape(description)}</p>"
+            "</body>",
+            400,
+        )
+    if not code:
+        return (
+            "<!doctype html><title>OAuth Callback</title>"
+            "<body style='font-family:system-ui;margin:40px;max-width:760px'>"
+            "<h1>OAuth Callback</h1>"
+            "<p>No authorization code was provided.</p>"
+            "</body>",
+            400,
+        )
+    return (
+        "<!doctype html><title>OAuth Code Received</title>"
+        "<body style='font-family:system-ui;margin:40px;max-width:760px'>"
+        "<h1>Authorization Code Received</h1>"
+        "<p>This short-lived code must be exchanged for an access token. "
+        "Do not paste it into chats or commit it to files.</p>"
+        "<label style='display:block;font-weight:600;margin-top:20px'>Code</label>"
+        f"<textarea readonly style='width:100%;height:120px'>{escape(code)}</textarea>"
+        "</body>"
+    )
+
+
 @app.route("/api/review/run", methods=["POST"])
 def api_review_run():
     """Run a backtest and return all trades as JSON for the review UI."""
     import pandas as pd
+    from datetime import date, timedelta
     body = request.get_json(silent=True) or {}
     symbol   = body.get("symbol", "XAUUSD")
     tf       = body.get("tf", "5")
@@ -1674,17 +1798,26 @@ def api_review_run():
         from backtesting.engine.costs import ForexCosts
 
         load_kw = {}
+        if symbol in ("XAUUSD", "XAGUSD"):
+            load_kw["asset_type"] = "commodity"
         if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
             load_kw["asset_type"] = "crypto"
 
+        load_start = start
+        if start and strategy == "TrIct":
+            load_start = (date.fromisoformat(start) - timedelta(days=7)).isoformat()
+
         support_tf = "240"
         data = {
-            tf: load_data(symbol, tf=tf, start=start, end=end, **load_kw),
-            support_tf: load_data(symbol, tf=support_tf, start=start, end=end, **load_kw),
+            tf: load_data(symbol, tf=tf, start=load_start, end=end, **load_kw),
+            support_tf: load_data(symbol, tf=support_tf, start=load_start, end=end, **load_kw),
         }
         # ICT strategy also needs 30m structure TF
         if strategy == "TrIct":
-            data["30"] = load_data(symbol, tf="30", start=start, end=end, **load_kw)
+            data["30"] = load_data(symbol, tf="30", start=load_start, end=end, **load_kw)
+            if start and not data[tf].empty and "ts" in data[tf].columns:
+                start_ts = pd.Timestamp(start, tz="UTC")
+                data[tf] = data[tf][data[tf]["ts"] >= start_ts].reset_index(drop=True)
         if data[tf].empty:
             return jsonify({"error": "No data for requested range"}), 400
 
@@ -1732,83 +1865,29 @@ def api_review_run():
                 "label": str(row["label"]) if row["label"] else "",
             })
 
-        # Embed full candle array so the frontend never needs a second request
-        import numpy as np
         df5 = data[tf].copy()
-        candles_json = [
-            {
-                "time": int(row["ts"].timestamp()),
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low":  float(row["low"]),
-                "close": float(row["close"]),
-            }
-            for _, row in df5.iterrows()
-        ]
+        candles_json = _candles_json_from_df(df5)
 
-        # Structure overlay — 30m structure via structure_lib (proper BOS/ChoCH, FVGs, OBs)
+        # Strict ICT structure overlay: HH/HL -> CHoCH -> LL/LH -> BOS, and mirror.
         structure_data = {"pivots": [], "bos_events": []}
         try:
-            from backtesting.structure_lib.swing import swing_points
-            from backtesting.structure_lib.labels import label_structure
             from backtesting.structure_lib.fvg import detect_fvgs
             from backtesting.structure_lib.ob import detect_order_blocks
 
             df_src = df5.copy().set_index("ts").sort_index()
+            df_overlay = df5[["ts", "open", "high", "low", "close"]].copy()
+            structure_data = _strict_ict_structure_overlay(df_overlay, left=3, right=3)
 
-            # 30m for structure
+            # 30m for OBs only
             df30 = df_src.resample("30min").agg(
                 {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
             ).dropna(subset=["open"])
 
             if len(df30) > 10:
+                from backtesting.structure_lib.swing import swing_points
+                from backtesting.structure_lib.labels import label_structure
                 swings, levels = swing_points(df30, swing_length=1, causal=True)
                 labels_df = label_structure(df30, swings, levels)
-
-                # Build pivot list with timestamps for BOS line start anchoring
-                pivot_list = []  # (ts, kind, price)
-                for ts_idx in df30.index:
-                    lbl = labels_df.loc[ts_idx, "structure_label"] if ts_idx in labels_df.index else None
-                    if lbl in ("HH", "HL", "LL", "LH"):
-                        level_val = levels.loc[ts_idx] if ts_idx in levels.index else float("nan")
-                        if not pd.isna(level_val):
-                            structure_data["pivots"].append({
-                                "time":  int(ts_idx.timestamp()),
-                                "price": float(level_val),
-                                "kind":  lbl,
-                            })
-                            pivot_list.append((ts_idx, lbl, float(level_val)))
-
-                # BOS/ChoCH events — find level_time by matching broken level to pivot history
-                for ts_idx in labels_df.index:
-                    row = labels_df.loc[ts_idx]
-                    for ev_type, direction, level_col in [
-                        ("bos",   "bullish", "bos_level"),
-                        ("bos",   "bearish", "bos_level"),
-                        ("choch", "bullish", "choch_level"),
-                        ("choch", "bearish", "choch_level"),
-                    ]:
-                        flag_col = f"{direction}_{ev_type}"
-                        if not (flag_col in row and row[flag_col]):
-                            continue
-                        lv = row.get(level_col, float("nan"))
-                        if pd.isna(lv):
-                            continue
-                        # Find the most recent pivot before this bar that matches the broken level
-                        level_time = None
-                        for p_ts, p_kind, p_price in reversed(pivot_list):
-                            if p_ts >= ts_idx:
-                                continue
-                            if abs(p_price - float(lv)) < 0.01:
-                                level_time = int(p_ts.timestamp())
-                                break
-                        structure_data["bos_events"].append({
-                            "time":       int(ts_idx.timestamp()),
-                            "level":      float(lv),
-                            "level_time": level_time,
-                            "direction":  direction,
-                            "event_type": ev_type,
-                        })
 
                 # Per-trade OBs via structure_lib
                 obs = detect_order_blocks(df30, labels_df, lookback=5, min_body_pct=0.3)
@@ -1899,6 +1978,148 @@ def api_review_run():
             "candles": candles_json,
             "structure": structure_data,
         })
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc(limit=5)}), 500
+
+
+@app.route("/api/review/ict-events", methods=["POST"])
+def api_review_ict_events():
+    """Load strict ICT direction events as reviewable pseudo-trades."""
+    import pandas as pd
+
+    body = request.get_json(silent=True) or {}
+    symbol = str(body.get("symbol", "XAUUSD")).upper()
+    tf = str(body.get("tf", "5"))
+    predictor = str(body.get("predictor", "bearish_bos"))
+    session = str(body.get("session", "asia"))
+    direction = str(body.get("direction", "short"))
+    target = str(body.get("target", "1.5r"))
+    limit = int(body.get("limit", 50))
+
+    default_sample = Path(__file__).resolve().parent.parent / "backtesting" / "results" / "ict_review_samples_XAUUSD_bearish_bos_asia_1.5r.csv"
+    default_events = Path(__file__).resolve().parent.parent / "backtesting" / "results" / "ict_direction_rolling_180d_l3r3_events.csv"
+    events_path = Path(body.get("events_path") or (default_sample if default_sample.exists() else default_events))
+    if not events_path.is_absolute():
+        events_path = Path(__file__).resolve().parent.parent / events_path
+    if not events_path.exists():
+        return jsonify({"error": f"Missing events file: {events_path}"}), 404
+
+    try:
+        from backtesting.engine.data import load_data
+
+        events = pd.read_csv(events_path)
+        if events.empty:
+            return jsonify({"error": "Events file is empty"}), 400
+        events["ts"] = pd.to_datetime(events["ts"], utc=True)
+        filtered = events[
+            (events["symbol"].astype(str).str.upper() == symbol)
+            & (events["predictor"].astype(str) == predictor)
+            & (events["session"].astype(str) == session)
+            & (events["direction"].astype(str) == direction)
+        ].copy()
+        if filtered.empty:
+            # A pre-filtered sample can omit one of these columns in future; fall back to symbol-only.
+            filtered = events[events["symbol"].astype(str).str.upper() == symbol].copy()
+        if filtered.empty:
+            return jsonify({"error": f"No matching events in {events_path.name}"}), 404
+
+        outcome_col = f"outcome_{target}"
+        hit_col = f"hit_{target}"
+        if outcome_col not in filtered.columns:
+            return jsonify({"error": f"Missing outcome column: {outcome_col}"}), 400
+
+        if "review_bucket" in filtered.columns:
+            order = {"best": 0, "worst": 1}
+            filtered["_bucket_order"] = filtered["review_bucket"].map(order).fillna(2)
+            filtered = filtered.sort_values(["_bucket_order", "ts"])
+        else:
+            filtered = filtered.reindex(filtered[outcome_col].abs().sort_values(ascending=False).index)
+        filtered = filtered.head(limit).reset_index(drop=True)
+
+        start_ts = filtered["ts"].min() - pd.Timedelta(days=3)
+        end_ts = filtered["ts"].max() + pd.Timedelta(days=3)
+        df = load_data(
+            symbol,
+            tf=tf,
+            start=start_ts.isoformat(),
+            end=end_ts.isoformat(),
+            asset_type=_review_asset_type(symbol),
+        )
+        if df.empty:
+            return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
+        df = df.sort_values("ts").reset_index(drop=True)
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+
+        target_r = float(target.replace("r", ""))
+        trades_json = []
+        for idx, row in filtered.iterrows():
+            event_ts = pd.Timestamp(row["ts"])
+            candle_i = int((df["ts"] - event_ts).abs().idxmin())
+            candle = df.iloc[candle_i]
+            entry = float(candle["close"])
+            risk = float(row.get("risk_price") or 0.0)
+            if risk <= 0:
+                continue
+            is_long = str(row.get("direction", direction)).lower() == "long"
+            sl = entry - risk if is_long else entry + risk
+            tp = entry + target_r * risk if is_long else entry - target_r * risk
+            exit_ts = event_ts + pd.Timedelta(minutes=int(tf) * 24 if tf.isdigit() else 120)
+            outcome = float(row.get(outcome_col, 0.0))
+            hit = bool(row.get(hit_col, False))
+            label_bits = [str(row.get("predictor", predictor)), str(row.get("session", session))]
+            if "review_bucket" in row and pd.notna(row.get("review_bucket")):
+                label_bits.insert(0, str(row.get("review_bucket")))
+            trades_json.append(
+                {
+                    "id": idx + 1,
+                    "direction": "LONG" if is_long else "SHORT",
+                    "entry_time": event_ts.isoformat(),
+                    "exit_time": exit_ts.isoformat(),
+                    "duration_min": float((exit_ts - event_ts).total_seconds() / 60),
+                    "entry_price": entry,
+                    "exit_price": tp if hit else sl if outcome <= -1 else entry + (outcome * risk if is_long else -outcome * risk),
+                    "exit_reason": f"ICT_{target.upper()}_{'HIT' if hit else 'MISS'}",
+                    "sl": sl,
+                    "tp1": tp,
+                    "pnl": outcome,
+                    "r_multiple": outcome,
+                    "label": " | ".join(label_bits),
+                    "mfe_r": float(row.get("mfe_r", 0.0)),
+                    "mae_r": float(row.get("mae_r", 0.0)),
+                }
+            )
+
+        candles_json = _candles_json_from_df(df)
+        structure_data = _strict_ict_structure_overlay(df[["ts", "open", "high", "low", "close"]], left=3, right=3)
+        report = {
+            "trades": len(trades_json),
+            "win_rate": sum(1 for t in trades_json if t["r_multiple"] > 0) / max(len(trades_json), 1),
+            "profit_factor": 0,
+            "max_drawdown_pct": 0,
+        }
+        gains = sum(t["r_multiple"] for t in trades_json if t["r_multiple"] > 0)
+        losses = abs(sum(t["r_multiple"] for t in trades_json if t["r_multiple"] < 0))
+        report["profit_factor"] = gains / losses if losses > 0 else gains
+        return jsonify(
+            {
+                "symbol": symbol,
+                "tf": tf,
+                "params": {
+                    "source": "strict_ict_events",
+                    "events_path": str(events_path),
+                    "predictor": predictor,
+                    "session": session,
+                    "direction": direction,
+                    "target": target,
+                },
+                "report": report,
+                "trades": trades_json,
+                "candles": candles_json,
+                "structure": structure_data,
+            }
+        )
 
     except Exception as e:
         import traceback

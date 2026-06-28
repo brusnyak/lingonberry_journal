@@ -201,6 +201,13 @@ def _load_from_index_dir(symbol: str, tf: str) -> pd.DataFrame:
         except Exception:
             pass
 
+    parquet_path = DATA_DIR / "index" / symbol / f"{symbol}{tf}.parquet"
+    if parquet_path.exists():
+        try:
+            return pd.read_parquet(parquet_path)
+        except Exception:
+            pass
+
     path = DATA_DIR / "index" / symbol / f"{symbol}{tf}.csv"
     if not path.exists():
         return pd.DataFrame()

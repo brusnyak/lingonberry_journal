@@ -9,12 +9,12 @@ from typing import Literal
 # GFT Account Rules
 # ──────────────────────────────────────────────
 
-GFT_RULES_25K_PRO = {
-    "name": "25k Pro 2-Step",
+GFT_RULES_25K_GOAT_2STEP = {
+    "name": "25k GOAT 2-Step",
     "initial_balance": 25_000,
     "phase1_target": 0.08,  # 8% = $2,000
-    "phase2_target": 0.05,  # 5% = $1,250
-    "daily_dd": 0.05,  # 5% balance-based
+    "phase2_target": 0.06,  # 6% = $1,500
+    "daily_dd": 0.04,  # 4% daily drawdown
     "max_loss": 0.10,  # 10% static → floor at $22,500
     "min_days_per_phase": 3,
     "min_profit_day_pct": 0.005,  # 0.5% = $125
@@ -87,10 +87,10 @@ class RiskRule:
 
 RISK_RULES: list[RiskRule] = [
     RiskRule(
-        account_name="25k Pro",
+        account_name="25k GOAT 2-Step",
         initial_balance=25_000,
-        max_daily_loss_pct=GFT_RULES_25K_PRO["daily_dd"],
-        max_overall_loss_pct=GFT_RULES_25K_PRO["max_loss"],
+        max_daily_loss_pct=GFT_RULES_25K_GOAT_2STEP["daily_dd"],
+        max_overall_loss_pct=GFT_RULES_25K_GOAT_2STEP["max_loss"],
     ),
     RiskRule(
         account_name="100k 1-Step",

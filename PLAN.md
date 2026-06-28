@@ -1,10 +1,15 @@
 # Prop Firm Engine — Development Plan
 
-Last updated: 2026-06-25
+Last updated: 2026-06-26
 
 ## Goal
 
-Build a mechanical trading engine that passes GFT prop firm challenges (25k + 100k accounts) using validated ICT/SMC patterns from manual trade analysis.
+Build a mechanical trading engine that can pass Goat Funded Trader challenges:
+
+- 25k 2 Step GOAT account.
+- 100k 1 Step account.
+
+The target is not a pretty full-period backtest. The target is repeated 30-day challenge windows with enough return, low drawdown, and no rule breaches.
 
 ## Data Summary (Manual Trades)
 
@@ -21,7 +26,19 @@ Build a mechanical trading engine that passes GFT prop firm challenges (25k + 10
 
 ## Core Philosophy
 
-Losses happen from poor analysis, not market randomness. If structure tells us where price is going, we exit when structure breaks against us — small loss, immediate. No ATR stops, no fixed targets. Structure defines everything.
+Structure is the operating model, but structure is not magic. The engine must prove:
+
+1. Direction filter: higher-timeframe state gives enough directional accuracy.
+2. Entry quality: sweep/MSS/FVG/OB sequence beats random intraday noise.
+3. Risk control: if structure changes against the trade, the trade is cut or reduced before a full stop whenever possible.
+4. Re-entry logic: one failed entry does not invalidate the daily thesis, but re-entry requires a fresh structure state.
+5. Challenge fit: every result is judged by 30-day windows and GFT drawdown rules.
+
+Bullshit failure mode: calling a discretionary chart idea an "engine" before it survives rolling OOS windows.
+
+Current evidence: structure direction is not globally correct. It is asset/session/regime-specific. XAU short Asia and GBPAUD short NY have useful pockets; XAU HTF-bull London/NY and NAS100 HTF-bear are anti-edge in the latest 120D direction test.
+
+Direction fix: use strict ICT sequencing, not loose regime labels. Bullish direction requires HH/HL plus bullish BOS. Bearish direction requires bearish CHoCH, new LL/LH, then bearish BOS. CHoCH alone is transition/no-trade.
 
 ## Strategy Architecture
 
@@ -105,12 +122,25 @@ This matches the industry-standard cost model. Previously in strategy_v2.py.
 
 ## Prop Firm Rules (Non-Negotiable)
 
-| Account | Daily DD | Max Loss | Target |
-|---------|----------|----------|--------|
-| 25k 2-Step | ≤5% (~$1,233) | ≤10% (~$2,466) | Phase 1: 8%, Phase 2: 5% |
-| 100k 1-Step | ≤4% (~$3,992) | ≤6% (~$5,988) | 10% |
+Primary source: Goat Funded Trader FAQ, checked 2026-06-26.
 
-**Binding constraint**: Daily DD (5% on 25k, 4% on 100k), not max DD. That 55-65% WR at 1:1.5-1:2 RR still passes cleanly.
+| Account | Model | Target | Daily DD | Max Loss | Min Trading Days | Leverage Eval |
+|---------|-------|--------|----------|----------|------------------|---------------|
+| 25k | 2 Step GOAT | Phase 1: 8%, Phase 2: 6% | 4% | 10% static | 3 days each phase | FX 1:100, indices/commodities 1:20 |
+| 100k | 1 Step | 10% | 4% | 6% static | 3 days | FX 1:100, indices/commodities 1:20 |
+
+Internal pass gate is stricter than the firm:
+
+| Gate | Requirement |
+|------|-------------|
+| Rolling window | Every 30D test window reported separately |
+| Max DD | Prefer <2%; reject >3% unless return is exceptional |
+| Daily loss | Prefer <1.5%; hard reject near 4% |
+| Return | 25k 2-step phase target: 8% and 6%; 100k 1-step target: 10% |
+| Trades | Zero-trade days allowed; forced activity is a bug |
+| Risk/trade search | 0.10%, 0.15%, 0.20%, 0.25%, 0.30%, 0.40%, 0.50% |
+
+Binding constraint: 100k 1-step has only 6% static max loss, so it controls the portfolio risk design.
 
 ## Realistic Expectations
 
@@ -118,8 +148,8 @@ This matches the industry-standard cost model. Previously in strategy_v2.py.
 |--------|--------|----------------------|
 | Win rate | 83% | 55-65% |
 | Risk:Reward | 1:1.5-1:2 | 1:1.5-1:2 |
-| Monthly return | — | 5-10% |
-| Max DD | — | 8-12% per 30-day |
+| 30D return | — | 6-10% only after OOS proof |
+| Max DD | — | <2-3% preferred |
 | Trades/day | — | 1-3 |
 
 **Why the drop**: Discretionary + hindsight vs. mechanical rules. The edge is real, but execution won't be perfect.
@@ -128,24 +158,25 @@ This matches the industry-standard cost model. Previously in strategy_v2.py.
 
 | Variable | Values | Purpose |
 |----------|--------|---------|
-| Pairs | GBPUSD, EURUSD | Available 1m data |
+| Assets | XAUUSD, NAS100, GBPJPY, GBPUSD, EURUSD, GBPAUD | Gold and NAS are allowed; FX remains the structure thesis |
 | Bias TF | 4H only, 1H only, 4H+1H same | Test all |
 | Entry TF | 1m, 5m | Compare noise vs precision |
 | Sweep | Required, Not required | Test filter impact |
 | Partials | 50/30/20, 50/50, 30/30/40, 100 (single) | Test all |
 | Targets | Daily, Session, 50% FVG, Fib exts, ALL | Test individually |
-| Data window | 30 days (latest available) | Consistent comparison |
+| Trade management | fixed SL, structure-cut, scale-down-on-CHoCH, re-entry allowed once | Test whether structure monitoring reduces DD |
+| Data window | rolling 30D + 7-14D structure warmup | Challenge-realistic comparison |
 
-**Estimated**: 2 × 3 × 2 × 2 × 4 × 5 = **480 configurations**
+First target is not max return. First target is a stable profile: positive 30D return, DD below 2-3%, no daily breach, and no obvious lookahead.
 
 ## Data Sources
 
-| Symbol | 1m | 5m | 15m | 1H | 4H | Daily |
-|--------|----|----|-----|----|----|-------|
-| GBPUSD | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| EURUSD | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-
-All files in `data/market_data/` as parquet with columns: ts, open, high, low, close, volume. 1m truncated to ~100k rows (~3 months) by yfinance.
+| Asset class | State |
+|-------------|-------|
+| FX majors/crosses | 21 symbols with 5m/15m/30m/60m/240m coverage to 2026-06-23; 1m is shorter, roughly from 2026-03-16 |
+| Gold | XAUUSD available and currently produces the most TrIct trades |
+| NAS100 | CSV exists, but format/history must be normalized before serious tests |
+| Crypto | Useful architecture from `feature/crypto-scaling-engine`, but not part of this GFT forex/index/commodity challenge engine |
 
 ## Obsidian Vault
 
@@ -155,43 +186,103 @@ Action: archive old content, rebuild with only validated results from our own sw
 
 ## Work Plan
 
-### Phase 1: Wire Structure (Today)
-- [ ] Create backend endpoint in webapp to serve structure data from structure_lib
-- [ ] Wire structure-overlay.js to use real structure data
-- [ ] Test with GBPUSD, EURUSD on 1m/5m/15m/1H/4H
-- [ ] Verify: can we see HH/HL/LH/LL, BOS/CHoCH, FVGs, OBs on chart?
+### Phase 1: Correctness + Review Surface
+- [x] Review UI can run TrFvg and TrIct without crypto leverage controls.
+- [x] TrIct review API uses structure warmup before the selected test window.
+- [x] Remove hardcoded cTrader credentials from data fetch script.
+- [x] Normalize NAS100 data into standard `ts/open/high/low/close/volume` schema.
+- [x] Add GFT account presets to reporting: 25k 2-step GOAT and 100k 1-step.
+- [ ] Add rule-breach columns to every result: return target hit, max daily loss, static max loss, min valid days.
 
-### Phase 2: Codify Strategy (This Week)
-- [ ] Build `backtesting/strategies/prop_firm_v1.py` using structure_lib
-- [ ] Implement CHoCH/BOS entry logic (93% WR pattern from manual trades)
-- [ ] Add liquidity sweep detection (87% WR pattern)
-- [ ] Add FVG 50% entry (87% WR pattern)
-- [ ] Add structural stop loss with ATR buffer
-- [ ] Add hybrid exit system (partials + trailing)
-- [ ] Run first sweep (30 days, GBPUSD)
+### Phase 2: Engine Candidate
+- [x] Build first `backtesting/strategies/prop_firm_structure_v1.py` candidate.
+- [ ] Implement state machine: HTF bias -> liquidity sweep -> MSS/ChoCH -> FVG/OB retest -> entry.
+- [ ] Add active structure monitor: exit/reduce if 1m/5m structure flips against the trade.
+- [x] Add direction/session/no-structure-cut controls to the V1 runner.
+- [x] Add direction accuracy test for causal structure predictors.
+- [x] Add target-before-stop study for 0.5R/1R/1.5R/2R/3R.
+- [x] Add strict ICT structure module: HH/HL -> CHoCH -> LL/LH -> BOS down, and mirror for bullish.
+- [x] Add SMC/zigzag audit script for structure sanity checks.
+- [x] Add strict ICT triple-barrier direction accuracy script.
+- [ ] Add intraday re-entry: max 1-2 attempts per thesis, only after fresh sweep/MSS.
+- [ ] Add target hierarchy: opposing liquidity first, then partials, then structure runner.
+- [ ] Run first sweep on XAUUSD, then NAS100 after normalization, then FX basket.
 
 ### Phase 3: Validate (This Week)
 - [ ] Review sweep results, fix bugs
-- [ ] Run monthly rolling windows (per-window structure + 14-day lookback buffer)
-- [ ] Test on EURUSD
+- [ ] Run rolling 30D windows with 7-14D structure warmup.
+- [x] Add first online parity check for causal structure features.
+- [ ] Expand parity checks across all target assets/timeframes before trusting any result.
+- [ ] Test account sizes/rules separately: 25k 2-step GOAT, 100k 1-step
 - [ ] Archive deprecated Obsidian content
 - [ ] Document validated configs
 
 ### Phase 4: Deploy (Next Week)
-- [ ] Fix TradeLocker client for live signal execution
-- [ ] Paper bot with best config
-- [ ] Oracle server deployment
-- [ ] Obsidian trade journal from validated data
-- [ ] LLM-assisted post-trade review pipeline
+- [ ] cTrader demo adapter: read account, quotes, positions, and orders.
+- [ ] cTrader demo paper execution only: place/modify/close micro trades behind a hard safety flag.
+- [ ] Run 2-4 weeks on cTrader demo with full audit logs.
+- [ ] Only after cTrader demo stability: wire TradeLocker demo.
+- [ ] Only after TradeLocker demo stability: consider GFT live account interaction.
+- [ ] Obsidian trade journal from validated data.
+- [ ] LLM-assisted post-trade review pipeline.
 
 ## Non-Goals (Removed from Scope)
 
 - VWAP/EMA bias (replaced with pure structure)
-- ATR stops (replaced with structural stops)
-- Session filters (did not improve results)
+- ATR-only stops (ATR buffer is allowed around structural stops)
+- Session filters as blind optimization (sessions are context, not edge by themselves)
 - Telegram scraper (visual content not reliably extractable)
-- Fixed R:R targets (replaced with adaptive hybrid exit)
-- Correlation or pair-specific analysis (losses = analysis issue, not pair issue)
+- Fixed R:R-only exits (adaptive hybrid exit remains in scope)
+- ML before OOS-stable structure rules
+
+## Latest Structure Findings
+
+Test date: 2026-06-26. Data window: latest 120D unless stated.
+
+Direction accuracy says structure is a filter candidate, not a complete strategy:
+
+| Slice | Sample | Direction Read |
+|-------|-------:|----------------|
+| XAUUSD HTF-bull long NY/London | 36 each | Strong anti-edge in forward 24 bars |
+| XAUUSD bear/short Asia/NY | 2,628+ HTF-bear NY, 5,627 entry-bear Asia | Positive but not enough alone |
+| GBPAUD entry+HTF bear short NY | 2,140 | Best high-sample FX pocket |
+| NAS100 HTF-bear short | 5,477+ | Anti-edge; do not short NAS just because structure says bear |
+
+Target-before-stop study:
+
+| Slice | n | Best Read |
+|-------|--:|-----------|
+| EURUSD HTF-bull long London | 36 | Strong 1.5R/2R math, but V1 sweep/MSS produced 0 trades in latest 30D |
+| GBPAUD entry+HTF bear short NY | 2,140 | Positive but modest: `exp_1.5R +0.11R`, `exp_2R +0.14R` |
+| XAUUSD BOS-down short NY | 88 | Positive: `exp_1R +0.22R`, `exp_2R +0.28R` |
+| XAUUSD entry+HTF bear short | 2,201 NY / 4,698 Asia | 1R weak, 1.5R/2R slightly positive |
+
+V1 strategy results:
+
+| Config | Window | Trades | Return | Max DD | Verdict |
+|--------|--------|-------:|-------:|-------:|---------|
+| GBPAUD short NY, HTF, 2R, no structure-cut | 2026-05-24..2026-06-23 | 7 | +0.92% | 0.63% | Clean but too few trades and too low return |
+| GBPAUD short NY, HTF, 2R, no structure-cut | 2026-02-24..2026-06-23 | 28 | -1.45% | 3.27% | Reject: 30D slice was noise |
+| XAUUSD short Asia, 2R, no structure-cut | 2026-02-24..2026-06-23 | 61 | +4.21% | 3.57% | Research-only: return decent, DD too high, misses target |
+
+Conclusion: if direction is right, target selection matters. But V1 proves the stronger point: direction is only right in specific pockets, and the current sweep/MSS entry does not harvest enough of those pockets to pass GFT rules.
+
+Strict ICT audit:
+
+| Test | Result |
+|------|--------|
+| XAUUSD 5m latest 30D strict ICT | 1,298 swings, 43 bullish BOS, 42 bearish BOS, 42 bullish CHoCH, 42 bearish CHoCH |
+| SMC reference on same sample | 1,536 swings, 378 BOS, 203 CHoCH |
+| Verdict | SMC is useful for cross-checking definitions, but too noisy/permissive as the production direction engine without causal filtering |
+
+Strict ICT 120D triple-barrier direction result:
+
+| Slice | n | Hit 1R | Exp 1R | Exp 2R | Verdict |
+|-------|--:|-------:|-------:|-------:|---------|
+| XAUUSD bearish BOS NY | 24 | 58.3% | +0.38R | +0.52R | Best pocket, needs more sample |
+| EURUSD bearish BOS Asia | 59 | 55.9% | +0.30R | +0.25R | Useful candidate |
+| NAS100 bullish BOS Asia | 49 | 46.9% | +0.19R | +0.24R | Long-only candidate; avoids bearish anti-edge |
+| GBPAUD bearish state NY | 58 | 46.6% | +0.14R | +0.14R | Modest, not enough alone |
 
 ## Code Locations
 

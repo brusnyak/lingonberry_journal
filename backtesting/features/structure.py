@@ -241,14 +241,9 @@ def _confirmed_pivots(high: np.ndarray, low: np.ndarray, ts: list, cfg: Structur
         }
 
         if last_type == event["swing_type"] and last_event_idx >= 0:
-            prev = events[last_event_idx]
-            replace = (
-                event["swing_type"] == "high" and event["price"] > prev["price"]
-            ) or (
-                event["swing_type"] == "low" and event["price"] < prev["price"]
-            )
-            if replace:
-                events[last_event_idx] = event
+            # Causal rule: do not retroactively replace a confirmed pivot with
+            # a later, more extreme same-type pivot. Full-history replacement
+            # makes online/live structure differ from backtest structure.
             continue
 
         events.append(event)

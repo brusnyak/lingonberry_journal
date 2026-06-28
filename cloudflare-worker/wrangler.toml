@@ -1,0 +1,8 @@
+name = "ctrader-callback"
+main = "src/index.js"
+compatibility_date = "2026-06-27"
+workers_dev = true
+
+routes = [
+  { pattern = "recareo.uk/callback*", zone_id = "d85d46f9a26a544442760a0ec82ac8e4" }
+]

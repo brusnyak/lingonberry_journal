@@ -16,9 +16,12 @@
   #config label { font-size: 10px; color: #555; display: block; margin-bottom: 2px; }
   #config input, #config select { width: 100%; background: #1a1a1a; border: 1px solid #333; color: #ccc; padding: 4px 6px; border-radius: 3px; font-size: 11px; font-family: inherit; }
   #config .full { grid-column: 1 / -1; }
-  #run-btn { grid-column: 1 / -1; background: #2563eb; color: #fff; border: none; padding: 7px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
+  #run-btn, #gold-events-btn { grid-column: 1 / -1; background: #2563eb; color: #fff; border: none; padding: 7px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
   #run-btn:hover { background: #1d4ed8; }
   #run-btn:disabled { background: #333; color: #555; cursor: not-allowed; }
+  #gold-events-btn { background: #92400e; }
+  #gold-events-btn:hover { background: #b45309; }
+  #gold-events-btn:disabled { background: #333; color: #555; cursor: not-allowed; }
 
   #stats { padding: 7px 14px; border-bottom: 1px solid #222; display: flex; gap: 10px; flex-wrap: wrap; }
   .stat { display: flex; flex-direction: column; }
@@ -111,8 +114,6 @@
         <option value="GBPJPY">GBPJPY</option>
         <option value="GBPAUD">GBPAUD</option>
         <option value="GBPUSD">GBPUSD</option>
-        <option value="BTCUSD">BTCUSD</option>
-        <option value="ETHUSD">ETHUSD</option>
       </select>
     </div>
     <div>
@@ -161,6 +162,10 @@
         </select>
       </div>
       <div>
+        <label>Risk %</label>
+        <input type="number" id="p-risk" value="0.5" step="0.05" min="0.1">
+      </div>
+      <div>
         <label>Context bars</label>
         <input type="number" id="cfg-context" value="150" min="20">
       </div>
@@ -176,6 +181,7 @@
       </div>
     </div>
     <button id="run-btn" onclick="runBacktest()">▶ RUN BACKTEST</button>
+    <button id="gold-events-btn" onclick="loadGoldEvents()">LOAD GOLD ICT EVENTS</button>
   </div>
 
   <div id="stats"></div>
@@ -399,6 +405,57 @@ async function runBacktest() {
   }
 }
 
+async function loadGoldEvents() {
+  const btn = document.getElementById('gold-events-btn');
+  btn.disabled = true;
+  showLoading('Loading XAUUSD ICT events…');
+
+  currentSymbol = 'XAUUSD';
+  currentTf = '5';
+  currentStrategy = 'StrictICTEvents';
+  currentParams = {
+    source: 'strict_ict_events',
+    predictor: 'bearish_bos',
+    session: 'asia',
+    direction: 'short',
+    target: '1.5r',
+  };
+  document.getElementById('cfg-symbol').value = 'XAUUSD';
+  document.getElementById('cfg-tf').value = '5';
+
+  try {
+    const resp = await fetch('/api/review/ict-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol: 'XAUUSD',
+        tf: '5',
+        predictor: 'bearish_bos',
+        session: 'asia',
+        direction: 'short',
+        target: '1.5r',
+        limit: 50,
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) { alert(data.error + '\n' + (data.trace||'')); return; }
+
+    trades = data.trades || [];
+    allCandles = data.candles || [];
+    structureData = data.structure || { pivots: [], bos_events: [] };
+    userLabels = {};
+    if (drawingEngine) drawingEngine.setCandles(allCandles);
+    renderStats(data.report);
+    renderTradeList();
+    if (trades.length > 0) showTrade(0);
+  } catch(e) {
+    alert('Fetch error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    hideLoading();
+  }
+}
+
 // ── Show trade ────────────────────────────────────────────────────────────────
 function showTrade(idx) {
   if (idx < 0 || idx >= trades.length) return;
@@ -606,6 +663,7 @@ function updateMeta(t) {
   document.getElementById('m-exit').textContent   = fmt(t.exit_time);
   document.getElementById('m-dir').textContent    = t.direction;
   document.getElementById('m-reason').textContent = t.exit_reason;
+  if (t.label) document.getElementById('m-reason').textContent = `${t.exit_reason} · ${t.label}`;
   const r = t.r_multiple;
   const rEl = document.getElementById('m-r');
   rEl.textContent = r != null ? (r >= 0 ? '+' : '') + r.toFixed(2) + 'R' : '—';

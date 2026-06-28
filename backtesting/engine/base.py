@@ -89,3 +89,7 @@ class Strategy(ABC):
 
     def on_partial(self, trade: object, state: EngineState) -> None:
         """Called after each partial close (TP1, TP2). Override if needed."""
+
+    def should_close(self, position: object, bar: BarData, state: EngineState) -> bool:
+        """Return True to close a position at the current bar close."""
+        return False

@@ -295,6 +295,35 @@ def run(
                     is_sl_hit = True
 
                 if exit_code == 0:
+                    state = _make_state(equity, initial_equity, open_positions, closed_trades, i)
+                    if strategy.should_close(pos, bar, state):
+                        close_lots = pos.lots_remaining
+                        fill = costs.exit_fill(bar.close, pos.direction.value, is_sl=False)
+                        runner_frac = close_lots / pos.lots if pos.lots > 0 else 1.0
+                        comm_share = _commission_for_exit(costs, pos, close_lots, fill, runner_frac, is_sl=False)
+                        funding = _funding_for_exit(costs, pos, close_lots, bar.ts)
+                        pnl = _calc_pnl(costs, pos, fill, close_lots) - comm_share - funding
+                        equity += pnl
+                        trade_id += 1
+                        ct = ClosedTrade(
+                            id=trade_id,
+                            direction=pos.direction,
+                            entry_price=pos.entry_price,
+                            entry_time=pos.entry_time,
+                            exit_price=fill,
+                            exit_time=bar.ts,
+                            exit_reason=ExitReason.SIGNAL,
+                            lots=close_lots,
+                            pnl=pnl,
+                            r_multiple=_r_mult_net(pos, close_lots, costs, pnl),
+                            label=pos.label if hasattr(pos, "label") else "",
+                            sl=pos.original_sl,
+                            tp1=pos.tp1 or 0.0,
+                        )
+                        closed_trades.append(ct)
+                        strategy.on_close(ct, _make_state(equity, initial_equity, remaining, closed_trades, i))
+                        continue
+
                     # Update trailing stop if TP1 already hit
                     if pos.trail and pos.tp1_hit:
                         _update_trail(pos, bar)
