@@ -58,3 +58,9 @@ webapp/node_modules/
 
 # ── IDE ──
 .vscode/
+
+# scratch notes / pasted transcripts (not project files)
+notes.txt
+notes*.txt
+core/config.txt
+catboost_info/

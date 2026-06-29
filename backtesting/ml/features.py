@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from backtesting.engine.data import load_data
-from backtesting.structure_lib.vbt_indicators import compute_all
+from backtesting.features.structure import build_structure_index, StructureConfig
 
 # TA-Lib is optional — if unavailable, candle pattern features are zeros
 try:
@@ -65,42 +65,49 @@ def features_from_ohlc(
     else:
         df = df.reset_index(drop=True)
 
-    # ── Structure indicators (vbt_indicators) ───────────────────────────
-    ind = compute_all(
-        df, swing_left=swing_left, swing_right=swing_right,
-        fvg_min_gap_atr_mult=fvg_min_gap_mult,
-    )
-
-    struct = ind["structure"]
-    fvg = ind["fvg"]
-    sweeps = ind["sweeps"]
-
-    # Extract 1D arrays (single param combo)
-    trend = struct.trend.values[:, 0].astype(np.int8)
-    last_hh = struct.last_hh.values[:, 0]
-    last_hl = struct.last_hl.values[:, 0]
-    last_lh = struct.last_lh.values[:, 0]
-    last_ll = struct.last_ll.values[:, 0]
-    bull_bos = struct.bullish_bos.values[:, 0]
-    bear_bos = struct.bearish_bos.values[:, 0]
-    bull_choch = struct.bullish_choch.values[:, 0]
-    bear_choch = struct.bearish_choch.values[:, 0]
-
-    fvg_kind = fvg.kind.values[:, 0].astype(np.int8)
-    fvg_top = fvg.top.values[:, 0]
-    fvg_bot = fvg.bottom.values[:, 0]
-
-    sweep_dir = sweeps.direction.values[:, 0].astype(np.int8)
-    sweep_reclaim = sweeps.reclaim.values[:, 0]
-    sweep_pool = sweeps.pool_level.values[:, 0]
-
-    # ── Feature columns ──────────────────────────────────────────────────
+    # ── Common arrays ────────────────────────────────────────────────────
     n = len(df)
     high = df["high"].to_numpy(dtype=float)
     low = df["low"].to_numpy(dtype=float)
     close = df["close"].to_numpy(dtype=float)
     ts = df["ts"].to_numpy(dtype="datetime64[ns]") if "ts" in df.columns else None
 
+    # ── Structure features (verified engine, causal) ────────────────────
+    # build_structure_index emits swings at their CONFIRMATION timestamp
+    # (pivot_i + right_bars), so all features are causal.
+    st = build_structure_index(
+        df,
+        StructureConfig(left=swing_left, right=swing_right, min_swing_atr=0.0),
+    )
+
+    regime_map = {"bull": 1, "bear": -1, "neutral": 0}
+    trend = np.array([regime_map.get(r, 0) for r in st["regime"]], dtype=np.int8)
+    last_hh = st["last_hh"].to_numpy(dtype=float)
+    last_hl = st["last_hl"].to_numpy(dtype=float)
+    last_lh = st["last_lh"].to_numpy(dtype=float)
+    last_ll = st["last_ll"].to_numpy(dtype=float)
+    bull_bos = st["bos_up"].to_numpy(dtype=bool)
+    bear_bos = st["bos_down"].to_numpy(dtype=bool)
+    bull_choch = st["choch_up"].to_numpy(dtype=bool)
+    bear_choch = st["choch_down"].to_numpy(dtype=bool)
+    last_swing_high = st["last_swing_high"].to_numpy(dtype=float)
+    last_swing_low = st["last_swing_low"].to_numpy(dtype=float)
+    sweep_high_flag = st["sweep_high"].to_numpy(dtype=bool)
+    sweep_low_flag = st["sweep_low"].to_numpy(dtype=bool)
+
+    # ── FVG features (pure-numpy 3-bar FVG, causal: uses bars i-2,i-1,i) ─
+    # Replaces the old vbt FVGInd (which needed vectorbt). Same semantics:
+    # bullish gap when low[i] > high[i-2]; bearish when high[i] < low[i-2];
+    # gap must clear min_gap_atr_mult * ATR. All inputs are closed bars.
+    atr = _atr_series(high, low, close)
+    fvg_kind, fvg_top, fvg_bot = _fvg_arrays(high, low, atr, fvg_min_gap_mult)
+
+    # ── Sweep features from verified engine (no future reclaim check) ───
+    sweep_dir = np.zeros(n, dtype=np.int8)
+    sweep_dir[sweep_low_flag] = 1    # bullish sweep (low taken)
+    sweep_dir[sweep_high_flag] = -1  # bearish sweep (high taken)
+
+    # ── Feature columns ──────────────────────────────────────────────────
     features = {}
     features["close"] = close
     features["high"] = high
@@ -114,7 +121,6 @@ def features_from_ohlc(
     features["bear_choch"] = bear_choch.astype(np.float64)
 
     # Distance to last swing points (ATR-normalized)
-    atr = _atr_series(high, low, close)
     features["atr"] = atr
 
     features["hh_dist_atr"] = (high - last_hh) / np.maximum(atr, 1e-10)
@@ -135,10 +141,14 @@ def features_from_ohlc(
         elif fvg_kind[i] == -1:
             features["fvg_active"][i] = 1.0 if high[i] >= fvg_bot[i] and close[i] <= fvg_top[i] else 0.0
 
-    # 3. Liquidity sweep features
+    # 3. Liquidity sweep features (from verified engine — no lookahead)
     features["sweep_dir"] = sweep_dir.astype(np.float64)
-    features["sweep_reclaim"] = sweep_reclaim.astype(np.float64)
-    features["pool_dist_atr"] = np.abs(close - sweep_pool) / np.maximum(atr, 1e-10)
+    # Reclaim removed: verified engine doesn't have forward-looking reclaim check
+    # Pool distance: distance from close to most recent confirmed swing level
+    pool_dist = np.full(n, np.nan, dtype=float)
+    pool_dist[sweep_low_flag] = close[sweep_low_flag] - last_swing_low[sweep_low_flag]
+    pool_dist[sweep_high_flag] = last_swing_high[sweep_high_flag] - close[sweep_high_flag]
+    features["pool_dist_atr"] = pool_dist / np.maximum(atr, 1e-10)
 
     # 4. Session/time features
     if ts is not None:
@@ -363,6 +373,31 @@ def _atr_series(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: in
     for i in range(period, n):
         atr[i] = atr[i - 1] * (1 - alpha) + tr[i] * alpha
     return atr
+
+
+def _fvg_arrays(high: np.ndarray, low: np.ndarray, atr: np.ndarray,
+                min_gap_mult: float = 0.01):
+    """Per-bar 3-bar fair-value-gap arrays. Causal: bar i uses bars i-2,i-1,i only.
+
+    Mirrors the old vbt FVGInd semantics without the vectorbt dependency:
+      bullish (kind=+1): low[i] > high[i-2]  -> top=low[i],  bottom=high[i-2]
+      bearish (kind=-1): high[i] < low[i-2]  -> top=low[i-2], bottom=high[i]
+    Gap must clear min_gap_mult * ATR[i] to count.
+    """
+    n = len(high)
+    kind = np.zeros(n, dtype=np.int8)
+    top = np.full(n, np.nan)
+    bot = np.full(n, np.nan)
+    for i in range(2, n):
+        a = atr[i] if np.isfinite(atr[i]) and atr[i] > 0 else 0.0
+        min_gap = a * min_gap_mult
+        c1_h, c1_l = high[i - 2], low[i - 2]
+        c3_h, c3_l = high[i], low[i]
+        if c3_l > c1_h and (c3_l - c1_h) >= min_gap:
+            kind[i] = 1; top[i] = c3_l; bot[i] = c1_h
+        elif c3_h < c1_l and (c1_l - c3_h) >= min_gap:
+            kind[i] = -1; top[i] = c1_l; bot[i] = c3_h
+    return kind, top, bot
 
 
 def _rolling_percentile(series: np.ndarray, window: int = 100) -> np.ndarray:

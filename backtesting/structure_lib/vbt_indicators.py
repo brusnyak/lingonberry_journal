@@ -1,6 +1,16 @@
 """
 VectorBT IndicatorFactory wrappers for structure_lib components.
 
+!!! QUARANTINED — LOOKAHEAD BIAS — DO NOT USE FOR FEATURES/DIRECTION !!!
+The SwingPoints/structure output here emits swings at the PIVOT bar (i), using
+bars i-left .. i+right. A trader at the close of bar i cannot know the swing is
+confirmed (that needs bar i+right). Any ML feature or direction signal built on
+this is leaking future data — this is the source of the old inflated 94%/62%
+"direction accuracy". Canonical causal engine is `backtesting/features/structure.py`
+(emits at confirm_ts = pivot_i + right). See scripts/audit_structure_compare.py.
+The 3-bar FVG func here IS causal, but was inlined into ml/features.py to drop
+the vectorbt dependency. Kept only for the legacy vbt_tr_ict_sweep strategy.
+
 All indicators use `from_custom_func` with Numba JIT and broadcast parameter
 grids as columns. Manual concatenation to avoid `apply_and_concat_multiple_nb`
 tuple compatibility issues.
