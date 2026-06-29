@@ -27,14 +27,9 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-warnings.filterwarnings("ignore", category=UserWarning, module="lightgbm")
-
-import lightgbm as lgb
-from lightgbm import LGBMClassifier
-from xgboost import XGBClassifier
-from catboost import CatBoostClassifier
-
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.inspection import permutation_importance
 from sklearn.preprocessing import LabelEncoder
 
 from backtesting.ml.features import build_feature_matrix
@@ -43,47 +38,27 @@ from backtesting.ml.labels import triple_barrier_labels_from_events, triple_barr
 
 @dataclass
 class EnsembleConfig:
-    """Ensemble model configuration."""
+    """Model configuration.
 
-    # LightGBM
-    lgb_params: dict = field(default_factory=lambda: {
-        "n_estimators": 500,
-        "max_depth": 6,
-        "num_leaves": 31,
+    sklearn-only (HistGradientBoostingClassifier). The project deliberately avoids
+    lightgbm/xgboost/catboost (heavy native deps, not installed). HistGB is the
+    right tool for this tabular, branchy feature set and ships with sklearn.
+    """
+
+    # HistGradientBoosting (sklearn) — shallow trees + L2 to resist overfit on
+    # a ~50/50 directional target where the literature says edge is thin.
+    hgb_params: dict = field(default_factory=lambda: {
+        "max_iter": 300,
+        "max_depth": 3,
         "learning_rate": 0.05,
-        "min_child_samples": 20,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "reg_alpha": 0.01,
-        "reg_lambda": 0.01,
+        "l2_regularization": 1.0,
+        "min_samples_leaf": 40,
+        "max_leaf_nodes": 15,
         "class_weight": "balanced",
+        "early_stopping": True,        # internal validation_fraction holdout
+        "validation_fraction": 0.15,
+        "n_iter_no_change": 30,
         "random_state": 42,
-        "verbose": -1,
-    })
-
-    # XGBoost
-    xgb_params: dict = field(default_factory=lambda: {
-        "n_estimators": 500,
-        "max_depth": 5,
-        "learning_rate": 0.05,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "reg_alpha": 0.01,
-        "reg_lambda": 0.01,
-        "eval_metric": "mlogloss",
-        "random_state": 42,
-        "verbosity": 0,
-    })
-
-    # CatBoost
-    cb_params: dict = field(default_factory=lambda: {
-        "iterations": 500,
-        "depth": 5,
-        "learning_rate": 0.05,
-        "l2_leaf_reg": 0.01,
-        "random_seed": 42,
-        "verbose": False,
-        "allow_writing_files": False,
     })
 
     # Training
@@ -91,6 +66,7 @@ class EnsembleConfig:
     test_size: float = 0.2  # fraction of window for validation
     min_trades_for_training: int = 50
     threshold: float = 0.6  # min probability to take signal
+    compute_importance: bool = False  # permutation importance (slow); off by default
 
 
 @dataclass
@@ -129,7 +105,11 @@ def train_ensemble(
     verbose: bool = False,
 ) -> TrainResult:
     """
-    Train LightGBM + XGBoost + CatBoost ensemble.
+    Train a single sklearn HistGradientBoosting classifier.
+
+    Returned in a one-entry ``models`` dict so the soft-vote API in
+    ``_ensemble_predict`` keeps working unchanged (and a future second model can
+    be slotted in without touching callers).
 
     Parameters
     ----------
@@ -137,12 +117,13 @@ def train_ensemble(
     y : ndarray of shape (n_samples,) — labels 0 (HOLD), 1 (LONG), 2 (SHORT)
     feature_names : list of str
     config : EnsembleConfig
-    eval_set : optional (X_val, y_val) for early stopping
+    eval_set : optional (X_val, y_val) — used for permutation importance only;
+        HistGB does its own internal early-stopping holdout.
     verbose : bool
 
     Returns
     -------
-    TrainResult with trained models and feature importances.
+    TrainResult with the trained model and (optional) permutation importances.
     """
     if config is None:
         config = EnsembleConfig()
@@ -150,61 +131,30 @@ def train_ensemble(
     if len(np.unique(y)) < 2:
         raise ValueError(f"Need at least 2 classes, got {np.unique(y)}")
 
-    # Encode labels -1/0/1 → -1/0/1 for binary, 0/1/2 for multiclass
     le = LabelEncoder()
     y_enc = le.fit_transform(y)
 
-    if eval_set is not None:
+    if verbose:
+        print("Training HistGradientBoosting...")
+    model = HistGradientBoostingClassifier(**config.hgb_params)
+    model.fit(X, y_enc)
+    models = {"histgb": model}
+
+    # ── Feature importances (permutation; HistGB has no native ones) ─────────
+    # n_jobs=1 — loky parallelism is flaky under Python 3.14 (see meta_label.py).
+    fi: dict[str, float] = {}
+    if config.compute_importance and eval_set is not None:
         X_val, y_val = eval_set
-        y_val_enc = le.transform(y_val)
-        eval_data = [(X_val, y_val_enc)]
-    else:
-        eval_data = None
-
-    models = {}
-
-    # ── LightGBM ────────────────────────────────────────────────────────────
-    if verbose:
-        print("Training LightGBM...")
-    lgb_model = LGBMClassifier(**config.lgb_params)
-    lgb_callbacks = [lgb.early_stopping(50)] if eval_data else None
-    lgb_model.fit(
-        X, y_enc,
-        eval_set=eval_data,
-        callbacks=lgb_callbacks,
-        feature_name=feature_names,
-    )
-    models["lightgbm"] = lgb_model
-
-    # ── XGBoost ─────────────────────────────────────────────────────────────
-    if verbose:
-        print("Training XGBoost...")
-    xgb = XGBClassifier(**config.xgb_params)
-    xgb.fit(
-        X, y_enc,
-        eval_set=eval_data,
-        verbose=False,
-    )
-    models["xgboost"] = xgb
-
-    # ── CatBoost ─────────────────────────────────────────────────────────────
-    if verbose:
-        print("Training CatBoost...")
-    cb = CatBoostClassifier(**config.cb_params)
-    cb.fit(
-        X, y_enc,
-        eval_set=eval_data,
-        verbose=False,
-    )
-    models["catboost"] = cb
-
-    # ── Feature importances ──────────────────────────────────────────────────
-    fi = {}
-    for name, model in models.items():
-        if hasattr(model, "feature_importances_"):
-            for j, imp in enumerate(model.feature_importances_):
+        try:
+            r = permutation_importance(
+                model, X_val, le.transform(y_val),
+                n_repeats=5, random_state=42, n_jobs=1,
+            )
+            for j, imp in enumerate(r.importances_mean):
                 fname = feature_names[j] if j < len(feature_names) else f"f{j}"
-                fi[f"{name}:{fname}"] = float(imp)
+                fi[f"histgb:{fname}"] = float(imp)
+        except Exception:
+            pass
 
     return TrainResult(
         models=models,
