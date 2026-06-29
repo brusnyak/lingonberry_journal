@@ -1,9 +1,19 @@
 # V2 Strategy Foundation — Direction ML Engine for Prop Firm Trading
 
+> ⛔️ **DEPRECATED / INVALID (2026-06-29).** The "~62%/94% direction accuracy" below was
+> produced by a **lookahead-biased** structure engine (`structure_lib/vbt_indicators.py` emits
+> swing labels at the pivot bar, using future bars i..i+right). After de-leaking onto the causal
+> `features/structure.py` (commit 17bf7b4), real causal direction accuracy at structure events is
+> **~44–48% for continuation (anti-predictive after costs), ~50–53% for the fade** — i.e. roughly
+> coin-flip, matching the literature (~50% on hourly OHLC). The only **period-stable** directional
+> bias is a small fade/reversal tendency on ranging crosses (GBPAUD, EURAUD, AUDCHF, GBPCHF,
+> AUDUSD, EURGBP). See `docs/REASONING_ENGINE.md` and `scripts/fade_edge_validate.py`. **Do not
+> build on the numbers below.** Kept only for history.
+
 > Based on 365 days of data across 5 major forex pairs (GBPAUD, EURUSD, GBPUSD, GBPJPY, EURJPY)
 > at 60m timeframe, 84-column feature matrix, walk-forward validated ensemble.
 
-## Core Finding: ML Direction Prediction Works at ~62%
+## Core Finding: ML Direction Prediction Works at ~62% — ⛔️ INVALID, see banner above
 
 | Metric | Structure Alone | ML Ensemble | Improvement |
 |--------|:-:|:-:|:-:|
