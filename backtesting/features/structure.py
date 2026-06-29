@@ -18,6 +18,7 @@ import pandas as pd
 class StructureConfig:
     left: int = 2
     right: int = 2
+    min_swing_atr: float = 0.0  # minimum swing size in local ATR units (0=no threshold, 0.25-0.5 recommended)
 
 
 def build_structure_index(df: pd.DataFrame, config: StructureConfig | None = None) -> pd.DataFrame:
@@ -105,10 +106,13 @@ def build_structure_index(df: pd.DataFrame, config: StructureConfig | None = Non
                 last_swing_low = swing_price
                 last_swing_low_ts = swing_ts
 
-            if not np.isnan(last_hh) and not np.isnan(last_hl):
-                regime = "bull"
-            if not np.isnan(last_lh) and not np.isnan(last_ll):
-                regime = "bear"
+            # Regime only transitions from neutral, or via CHOCH (above).
+            # This prevents bull→bear or bear→bull flips without a structure break.
+            if regime == "neutral":
+                if not np.isnan(last_hh) and not np.isnan(last_hl):
+                    regime = "bull"
+                elif not np.isnan(last_lh) and not np.isnan(last_ll):
+                    regime = "bear"
 
         bos_up = False
         bos_down = False
@@ -220,31 +224,75 @@ def build_structure_index(df: pd.DataFrame, config: StructureConfig | None = Non
     return out
 
 
-def _confirmed_pivots(high: np.ndarray, low: np.ndarray, ts: list, cfg: StructureConfig) -> list[dict]:
-    events = []
+def _confirmed_pivots(high: np.ndarray, low: np.ndarray,
+                      ts: list, cfg: StructureConfig) -> list[dict]:
+    """Find confirmed swing pivots with dual-pivot and min_swing_atr handling.
+
+    When a bar qualifies as BOTH swing high and low (large range bar), picks
+    the type with the larger move relative to local volatility. When neither
+    exceeds min_swing_atr * local_range, the bar is not a valid swing.
+    """
+    events: list[dict] = []
     last_type = ""
     last_event_idx = -1
+
+    # Precompute rolling local range for ATR-like thresholding
+    n = len(high)
+    local_range = np.full(n, np.nan)
+    window = cfg.left + cfg.right + 1
+    for i in range(n):
+        l = max(0, i - window // 2)
+        r = min(n, i + window // 2 + 1)
+        local_range[i] = np.median(high[l:r] - low[l:r])
+
     for pivot_i in range(cfg.left, len(high) - cfg.right):
         left = pivot_i - cfg.left
         right = pivot_i + cfg.right + 1
-        is_high = high[pivot_i] > high[left:pivot_i].max() and high[pivot_i] > high[pivot_i + 1:right].max()
-        is_low = low[pivot_i] < low[left:pivot_i].min() and low[pivot_i] < low[pivot_i + 1:right].min()
+
+        left_highs = high[left:pivot_i]
+        right_highs = high[pivot_i + 1:right]
+        left_lows = low[left:pivot_i]
+        right_lows = low[pivot_i + 1:right]
+
+        left_high_max = left_highs.max()
+        right_high_max = right_highs.max()
+        left_low_min = left_lows.min()
+        right_low_min = right_lows.min()
+
+        high_strength = high[pivot_i] - max(left_high_max, right_high_max)
+        low_strength = min(left_low_min, right_low_min) - low[pivot_i]
+
+        local_vol = local_range[pivot_i]
+        min_strength = cfg.min_swing_atr * local_vol if local_vol > 0 and not np.isnan(local_vol) else 0.0
+
+        is_high = high_strength > 0 and high_strength >= min_strength
+        is_low = low_strength > 0 and low_strength >= min_strength
+
         if not is_high and not is_low:
             continue
 
-        event = {
+        # Dual-pivot: pick the type with the stronger move
+        if is_high and is_low:
+            swing_type = "high" if high_strength >= low_strength else "low"
+        else:
+            swing_type = "high" if is_high else "low"
+
+        event: dict = {
             "confirm_i": pivot_i + cfg.right,
             "pivot_i": pivot_i,
             "pivot_ts": ts[pivot_i],
-            "swing_type": "high" if is_high else "low",
-            "price": float(high[pivot_i] if is_high else low[pivot_i]),
+            "swing_type": swing_type,
+            "price": float(high[pivot_i] if swing_type == "high" else low[pivot_i]),
         }
 
         if last_type == event["swing_type"] and last_event_idx >= 0:
-            # Causal rule: do not retroactively replace a confirmed pivot with
-            # a later, more extreme same-type pivot. Full-history replacement
-            # makes online/live structure differ from backtest structure.
-            continue
+            # Alternative-type rule: prevent consecutive same-type swings.
+            # But allow them if the minimum swing threshold is generous (> 1.0),
+            # meaning the user wants to see all possible swings.
+            if cfg.min_swing_atr > 1.0:
+                pass  # allow consecutive same-type
+            else:
+                continue
 
         events.append(event)
         last_type = event["swing_type"]
@@ -279,3 +327,5 @@ def _validate(df: pd.DataFrame, cfg: StructureConfig) -> None:
         raise ValueError(f"Missing OHLC columns: {sorted(missing)}")
     if cfg.left < 1 or cfg.right < 1:
         raise ValueError("left and right must be >= 1")
+    if cfg.min_swing_atr < 0:
+        raise ValueError("min_swing_atr must be >= 0")
