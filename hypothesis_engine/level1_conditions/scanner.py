@@ -15,7 +15,8 @@ import pandas as pd
 
 from backtesting.engine.data import load_data
 
-from hypothesis_engine.level0_statistical.scanner import _compute_stats, SESSIONS
+from core.constants import SESSIONS
+from hypothesis_engine.level0_statistical.scanner import _compute_stats
 from hypothesis_engine.level1_conditions.conditions import CONDITIONS
 
 
@@ -62,15 +63,16 @@ def scan_condition(
             "sessions": {},
         }
 
-    # Precompute forward returns
+    # Precompute forward returns (entry at open[i+1] for signal at bar i)
     close = arrays["close"]
+    open_p = arrays["open"]
     horizons = (1, 5, 20, 50)
     forward_rets = {}
     for h in horizons:
-        if h >= n:
+        if h >= n - 1:
             continue
         ret = np.full(n, np.nan)
-        ret[:n - h] = np.log(close[h:] / close[:n - h])
+        ret[:n - h - 1] = np.log(close[1 + h:] / open_p[1:n - h])
         forward_rets[h] = ret
 
     # Time of day
@@ -186,13 +188,14 @@ def rolling_condition_scan(
     if len(windows) < 2:
         return {"error": f"Only {len(windows)} window(s) for {symbol} {tf}"}
 
-    # Precompute forward returns for full series
+    # Precompute forward returns (entry at open[i+1] for signal at bar i)
+    open_p = arrays["open"]
     forward_rets = {}
     for h in horizons:
-        if h >= n:
+        if h >= n - 1:
             continue
         ret = np.full(n, np.nan)
-        ret[:n - h] = np.log(close[h:] / close[:n - h])
+        ret[:n - h - 1] = np.log(close[1 + h:] / open_p[1:n - h])
         forward_rets[h] = ret
 
     # Compute condition signal ONCE

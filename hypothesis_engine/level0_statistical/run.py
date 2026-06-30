@@ -27,8 +27,8 @@ if str(_root) not in sys.path:
 from hypothesis_engine.level0_statistical.scanner import (
     scan_pocket,
     scan_all_pairs,
-    SESSIONS,
 )
+from core.constants import SESSIONS
 from hypothesis_engine.level0_statistical.report import (
     format_results,
     pocket_row,

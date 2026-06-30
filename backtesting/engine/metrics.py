@@ -57,6 +57,9 @@ def compute(trades: Sequence[ClosedTrade], initial_equity: float = 10_000.0) -> 
     # Sharpe (daily grouping, approximate)
     sharpe = _sharpe(trades)
 
+    # Log-return equity curve (comparable with hypothesis engine's log returns)
+    log_returns_curve = _log_returns_curve(equity_curve)
+
     return {
         "trades": n,
         "win_rate": round(win_rate, 4),
@@ -84,7 +87,23 @@ def compute(trades: Sequence[ClosedTrade], initial_equity: float = 10_000.0) -> 
         # Per-trade breakdown for analysis
         "trade_pnls": [round(p, 2) for p in pnls],
         "trade_r_multiples": [round(r, 3) for r in r_multiples],
+        # Log returns of equity curve (for hypothesis engine comparison)
+        "log_returns_curve": log_returns_curve,
     }
+
+
+def _log_returns_curve(equity_curve: list[float]) -> list[float]:
+    """Log returns between consecutive equity points."""
+    if len(equity_curve) < 2:
+        return []
+    returns = []
+    for i in range(1, len(equity_curve)):
+        prev = equity_curve[i - 1]
+        if prev > 0:
+            returns.append(round(math.log(equity_curve[i] / prev), 8))
+        else:
+            returns.append(0.0)
+    return returns
 
 
 def _empty_report() -> dict:
@@ -114,6 +133,7 @@ def _empty_report() -> dict:
         "equity_curve": [],
         "trade_pnls": [],
         "trade_r_multiples": [],
+        "log_returns_curve": [],
     }
 
 

@@ -135,11 +135,11 @@ CTRADER_DIR = DATA_DIR / "ctrader"
 
 
 def _load_from_flat_parquet(symbol: str, tf: str) -> pd.DataFrame:
-    """Merge data/market_data + pine-review forex/metals + ctrader for maximum history."""
+    """Merge data/market_data + data/parquet forex/metals + ctrader for maximum history."""
     paths = [
         DATA_DIR / f"{symbol}{tf}.parquet",
-        PINE_REVIEW_DIR / "forex"  / f"{symbol}{tf}.parquet",
-        PINE_REVIEW_DIR / "metals" / f"{symbol}{tf}.parquet",
+        PARQUET_DIR / "forex"  / f"{symbol}{tf}.parquet",
+        PARQUET_DIR / "metals" / f"{symbol}{tf}.parquet",
         CTRADER_DIR / f"{symbol}{tf}.parquet",
     ]
     frames = []
@@ -193,13 +193,13 @@ def _load_from_forex_dir(symbol: str, tf: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-PINE_REVIEW_DIR = Path(__file__).resolve().parent.parent.parent / "pine-review" / "data" / "parquet"
+PARQUET_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "parquet"
 
 
 def _load_from_index_dir(symbol: str, tf: str) -> pd.DataFrame:
-    """data/market_data/index/{SYMBOL}/{SYMBOL}{tf}.csv or pine-review/data/parquet/indeces/{SYMBOL}{tf}.parquet"""
-    # Try pine-review parquet first (has NAS100, SPX, DJI data)
-    pine_path = PINE_REVIEW_DIR / "indeces" / f"{symbol}{tf}.parquet"
+    """data/market_data/index/{SYMBOL}/{SYMBOL}{tf}.csv or data/parquet/indeces/{SYMBOL}{tf}.parquet"""
+    # Try data/parquet indeces first (has NAS100, SPX, DJI data)
+    pine_path = PARQUET_DIR / "indeces" / f"{symbol}{tf}.parquet"
     if pine_path.exists():
         try:
             return pd.read_parquet(pine_path)

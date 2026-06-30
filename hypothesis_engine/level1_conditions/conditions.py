@@ -150,6 +150,79 @@ def bos(
     return signal
 
 
+# ── Condition 2b: Structure-aware BOS (HH/HL, LL/LH) ─────────────────
+
+def bos_structured(
+    open: np.ndarray, high: np.ndarray,
+    low: np.ndarray, close: np.ndarray,
+    lookback: int = 5,
+) -> np.ndarray:
+    """
+    Structure-aware Break of Structure.
+
+    Only fires when market structure aligns with the break direction:
+      - Bullish BOS only when in HH/HL structure (uptrend)
+      - Bearish BOS only when in LL/LH structure (downtrend)
+      - No signal in ranging / undefined structure
+
+    HH/HL = last 2 swing highs higher AND last 2 swing lows higher
+    LL/LH = last 2 swing highs lower  AND last 2 swing lows lower
+
+    Returns: +1 for bullish, -1 for bearish, 0 otherwise.
+    """
+    n = len(close)
+    sh = _swing_highs(high, lookback)
+    sl = _swing_lows(low, lookback)
+
+    signal = np.zeros(n, dtype=np.int64)
+
+    for i in range(1, n):
+        # Find last 2 swing highs
+        last_sh = -1
+        prev_sh = -1
+        for j in range(i - 1, -1, -1):
+            if sh[j]:
+                if last_sh == -1:
+                    last_sh = j
+                elif prev_sh == -1:
+                    prev_sh = j
+                    break
+
+        # Find last 2 swing lows
+        last_sl = -1
+        prev_sl = -1
+        for j in range(i - 1, -1, -1):
+            if sl[j]:
+                if last_sl == -1:
+                    last_sl = j
+                elif prev_sl == -1:
+                    prev_sl = j
+                    break
+
+        # Determine structure
+        uptrend = False
+        downtrend = False
+        if prev_sh >= 0 and prev_sl >= 0:
+            hh = high[last_sh] > high[prev_sh]  # higher high
+            hl = low[last_sl] > low[prev_sl]    # higher low
+            lh = high[last_sh] < high[prev_sh]  # lower high
+            ll = low[last_sl] < low[prev_sl]    # lower low
+            uptrend = hh and hl
+            downtrend = lh and ll
+
+        # Bullish BOS: break above swing high in uptrend
+        if uptrend and last_sh >= 0:
+            if close[i] > high[last_sh]:
+                signal[i] = 1
+
+        # Bearish BOS: break below swing low in downtrend
+        elif downtrend and last_sl >= 0:
+            if close[i] < low[last_sl]:
+                signal[i] = -1
+
+    return signal
+
+
 # ── Condition 3: Change of Character (CHoCH) ─────────────────────────
 
 def choch(
@@ -429,6 +502,7 @@ def outside_bar(
 CONDITIONS: dict[str, callable] = {
     "sweep": sweep,
     "bos": bos,
+    "bos_struct": bos_structured,
     "choch": choch,
     "fvg": fvg,
     "sma": sma_cross,

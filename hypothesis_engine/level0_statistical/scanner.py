@@ -15,16 +15,7 @@ import numpy as np
 import pandas as pd
 
 from backtesting.engine.data import load_data
-
-
-# Session definitions (UTC)
-SESSIONS = {
-    "asia":      (0, 7),
-    "london":    (7, 16),
-    "ny":        (12, 21),
-    "london_ny": (12, 16),   # overlap
-    "24h":       (0, 24),
-}
+from core.constants import SESSIONS
 
 
 def scan_pocket(

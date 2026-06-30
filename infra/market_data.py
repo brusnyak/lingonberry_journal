@@ -111,7 +111,10 @@ def _fetch_ohlcv_yfinance(
         ts_col = "Datetime" if "Datetime" in data.columns else "Date"
         data["ts"] = pd.to_datetime(data[ts_col], utc=True, errors="coerce")
         out = data[["ts", "open", "high", "low", "close", "volume"]].dropna(subset=["ts"]).copy()
-        return out.sort_values("ts").reset_index(drop=True)
+        out = out.sort_values("ts").reset_index(drop=True)
+        # yfinance may not support the requested interval (e.g. no 4H).
+        # Resample to the target timeframe so callers always get consistent bars.
+        return _resample_ohlcv(out, timeframe)
     except Exception:
         return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
@@ -277,6 +280,8 @@ def load_ohlcv_with_cache(
     cache_key = _get_cache_key(symbol, asset_type, timeframe, start, end)
     cached = _read_cached_frame(cache_key, ttl_seconds)
     if cached is not None:
+        if not cached.empty:
+            cached = _add_indicators(cached)
         return cached
     
     # Fetch fresh data

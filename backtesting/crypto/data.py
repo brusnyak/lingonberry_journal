@@ -24,7 +24,7 @@ import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "market_data"
 CRYPTO_EXCHANGES = ("binance", "bybit")
-PINE_REVIEW_DIR = Path(__file__).resolve().parent.parent.parent / "pine-review" / "data" / "parquet"
+PARQUET_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "parquet"
 
 
 # ── Helpers (duplicated from engine.data for independence) ────────────────────
@@ -110,8 +110,8 @@ def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) 
     else:
         paths.extend(DATA_DIR / "crypto" / ex / f"{symbol}{tf}.parquet" for ex in CRYPTO_EXCHANGES)
         paths.append(DATA_DIR / "crypto" / f"{symbol}{tf}.parquet")
-    # pine-review crypto parquets (BTCUSD, ETHUSD, XRPUSDT, ADAUSDT)
-    paths.append(PINE_REVIEW_DIR / "crypto" / f"{symbol}{tf}.parquet")
+    # data/parquet crypto parquets (BTCUSD, ETHUSD, XRPUSDT, ADAUSDT)
+    paths.append(PARQUET_DIR / "crypto" / f"{symbol}{tf}.parquet")
 
     for path in paths:
         if not path.exists():

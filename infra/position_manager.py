@@ -108,27 +108,15 @@ class PositionManager:
     Polls accounts, evaluates each position against structure/risk rules,
     adjusts SL/TP accordingly.
 
-    Provide either a connected ClientInterface (CtraderClient, TradelockerClient)
-    or let the manager create its own CtraderClient.
+    Requires a connected ClientInterface (TradelockerClient).
     """
 
     def __init__(
         self,
-        client: ClientInterface | None = None,
+        client: ClientInterface,
         account_ids: list[int] | None = None,
     ):
-        if client is not None:
-            self.client = client
-        else:
-            from infra.ctrader_client import CtraderClient
-            if not account_ids:
-                default = os.getenv("PM_ACCOUNT_IDS", "")
-                account_ids = [int(x) for x in default.split(",") if x.strip()]
-                if not account_ids:
-                    account_ids = [int(os.getenv("CTRADER_ACCOUNT_ID", "0"))]
-            log.info("Connecting accounts %s...", account_ids)
-            self.client = CtraderClient(account_ids=account_ids)
-            self.client.connect()
+        self.client = client
 
         self._account_ids = account_ids or self.client.account_ids
         self._managed: dict[int, ManagedPosition] = {}  # position_id → state

@@ -13,7 +13,8 @@ import numpy as np
 import pandas as pd
 
 from backtesting.engine.data import load_data
-from hypothesis_engine.level0_statistical.scanner import _compute_stats, SESSIONS
+from core.constants import SESSIONS
+from hypothesis_engine.level0_statistical.scanner import _compute_stats
 from hypothesis_engine.level1_conditions.conditions import CONDITIONS
 
 
@@ -54,7 +55,7 @@ def rolling_combo_scan(
     step_days: int = 15,
     horizons: tuple[int, ...] = (1, 5, 20, 50),
     max_windows: int = 40,
-    allow_oos: bool = True,
+    allow_oos: bool = False,
 ) -> dict:
     """Rolling window scan for a condition pair."""
     if cond_a not in CONDITIONS:
@@ -95,13 +96,14 @@ def rolling_combo_scan(
     if len(windows) < 2:
         return {"error": f"Only {len(windows)} window(s) for {symbol} {tf}"}
 
-    # Precompute forward returns
+    # Precompute forward returns (entry at open[i+1] for signal at bar i)
+    open_p = arrays["open"]
     forward_rets = {}
     for h in horizons:
-        if h >= n:
+        if h >= n - 1:
             continue
         ret = np.full(n, np.nan)
-        ret[:n - h] = np.log(close[h:] / close[:n - h])
+        ret[:n - h - 1] = np.log(close[1 + h:] / open_p[1:n - h])
         forward_rets[h] = ret
 
     # Compute both condition signals ONCE
@@ -217,7 +219,7 @@ def run_all(
     window_days: int = 30,
     step_days: int = 15,
     max_windows: int = 40,
-    allow_oos: bool = True,
+    allow_oos: bool = False,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """Run all combo scans."""

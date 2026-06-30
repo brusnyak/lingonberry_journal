@@ -1,2 +1,0 @@
-"""Review app package."""
-

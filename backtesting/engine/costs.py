@@ -62,21 +62,37 @@ class ForexCosts(CostModel):
     pip_size: float = 0.0001
     pip_value_per_lot: float = 10.0   # $10/pip/lot (standard EURUSD)
     commission_per_side: float = 0.75  # $0.75/side/lot
-    seed: Optional[int] = 0           # spread/slippage RNG seed; None = OS entropy (non-reproducible)
+    seed: Optional[int] = None           # spread/slippage RNG seed; None = OS entropy (non-reproducible)
+    fixed_spread_pips: Optional[float] = None  # if set, use flat spread instead of random uniform
 
     def __post_init__(self):
         # Private RNG so two ForexCosts instances (and re-runs) are bit-for-bit
         # reproducible. A backtest you can't reproduce you can't debug.
-        self._rng = random.Random(self.seed)
+        self._rng = random.Random(self.seed) if self.seed is not None else random.Random()
+
+    def _spread_pips(self) -> float:
+        if self.fixed_spread_pips is not None:
+            return self.fixed_spread_pips
+        return self._rng.uniform(1.0, 3.0)
+
+    def _exit_spread_pips(self) -> float:
+        if self.fixed_spread_pips is not None:
+            return self.fixed_spread_pips
+        return self._rng.uniform(0.5, 1.5)
+
+    def _slip_pips(self) -> float:
+        if self.fixed_spread_pips is not None:
+            return 0.0  # no extra slip when spread is fixed
+        return self._rng.uniform(0.0, 1.0)
 
     def entry_fill(self, price: float, direction: str) -> float:
-        spread = self._rng.uniform(1.0, 3.0) * self.pip_size
+        spread = self._spread_pips() * self.pip_size
         return price + spread if direction == "long" else price - spread
 
     def exit_fill(self, price: float, direction: str, is_sl: bool = False) -> float:
-        spread = self._rng.uniform(0.5, 1.5) * self.pip_size
+        spread = self._exit_spread_pips() * self.pip_size
         if is_sl:
-            spread += self._rng.uniform(0.0, 1.0) * self.pip_size  # extra slippage
+            spread += self._slip_pips() * self.pip_size  # extra slippage
         # On exit: spread works against you
         return price - spread if direction == "long" else price + spread
 
@@ -87,7 +103,9 @@ class ForexCosts(CostModel):
         return self.pip_value_per_lot * lots
 
     def min_stop_pips(self) -> float:
-        return 5 * 2.0  # 5 × avg spread (avg = 2 pips)
+        # Avg spread = midpoint of entry_fill uniform(1.0, 3.0) = 2.0 pips
+        avg_spread = (1.0 + 3.0) / 2.0
+        return 5.0 * avg_spread
 
     def pnl(self, entry: float, exit_: float, direction: str, lots: float) -> float:
         """PnL in account currency excluding commission."""

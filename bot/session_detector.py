@@ -66,4 +66,4 @@ def get_session_overlap(ts: str) -> Optional[str]:
 def is_high_volatility_session(ts: str) -> bool:
     """Check if timestamp is in high volatility session (London/NY overlap)"""
     overlap = get_session_overlap(ts)
-    return overlap == "LONDON_NY"
+    return overlap == "London/NY"
