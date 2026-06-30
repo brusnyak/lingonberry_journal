@@ -62,15 +62,21 @@ class ForexCosts(CostModel):
     pip_size: float = 0.0001
     pip_value_per_lot: float = 10.0   # $10/pip/lot (standard EURUSD)
     commission_per_side: float = 0.75  # $0.75/side/lot
+    seed: Optional[int] = 0           # spread/slippage RNG seed; None = OS entropy (non-reproducible)
+
+    def __post_init__(self):
+        # Private RNG so two ForexCosts instances (and re-runs) are bit-for-bit
+        # reproducible. A backtest you can't reproduce you can't debug.
+        self._rng = random.Random(self.seed)
 
     def entry_fill(self, price: float, direction: str) -> float:
-        spread = random.uniform(1.0, 3.0) * self.pip_size
+        spread = self._rng.uniform(1.0, 3.0) * self.pip_size
         return price + spread if direction == "long" else price - spread
 
     def exit_fill(self, price: float, direction: str, is_sl: bool = False) -> float:
-        spread = random.uniform(0.5, 1.5) * self.pip_size
+        spread = self._rng.uniform(0.5, 1.5) * self.pip_size
         if is_sl:
-            spread += random.uniform(0.0, 1.0) * self.pip_size  # extra slippage
+            spread += self._rng.uniform(0.0, 1.0) * self.pip_size  # extra slippage
         # On exit: spread works against you
         return price - spread if direction == "long" else price + spread
 

@@ -32,6 +32,11 @@ import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "market_data"
 
+# Out-of-sample wall. IS ends 2026-05-23; OOS is 2026-05-24 → 2026-06-23.
+# Every load_data call defaults to IS-only so OOS cannot leak by accident.
+# Cross it ONLY via load_data(..., allow_oos=True) for the final blessed test.
+OOS_START = pd.Timestamp("2026-05-24", tz="UTC")
+
 # Crypto loading lives in backtesting.crypto.data for a clean separation.
 from backtesting.crypto.data import CRYPTO_EXCHANGES, _load_from_crypto_dir, _load_from_crypto_funding, load_funding_rate  # noqa: F401
 
@@ -289,6 +294,7 @@ def load_data(
     asset_type: Optional[str] = None,
     exchange: Optional[str] = None,
     resample: bool = True,
+    allow_oos: bool = False,
 ) -> pd.DataFrame:
     """
     Load OHLCV data for any symbol.
@@ -402,6 +408,10 @@ def load_data(
         df = _filter_dates(df, start, end)
     elif days > 0:
         df = _slice_days(df, days)
+
+    # OOS wall: strip anything on/after the holdout start unless explicitly unlocked.
+    if not allow_oos and not df.empty and "ts" in df.columns:
+        df = df[df["ts"] < OOS_START].reset_index(drop=True)
 
     return df
 

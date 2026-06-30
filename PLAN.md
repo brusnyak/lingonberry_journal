@@ -1,6 +1,6 @@
 # Prop Firm Engine — Development Plan
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 ## Goal
 
@@ -199,15 +199,14 @@ Action: archive old content, rebuild with only validated results from our own sw
 - [x] `sweep.py`: multiprocessing param grid sweep
 - [x] Performance: single run 0.37s (matches original, VectorBT handles exits)
 
-### Phase 3: ML Pipeline (Jun 28 — Done)
+### Phase 3: ML Pipeline (Jun 28 — Done, Updated Jun 29)
 - [x] `ml/labels.py`: Triple-barrier 3-class labeling (HOLD/LONG/SHORT)
-- [x] `ml/features.py`: Feature matrix from structure_lib (trend, FVG, sweeps, session/volatility)
-- [x] `ml/train.py`: LightGBM+XGBoost+CatBoost ensemble, walk-forward expanding window, purged CV
-- [x] `ml/predict.py`: Mlpredictor → filter strategy signals by ML probability > threshold
-- [x] Training test: 60d GBPAUD 5m, 264 signals, 28 features, 48.8% accuracy
-- [ ] More data for training (120d+)
-- [ ] Sensitivity analysis on threshold (0.5–0.8)
-- [ ] Feature importance: drop low-importance features, retrain
+- [x] `ml/features.py`: 85-column feature matrix from verified structure engine
+- [x] `ml/predict.py`: Mlpredictor → filter strategy signals
+- [ ] **Lookahead bias fixed**: ML pipeline now uses verified engine (features/structure.py). Old vbt_indicators had 3-bar lookahead. Corrected accuracy: 46.1% (down from 57-62%). See `docs/engine/` for full architecture.
+- [ ] Fractional differentiation for continuous features
+- [ ] Volatility-scaled triple-barrier labels
+- [ ] Meta-labeling with CPCV validation
 
 ### Phase 4: Engine Candidate — Complete Integration
 - [ ] Implement state machine: HTF bias -> liquidity sweep -> MSS/ChoCH -> FVG/OB retest -> entry.
@@ -289,102 +288,24 @@ Strict ICT 120D triple-barrier direction result:
 | NAS100 bullish BOS Asia | 49 | 46.9% | +0.19R | +0.24R | Long-only candidate; avoids bearish anti-edge |
 | GBPAUD bearish state NY | 58 | 46.6% | +0.14R | +0.14R | Modest, not enough alone |
 
-## Param Sweep Speed — Status & Path to Target (2026-06-28)
+## Direction Engine — Architecture Moved to docs/engine/
 
-### Benchmark Results (GBPAUD 30d, 30,578 bars)
+The direction ML engine architecture has been restructured after the lookahead audit. See:
+- `docs/engine/01_overview.md` — Architecture overview (replaces V2_FOUNDATION.md)
+- `docs/engine/02_research.md` — Combined research findings
+- `docs/engine/03_labels.md` — Labeling methodology
+- `docs/engine/04_validation.md` — Validation protocol
+- `docs/engine/05_features.md` — Feature pipeline
+- `docs/engine/06_implementation.md` — Build plan
 
-| Config | Time | ms/combo | vs Target |
-|--------|:----:|:--------:|:---------:|
-| Single run (cold) | 1.55s | — | baseline |
-| Single run (hot/cached) | 0.29s | — | reference |
-| Sweep 16 combos (1 worker, warm) | 7.3s | 457ms | — |
-| Sweep 16 combos (8 workers) | 11.9s | 744ms | workers pay Numba overhead |
-| Full grid 540 combos (sequential) | ~247s | 457ms | 50x off target |
-| **VBT broadcast (108 cols)** | **0.20s** | **1.88ms** | ✓ under 5s target |
-
-### Breakdown of 457ms per combo (hybrid VbtRunner)
-
-| Component | Time | % |
-|-----------|:----:|:-:|
-| Strategy `init()` | 74ms | 16% |
-| Strategy `next()` loop (30k calls) | 123ms | 27% |
-| VBT `from_signals` + conversion | ~100ms | 22% |
-| VBT `pf.stats()` | 94ms | 21% |
-| Pandas conversions | 66ms | 14% |
-
-### The Target: < 5s for 486 combos → VBT Multi-Column Broadcasting
-
-The VBT broadcast approach (running all param combos as columns in one `from_signals` call) hits **1.88ms/combo** — fast enough for the full grid in < 1s.
-
-**Path to VBT broadcast:**
-1. Convert structure detection to `vbt.IndicatorFactory` Numba kernels (already done in `vbt_indicators.py`)
-2. Generate boolean signal masks per param combo: `(n_bars × n_combos)` arrays for entries, SL, TP
-3. Single `vbt.Portfolio.from_signals(close, entries, sl_stop, tp_stop)` with broadcast arrays
-4. `pf.stats()` for all columns at once (~0.2s)
-
-**Deferred**: this requires rewriting `TrIctSweep.next()` to produce masks instead of per-bar Signals. The pure-vectorized version (`vbt_tr_ict_sweep.py`) is the reference for this conversion.
-
-### Practical Optimization Applied
-- `sweep.py` now pre-warms Numba in each worker (reduces cold-start from 1.5s to 0.25s per worker)
-- `_report_from_pf()` computes metrics directly from `pf.trades` instead of calling `pf.stats()` (saves 0.1s/combo)
-- Grid reduced: `min_fvg_pts` removed from sweep (auto-scales from `pip_size`)
-
-## Forensic Analysis — Feature Engineering Results (2026-06-28)
-
-### Methodology
-Extracted 30 bars before/after the 100 best and 100 worst structure events (BOS, ChoCH, state transitions) on GBPAUD 5m 120d. Ran 81 per-bar features (PA, candle patterns, window-context) and t-tested for separation.
-
-### Best vs Worst Discriminators (p < 0.001, sorted by effect size)
-
-| Feature | Best Mean | Worst Mean | Delta | p-value | Interpretation |
-|---------|:--------:|:---------:|:-----:|:-------:|----------------|
-| `displacement_20` | +0.27R | -0.12R | +0.39 | <0.001 | Price moving in trade direction 20 bars before entry = best predictor |
-| `st_bullish_pct` | 58% | 26% | +32pp | <0.001 | Pre-window structure alignment dominates |
-| `bos_imbalance_20` | +0.14 | -0.09 | +0.23 | <0.001 | Net bullish BOS density in window |
-| `pa_bullish_10` | 55% | 47% | +8pp | <0.001 | More green bars last 10 before best |
-| `pa_pin_10` | 34% | 27% | +7pp | <0.001 | More pin bars = reversal ready |
-| `outside_bar_10` | 6.5% | 10.6% | -4pp | <0.001 | LESS outside bars before best (smoother) |
-| Hammer rate | 1.0% | 2.2% | -1.2pp | 0.001 | Hammers appear more in failures |
-| Morning Star | 0.7% | 0.3% | +0.4pp | 0.009 | Confirms bullish reversal setups |
-| Evening Star | 0.0% | 0.4% | -0.4pp | <0.001 | Bearish patterns before worst |
-
-### Key Insight
-The best predictor is **structural alignment over the pre-entry window** — not the signal bar itself. A trade thesis is much stronger when the last 20 bars show consistent structure movement in the trade direction, with bullish BOS dominance and bullish bar majority. Single-bar candle patterns (hammer, shooting star) are weak predictors alone but add signal as rates over windows.
-
-### Feature Count Change
-
-| Group | Before | After | Added |
-|-------|:------:|:-----:|:-----:|
-| Price action | 0 | 12 | body%, wicks, pin, inside/outside, range expansion/contraction, coil |
-| Candle patterns | 0 | 22 | TA-Lib: engulfing, hammer, doji, harami, morning/evening star, marubozu, spinning top, etc. |
-| Window-context | 0 | 21 | rolling BOS rates, displacement, bull bar ratio, pin rate, con rate for 5/10/20 windows |
-| Structure | 9 | 9 | unchanged |
-| FVG/Sweep | 6 | 6 | unchanged |
-| Time/Session | 6 | 6 | unchanged |
-| Volatility | 4 | 4 | unchanged |
-| Prices | 4 | 4 | unchanged (open/high/low/close/ts) |
-| **Total** | **28** | **84** | **+56** |
-
-### ML Performance Comparison (2-class directional, 5-fold CV)
-
-| Feature Set | Accuracy | Delta |
-|-------------|:--------:|:-----:|
-| Old (27 feats) | 92.83% ± 2.12% | baseline |
-| All (81 feats) | 93.85% ± 1.80% | +1.0pp, lower variance |
-
-Candle patterns individually add little (single-bar indicators), but window-context features (displacement, bull_bar_ratio, con_rate) are top-ranked. The 2-class directional separation is strong (94%) because LONG vs SHORT outcomes map to clear pre-window structure differences.
-
-### Action Items
-1. Keep window-context features (displacement, bull/bear BOS rates, bull bar ratio) — they dominate
-2. Keep PA per-bar features (body%, pin bar) — moderate signal
-3. Candle patterns are low-signal per-bar but included as cheap no-lookahead features
-4. Use 2-class LONG/SHORT model (not 3-class) for ML filter — directional accuracy > 94%
+**Key discovery (Jun 29 2026)**: The ML pipeline had a 3-bar lookahead bias. Old accuracy (57-62%) was inflated. Corrected accuracy on GBPAUD 60m: 46.1% (no statistically significant edge). The path forward is meta-labeling, not raw direction prediction.
 
 ## Code Locations
 
 | Component | Path |
 |-----------|------|
-| Structure lib (Numba) | `backtesting/structure_lib/vbt_indicators.py` |
+| Structure engine (verified, causal) | `backtesting/features/structure.py` |
+| Structure lib (Numba, VBT only) | `backtesting/structure_lib/vbt_indicators.py` |
 | Engine (hybrid) | `backtesting/engine/vbt_runner.py` |
 | Param sweep | `backtesting/engine/sweep.py` |
 | ML: labels | `backtesting/ml/labels.py` |

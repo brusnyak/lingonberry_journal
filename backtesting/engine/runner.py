@@ -218,6 +218,7 @@ def run(
     initial_equity: float = 10_000.0,
     max_open_positions: int = 1,
     verbose: bool = False,
+    next_bar_fill: bool = False,
 ) -> BacktestResult:
     """
     Run a strategy backtest.
@@ -437,7 +438,19 @@ def run(
             signal = strategy.next(bar, state)
 
             if signal is not None:
-                pos = _open_position(signal, bar, costs, equity, pos_id)
+                entry_override = ts_override = None
+                if next_bar_fill:
+                    # Decide on close[i], fill at open[i+1]. Drop the signal if
+                    # there is no next bar to fill on.
+                    if i + 1 >= n_bars:
+                        signal = None
+                    else:
+                        entry_override = open_arr[i + 1]
+                        ts_override = ts_arr[i + 1]
+
+            if signal is not None:
+                pos = _open_position(signal, bar, costs, equity, pos_id,
+                                     entry_override=entry_override, ts_override=ts_override)
                 if pos is not None:
                     pos_id += 1
                     # Stored and netted into trade.pnl proportionally on close.
@@ -582,8 +595,17 @@ def _open_position(
     costs: CostModel,
     equity: float,
     pos_id: int,
+    entry_override: Optional[float] = None,
+    ts_override=None,
 ) -> Optional[Position]:
-    """Create a Position from a Signal, computing lot size."""
+    """Create a Position from a Signal, computing lot size.
+
+    entry_override / ts_override let the runner fill at the *next* bar's open
+    (causal execution: decide on close[i], fill at open[i+1]) instead of at the
+    signal's own price on the bar that produced it.
+    """
+    if entry_override is not None:
+        signal.entry = entry_override
     stop_dist = abs(signal.entry - signal.sl)
     if stop_dist <= 0:
         return None
@@ -613,7 +635,7 @@ def _open_position(
         id=pos_id,
         direction=signal.direction,
         entry_price=fill,
-        entry_time=bar.ts,
+        entry_time=ts_override if ts_override is not None else bar.ts,
         sl=signal.sl,
         tp1=signal.tp1,
         tp2=signal.tp2,
