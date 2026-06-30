@@ -338,6 +338,9 @@ from three_white_soldiers), three_crows, inside_bar
 - All packages verified: imports OK, CV split logic correct (gap=5 bars confirmed), xgboost ImportError handled at call-time
 - CLEAN.md updated with new architecture diagram, level progression, foundation docs
 - **C1 still deferred**: copy_trader untouched
+- **Committed**: 13 files, 1,271 insertions, 45 deletions (commit b1b39eb)
+- **All tests pass**: 42/42 (engine tests + full suite)
+- **Bugs found & fixed during smoke test**: _body_pct missing args, marubozu .replace(), __init__.py missing imports
 
 ---
 
