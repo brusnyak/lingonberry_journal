@@ -298,6 +298,32 @@ from three_white_soldiers), three_crows, inside_bar
 5. **Reuses existing engine infra** — `backtesting.engine.data.load_data()` for
    parquet data loading, `ForexCosts` for spread/slippage in Level 4.
 
+### Level 0 Results — Literature Survey (2026-06-30)
+
+**Full document**: `notes/literature-survey.md` (10 academic papers + 4 practitioner sources + 7 independent backtests)
+
+**Key findings:**
+1. Standalone candle patterns do NOT beat random on forex (3 peer-reviewed studies agree)
+2. Candle features + ML (especially XGBoost) DOES work: RF 61.68% → 82.08% with candle features
+3. Context (trend + key level + volume) adds 22-30% win rate boost
+4. Multi-candle reversals (Evening/Morning Star) outperform single-candle patterns
+5. Doji is unreliable on forex; Harami is 50-52% coin-flip; Bearish Engulfing is strongest single
+6. MIDDAM pattern (2025) is forex-specific and promising but needs replication
+7. XGBoost beats RF, SVM, CNN, MLP, LSTM for short-term forex pattern tasks
+
+**Top evidence patterns (Tier 1-2):**
+| Pattern | Est. WR | Source | Notes |
+|---------|---------|--------|-------|
+| Bearish Engulfing | 74-79% | Bulkowski, QuantifiedStrategies | Best multi-study |
+| Three Black Crows | 78% | Bulkowski #3 | Strong bearish |
+| Evening Star | 72% | Bulkowski #4 | Complete cycle |
+| Dark Cloud Cover | 71.5% | QuantifiedStrategies | Peaks at 19d |
+| Morning Star | 55-65% | FXNX, fxscanner, Bulkowski | Consistent |
+| Three White Soldiers | 65% | Bulkowski, QuantifiedStrategies | Continuation bias |
+| Hammer | 55-62% | MT5 Guide, Bulkowski | Needs 2.5R |
+
+**Registry metadata populated**: All 17 patterns have `literature_ref`, `accuracy_pct`, `notes` via `registry.set_research()`.
+
 ---
 
 ## 9. Cleanup Execution Log
@@ -342,6 +368,16 @@ from three_white_soldiers), three_crows, inside_bar
 - **All tests pass**: 42/42 (engine tests + full suite)
 - **Bugs found & fixed during smoke test**: _body_pct missing args, marubozu .replace(), __init__.py missing imports
 
+### Session 4 (2026-06-30) — Level 0 literature survey completed
+- **Deep research**: 10 academic papers (MDPI, SSRN, IEEE Access, ACM, Springer), Bulkowski's encyclopedia (103 patterns), 7 independent backtests
+- **`notes/literature-survey.md`** created: full survey with per-pattern evidence tables, 4-tier evidence standard, 20+ source citations
+- **New patterns identified**: Three Line Strike (#1 Bulkowski, 84%), Three Inside Up (PF 2.5), Belt Hold (71%), MIDDAM (forex-specific, 2025), Three Outside Up/Down
+- **`registry.set_research()`** method added to PatternRegistry
+- **All 17 patterns populated** with accuracy_pct, literature_ref, notes from survey
+- **Key insight**: standalone patterns don't beat random on forex. ML + context + candle features is the only path to 58%+. Level progression validated.
+- **Committed**: as part of this session, all changes committed
+- **42/42 tests pass**
+
 ---
 
 ## 10. Next Session — Entry Point
@@ -349,22 +385,25 @@ from three_white_soldiers), three_crows, inside_bar
 ### Remaining cleanup work
 1. **C1**: Refactor `copy_trader.py` to use `tradelocker_client.py` (deferred indefinitely)
 
-### Next session — Level 0: Literature survey
-1. Run literature survey across academic sources for validated candle patterns on forex
-2. Cross-reference each of the 17 registered patterns against published evidence
-3. Identify top 5 patterns with strongest directional edge on 5m-1h forex
-4. Populate registry metadata (accuracy_pct, horizon, literature_ref) from survey results
-5. **Gate**: 10+ patterns with documented evidence, target 58% OOS direction accuracy
+### Level 0 gate: COMPLETED — 17 patterns with documented evidence, all metadata populated
+
+### Next session — Level 1: Single feature tests
+1. Use `features_v2.pipeline.scan_pattern()` against all available assets/timeframes
+2. For each pattern: compute direction accuracy at 1, 5, 10, 20 bar horizons
+3. Add continuous features (body%, upper/lower wick%, range) as baselines
+4. Compare: binary pattern flags vs continuous features — which has higher accuracy?
+5. **Gate**: at least 3 patterns/features beating 50% + spread at some horizon on at least one pair
+6. Key target: GBPAUD (known edge), but test all pairs to find where each pattern works
+7. **Before starting**: `pip install xgboost` if not done (needed for Level 3 but useful for comparison)
+
+### Research extension ideas (if time):
+- Add MIDDAM pattern (2025 paper: 6:2 win/loss on forex, 38M 1-min candles)
+- Add Three Line Strike (#1 Bulkowski, 84% reversal — rare but high accuracy)
+- Implement continuous feature extraction (body%, wick ratios) as additional scanner outputs
 
 ### Key files (new)
-- `backtesting/features_v2/registry.py` — PatternRegistry, @register decorator
-- `backtesting/features_v2/candle.py` — 6 single-bar patterns
-- `backtesting/features_v2/multi_bar.py` — 11 multi-bar patterns
-- `backtesting/features_v2/pipeline.py` — scan_pattern(), _direction_accuracy()
-- `backtesting/ml_pipeline/crossval.py` — purge_embargo_split, rolling_window_split
-- `backtesting/ml_pipeline/train.py` — train_xgb(), TrainResult dataclass
-- `backtesting/ml_pipeline/evaluate.py` — direction_accuracy, confusion_matrix
-- `backtesting/prop/rules.py` — PropAccount, GFT_25K_2STEP, GFT_100K_1STEP
-- `backtesting/prop/sizing.py` — calc_lots, max_risk_daily, max_risk_per_trade
+- `notes/literature-survey.md` — full literature survey document
+- `backtesting/features_v2/__init__.py` — now populates research metadata
+- `backtesting/features_v2/registry.py` — added set_research() method
 
 **Current branch**: `hypothesis-engine`

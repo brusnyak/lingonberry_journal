@@ -64,6 +64,33 @@ class PatternRegistry:
             return func
         return decorator
 
+    def set_research(
+        self,
+        name: str,
+        accuracy_pct: float | None = None,
+        horizon: int | None = None,
+        pairs_tested: list[str] | None = None,
+        timeframes_tested: list[str] | None = None,
+        literature_ref: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        """Fill research metadata for a registered pattern."""
+        p = self._patterns.get(name)
+        if p is None:
+            raise KeyError(f"Cannot set research on unknown pattern: {name}")
+        if accuracy_pct is not None:
+            p.accuracy_pct = accuracy_pct
+        if horizon is not None:
+            p.horizon = horizon
+        if pairs_tested is not None:
+            p.pairs_tested = pairs_tested
+        if timeframes_tested is not None:
+            p.timeframes_tested = timeframes_tested
+        if literature_ref is not None:
+            p.literature_ref = literature_ref
+        if notes is not None:
+            p.notes = notes
+
     def get(self, name: str) -> PatternInfo | None:
         return self._patterns.get(name)
 
