@@ -18,23 +18,15 @@ trading-journal/
 │   ├── strategies/       ← ~12 strategy files [mostly dead/FALSIFIED]
 │   ├── structure_lib/    ← ICT structure detection [keep]
 │   ├── crypto/           ← Crypto-specific engine [keep crypto/data.py]
-│   ├── features/         ← Feature engineering [keep as reference]
+│   ├── features/         ← Feature engineering [keep as reference, replaced by v2]
+│   ├── features_v2/      ← NEW: Candle pattern extraction + registry (17 patterns)
+│   ├── ml_pipeline/      ← NEW: XGBoost training + time-series CV + eval
+│   ├── prop/             ← NEW: Prop firm rules + position sizing
 │   ├── baselines/        ← Null-hypothesis test harness [valid methodology]
 │   ├── tests/            ← Tests
 │   └── data_pipeline/    ← Data fetching
-├── pine-review/          ← source/scripts/tests deleted; data/ only (674MB historical)
-│   └── data/             ← Historical review artifacts charts sessions (not in use)
+├── pine-review/          ← data/ only (674MB historical, not in use)
 ├── hypothesis_engine/    ← Clean research (Levels 0-3) [keep]
-├── infra/                ← Broker infrastructure [PRODUCTION, 3 files removed]
-├── bot/                  ← Bot automation [PRODUCTION]
-├── webapp/               ← Flask webapp [PRODUCTION]
-├── core/                 ← Core utilities [keep]
-├── daily_engine/         ← Daily research [keep? - low value]
-├── hermes/               ← Hermes MCP skills [keep]
-├── scripts/              ← Data scripts [keep]
-├── backtesting_config/   ← Settings [keep]
-└── CLEAN.md              ← THIS FILE
-├── hypothesis_engine/    ← NEW clean research (Levels 0-3) [keep]
 ├── infra/                ← Broker infrastructure [PRODUCTION]
 ├── bot/                  ← Bot automation [PRODUCTION]
 ├── webapp/               ← Flask webapp [PRODUCTION]
@@ -250,7 +242,65 @@ The pine-review module is **200 lines of useful new concepts** (round levels, P/
 
 ---
 
-## 8. Cleanup Execution Log
+## 8. ML / Candle Pattern Research Foundation
+
+### Game-Level Progression
+
+```
+Level 0 — Literature survey          Research only, no code. Find academically
+   ↓                                  validated candle patterns. Gate: 10+ patterns.
+Level 1 — Single feature tests       Extract each pattern, test direction accuracy
+   ↓                                  across all assets/timeframes. Gate: > 50% + spread.
+Level 2 — Feature combos             Pairwise combinations (AND/OR/weighted).
+   ↓                                  Gate: outperform best single feature.
+Level 3 — XGBoost                    Train on Level 1-2 survivors only.
+   ↓                                  Time-series CV with purge/embargo. Gate: 58%+ OOS.
+Level 4 — Walk-forward backtest      Full PnL with prop firm rules + costs.
+   ↓                                  Gate: passes GFT 25k/100k constraints.
+Level 5 — Paper trade                On the Oracle VM, paper TradeLocker account.
+```
+
+### Foundation Packages (created 2026-06-30)
+
+All three packages are clean, typed stubs with interfaces locked in. Ready for
+literature survey results to plug into.
+
+| Package | Contents | Status |
+|---------|----------|--------|
+| `backtesting/features_v2/` | Pattern registry, 17 candle pattern functions, batch pipeline | 17 patterns registered, build passes |
+| `backtesting/ml_pipeline/` | Time-series CV (purge/embargo), XGBoost wrapper, eval metrics | Imports OK, xgboost not yet installed |
+| `backtesting/prop/` | GFT 25k/100k account rules, position sizing | Functional, tested |
+
+### 17 Registered Candle Patterns
+
+**Single-bar (6):** doji, hammer, shooting_star, pin_bar, marubozu, spinning_top
+
+**Multi-bar (11):** bullish_engulfing, bearish_engulfing, bullish_harami, bearish_harami,
+piercing, dark_cloud_cover, morning_star, evening_star, three_soldiers (renamed
+from three_white_soldiers), three_crows, inside_bar
+
+### Key Design Decisions
+
+1. **Registry pattern** — all patterns register via `@register` decorator.
+   Registry singleton holds metadata + research results (accuracy, horizon, pairs).
+
+2. **Consistent signal interface** — every pattern function takes
+   `(open, high, low, close) → np.ndarray[int64]` returning +1/-1/0.
+   Zero = no signal. Makes pipeline composable.
+
+3. **Trend context deferred** — individual patterns don't filter by trend.
+   The `scan_pattern()` pipeline applies trend filters and populates results
+   for multiple horizons simultaneously.
+
+4. **Standalone from old features/** — `features_v2` does not import from the
+   old `backtesting/features/` which has dead weight and ICT dependencies.
+
+5. **Reuses existing engine infra** — `backtesting.engine.data.load_data()` for
+   parquet data loading, `ForexCosts` for spread/slippage in Level 4.
+
+---
+
+## 9. Cleanup Execution Log
 
 ### Session 1 (2026-06-30) — Initial
 - Full codebase audit completed
@@ -278,41 +328,40 @@ The pine-review module is **200 lines of useful new concepts** (round levels, P/
 - **hypothesis_engine improvements**: `bos_structured()` condition in level1; forward return fix (entry at `open[i+1]`) in level1/2 scanners
 - **All tests pass**: 33/33, 13/13 engine-specific
 - **C1 deferred**: copy_trader untouched per user directive
-- **Ready to commit**: all changes verified and staged
+- **Committed**: 168 files, 2,719 insertions, 42,309 deletions (commit 3d9ebbd)
+- **Codegraph re-indexed**: 3,388 files, 53,746 nodes, 50,432 edges
+
+### Session 3 (2026-06-30) — ML/candle pattern foundation
+- **`backtesting/features_v2/`** created: PatternRegistry with `@register` decorator, 17 candle pattern functions (6 single-bar, 11 multi-bar), batch `scan_pattern()` pipeline
+- **`backtesting/ml_pipeline/`** created: time-series CV with purge/embargo (`purge_embargo_split`, `rolling_window_split`), XGBoost wrapper (graceful missing dep), eval metrics (direction accuracy, confusion matrix, win rate at threshold)
+- **`backtesting/prop/`** created: GFT 25k 2-step / 100k 1-step rule definitions, `calc_lots()` position sizing with lot-step rounding, daily risk budget
+- All packages verified: imports OK, CV split logic correct (gap=5 bars confirmed), xgboost ImportError handled at call-time
+- CLEAN.md updated with new architecture diagram, level progression, foundation docs
+- **C1 still deferred**: copy_trader untouched
 
 ---
 
-## 9. Next Session — Entry Point
+## 10. Next Session — Entry Point
 
 ### Remaining cleanup work
-1. **Codegraph re-index** — after file deletions and restructure, stale entries exist.
-2. **C1 deferred**: Refactor `copy_trader.py` to use `tradelocker_client.py` (risk: live trading path — user explicitly asked to not touch this session)
+1. **C1**: Refactor `copy_trader.py` to use `tradelocker_client.py` (deferred indefinitely)
 
-### Next research direction
-After cleanup is committed:
-1. Literature survey of academically validated candle patterns for forex direction prediction
-2. ML feature engineering pipeline based on patterns
-3. XGBoost time-series cross-validation
-4. Target: 58%+ direction accuracy on 5m forex, after spread
+### Next session — Level 0: Literature survey
+1. Run literature survey across academic sources for validated candle patterns on forex
+2. Cross-reference each of the 17 registered patterns against published evidence
+3. Identify top 5 patterns with strongest directional edge on 5m-1h forex
+4. Populate registry metadata (accuracy_pct, horizon, literature_ref) from survey results
+5. **Gate**: 10+ patterns with documented evidence, target 58% OOS direction accuracy
 
-### Key files
-- **CLEAN.md** — this file, session reference
-- `backtesting/engine/costs.py:89-91` — B1 fixed
-- `backtesting/engine/costs.py:70-73` — B6 + C3 fixed (seed default, fixed_spread_pips)
-- `backtesting/engine/metrics.py:90-105` — C6 fixed (log_returns_curve)
-- `backtesting/engine/__init__.py:5` — C4 fixed (re-exports)
-- `backtesting/engine/data.py:138-141` — PARQUET_DIR, _load_from_flat_parquet
-- `infra/market_data.py:117,280-282` — B3 (cache indicators) + B4 (yfinance resample)
-- `infra/market_data.py:123-153` — `_resample_ohlcv()` function
-- `bot/journal_db.py` — C2, now 7-line wrapper
-- `bot/journal/` — C2, split package (schema.py, crud.py, stats.py)
-- `bot/session_detector.py:69` — B2 fixed (string match)
-- `core/constants.py` — C5, SESSIONS dict
-- `hypothesis_engine/level1_conditions/conditions.py:155-225` — `bos_structured()`
-- `hypothesis_engine/level1_conditions/scanner.py:69-72` — forward return fix
-- `hypothesis_engine/level2_combos/scanner.py:99-103` — forward return fix
-- `hypothesis_engine/level2_combos/scanner.py:58` — B7 (allow_oos=False)
-- `hypothesis_engine/level3_backtest/engine.py` — B7 (allow_oos=False)
-- `infra/position_manager.py` — ctrader fallback removed
+### Key files (new)
+- `backtesting/features_v2/registry.py` — PatternRegistry, @register decorator
+- `backtesting/features_v2/candle.py` — 6 single-bar patterns
+- `backtesting/features_v2/multi_bar.py` — 11 multi-bar patterns
+- `backtesting/features_v2/pipeline.py` — scan_pattern(), _direction_accuracy()
+- `backtesting/ml_pipeline/crossval.py` — purge_embargo_split, rolling_window_split
+- `backtesting/ml_pipeline/train.py` — train_xgb(), TrainResult dataclass
+- `backtesting/ml_pipeline/evaluate.py` — direction_accuracy, confusion_matrix
+- `backtesting/prop/rules.py` — PropAccount, GFT_25K_2STEP, GFT_100K_1STEP
+- `backtesting/prop/sizing.py` — calc_lots, max_risk_daily, max_risk_per_trade
 
 **Current branch**: `hypothesis-engine`
