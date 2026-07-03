@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blind Market Replay</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { height: 100vh; overflow: hidden; display: grid; grid-template-columns: 320px 1fr; background: #0d0d0d; color: #d4d4d4; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; }
+  aside { background: #111; border-right: 1px solid #242424; display: flex; flex-direction: column; min-height: 0; }
+  header { padding: 12px 14px; border-bottom: 1px solid #242424; font-weight: 700; letter-spacing: .06em; color: #e5e7eb; }
+  section { padding: 12px 14px; border-bottom: 1px solid #242424; }
+  label { display: block; color: #737373; font-size: 10px; margin-bottom: 4px; }
+  input, select, textarea { width: 100%; background: #181818; border: 1px solid #333; color: #d4d4d4; border-radius: 4px; padding: 6px 8px; font: inherit; }
+  textarea { min-height: 88px; resize: vertical; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .full { grid-column: 1 / -1; }
+  button { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; border-radius: 4px; padding: 7px 10px; font: inherit; cursor: pointer; }
+  button:hover { background: #273244; }
+  button:disabled { opacity: .35; cursor: default; }
+  .primary { background: #2563eb; border-color: #2563eb; }
+  .danger { background: #3f1f1f; border-color: #7f1d1d; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row button { flex: 1; }
+  .tool-btn.active { border-color: #f59e0b; color: #fbbf24; background: #2a2111; }
+  #meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 9px 14px; background: #101010; border-bottom: 1px solid #242424; }
+  .meta-label { color: #666; font-size: 9px; }
+  .meta-value { color: #e5e7eb; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  #chart-wrap { flex: 1; min-height: 0; position: relative; }
+  #chart { position: absolute; inset: 0; }
+  #draw-canvas { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
+  #log { flex: 1; overflow: auto; padding: 8px 14px; color: #a3a3a3; }
+  .log-item { border-bottom: 1px solid #1f1f1f; padding: 7px 0; }
+  .muted { color: #737373; }
+  .check-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .check-row label { display: flex; align-items: center; gap: 5px; color: #a3a3a3; font-size: 10px; margin: 0; }
+  .check-row input { width: auto; }
+</style>
+</head>
+<body>
+<aside>
+  <header>BLIND MARKET REPLAY</header>
+
+  <section class="grid">
+    <div>
+      <label>Symbol</label>
+      <select id="symbol">
+        <option value="NAS100">NAS100</option>
+        <option value="XAUUSD" selected>XAUUSD</option>
+        <option value="XAGUSD">XAGUSD</option>
+        <option value="EURUSD">EURUSD</option>
+        <option value="GBPUSD">GBPUSD</option>
+        <option value="GBPJPY">GBPJPY</option>
+        <option value="GBPAUD">GBPAUD</option>
+        <option value="USDCAD">USDCAD</option>
+      </select>
+    </div>
+    <div>
+      <label>TF</label>
+      <select id="tf">
+        <option value="1">1m</option>
+        <option value="5" selected>5m</option>
+        <option value="15">15m</option>
+        <option value="60">60m</option>
+      </select>
+    </div>
+    <div>
+      <label>Start</label>
+      <input type="date" id="start" value="2025-08-01">
+    </div>
+    <div>
+      <label>End</label>
+      <input type="date" id="end" value="2026-05-23">
+    </div>
+    <div>
+      <label>Context Bars</label>
+      <input type="number" id="context" value="1500" min="20" max="20000">
+    </div>
+    <div>
+      <label>Warmup Bars</label>
+      <input type="number" id="warmup" value="150" min="0">
+    </div>
+    <button class="primary full" onclick="startSession()">START REPLAY</button>
+  </section>
+
+  <section>
+    <div class="row">
+      <button onclick="step(-20)">-20</button>
+      <button onclick="step(-1)">-1</button>
+      <button onclick="step(1)">+1</button>
+      <button onclick="step(5)">+5</button>
+    </div>
+  </section>
+
+  <section>
+    <label>Trade</label>
+    <div class="row">
+      <button class="primary" onclick="openTrade('long')">BUY</button>
+      <button class="danger" onclick="openTrade('short')">SELL</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button onclick="syncFromRiskBox()">Sync Box</button>
+      <button onclick="window.open('/blind/analyze', '_blank')">Analyze</button>
+    </div>
+  </section>
+
+  <section>
+    <label>Drawing</label>
+    <div class="row">
+      <button class="tool-btn" data-tool="hline" onclick="setTool('hline')">Level</button>
+      <button class="tool-btn" data-tool="rect" onclick="setTool('rect')">Zone</button>
+      <button class="tool-btn" data-tool="trendline" onclick="setTool('trendline')">Trend</button>
+      <button class="tool-btn" data-tool="long" onclick="setTool('long')">Long</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="tool-btn" data-tool="short" onclick="setTool('short')">Short</button>
+      <button class="tool-btn" data-tool="bos" onclick="setTool('bos')">BOS</button>
+      <button class="tool-btn" data-tool="choch" onclick="setTool('choch')">ChoCH</button>
+      <button class="tool-btn" data-tool="sweep" onclick="setTool('sweep')">Sweep</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="tool-btn" data-tool="hh" onclick="setTool('hh')">HH</button>
+      <button class="tool-btn" data-tool="hl" onclick="setTool('hl')">HL</button>
+      <button class="tool-btn" data-tool="lh" onclick="setTool('lh')">LH</button>
+      <button class="tool-btn" data-tool="ll" onclick="setTool('ll')">LL</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button onclick="undoDrawing()">Undo</button>
+      <button onclick="clearDrawings()">Clear</button>
+      <button onclick="useCursorClose()">Use Close</button>
+    </div>
+  </section>
+
+  <section>
+    <label>Indicators</label>
+    <div class="check-row">
+      <label><input type="checkbox" data-ind="ema9" onchange="renderIndicators()"> EMA9</label>
+      <label><input type="checkbox" data-ind="ema21" checked onchange="renderIndicators()"> EMA21</label>
+      <label><input type="checkbox" data-ind="ema50" onchange="renderIndicators()"> EMA50</label>
+      <label><input type="checkbox" data-ind="ema200" checked onchange="renderIndicators()"> EMA200</label>
+      <label><input type="checkbox" data-ind="vwap" checked onchange="renderIndicators()"> VWAP</label>
+      <label><input type="checkbox" data-ind="atr14" onchange="renderIndicators()"> ATR14</label>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div>
+      <label>Bias</label>
+      <select id="bias">
+        <option value="none">none</option>
+        <option value="bullish">bullish</option>
+        <option value="bearish">bearish</option>
+        <option value="range">range</option>
+      </select>
+    </div>
+    <div>
+      <label>Action</label>
+      <select id="action">
+        <option value="observe">observe</option>
+        <option value="trade_plan">trade plan</option>
+        <option value="skip">skip</option>
+      </select>
+    </div>
+    <div>
+      <label>Direction</label>
+      <select id="direction">
+        <option value="">-</option>
+        <option value="long">long</option>
+        <option value="short">short</option>
+      </select>
+    </div>
+    <div>
+      <label>Confidence</label>
+      <input type="number" id="confidence" value="3" min="1" max="5">
+    </div>
+    <div>
+      <label>Entry</label>
+      <input type="number" id="entry" step="0.0001">
+    </div>
+    <div>
+      <label>SL</label>
+      <input type="number" id="sl" step="0.0001">
+    </div>
+    <div class="full">
+      <label>TP</label>
+      <input type="number" id="tp" step="0.0001">
+    </div>
+    <div class="full">
+      <label>Notes</label>
+      <textarea id="notes" placeholder="What is visible now. No outcome assumptions."></textarea>
+    </div>
+    <button class="primary full" onclick="saveDecision()">SAVE DECISION</button>
+    <button class="full" onclick="simulatePlan()">SIMULATE PLAN</button>
+  </section>
+
+  <section>
+    <label>Management</label>
+    <div class="row">
+      <button onclick="manageMoveSlBe()">SL BE</button>
+      <button onclick="manageMoveSlPrice()">Move SL</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button onclick="managePartial()">Partial 50%</button>
+      <button onclick="manageClose()">Close</button>
+    </div>
+  </section>
+
+  <section id="sim-result" style="display:none"></section>
+  <div id="log"></div>
+</aside>
+
+<main>
+  <div id="meta">
+    <div><div class="meta-label">SESSION</div><div class="meta-value" id="m-session">-</div></div>
+    <div><div class="meta-label">CURSOR</div><div class="meta-value" id="m-cursor">-</div></div>
+    <div><div class="meta-label">VISIBLE UNTIL</div><div class="meta-value" id="m-time">-</div></div>
+    <div><div class="meta-label">DECISIONS</div><div class="meta-value" id="m-decisions">0</div></div>
+  </div>
+  <div id="chart-wrap">
+    <div id="chart"></div>
+    <canvas id="draw-canvas"></canvas>
+  </div>
+</main>
+
+<script src="/static/js/drawing-engine.js"></script>
+<script>
+let sessionId = null;
+let chart = null;
+let candleSeries = null;
+let currentState = null;
+let drawingEngine = null;
+let indicatorSeries = {};
+let planLines = [];
+let entryCursor = null;
+let managementEvents = [];
+let activeRiskRewardId = null;
+const indicatorColors = {
+  ema9: '#60a5fa',
+  ema21: '#f59e0b',
+  ema50: '#a78bfa',
+  ema200: '#f43f5e',
+  vwap: '#22c55e',
+  atr14: '#94a3b8',
+};
+
+function initChart() {
+  if (chart) chart.remove();
+  const chartEl = document.getElementById('chart');
+  const wrap = document.getElementById('chart-wrap');
+  chart = LightweightCharts.createChart(chartEl, {
+    autoSize: true,
+    layout: { background: { color: '#0d0d0d' }, textColor: '#9ca3af' },
+    grid: { vertLines: { color: '#1f1f1f' }, horzLines: { color: '#1f1f1f' } },
+    rightPriceScale: { borderColor: '#333' },
+    timeScale: { borderColor: '#333', timeVisible: true, secondsVisible: false },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#22c55e', downColor: '#ef4444',
+    borderUpColor: '#22c55e', borderDownColor: '#ef4444',
+    wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+  });
+  drawingEngine = new DrawingEngine(chart, candleSeries, wrap, document.getElementById('draw-canvas'));
+  wrap.addEventListener('drawing-updated', syncFromRiskBox);
+  wrap.addEventListener('drawing-added', syncFromRiskBox);
+}
+
+async function startSession() {
+  const payload = {
+    symbol: document.getElementById('symbol').value,
+    tf: document.getElementById('tf').value,
+    start: document.getElementById('start').value || undefined,
+    end: document.getElementById('end').value || undefined,
+    context_bars: parseInt(document.getElementById('context').value || '150'),
+    warmup_bars: parseInt(document.getElementById('warmup').value || '150'),
+  };
+  const resp = await fetch('/api/blind/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (data.error) return alert(data.error + (data.trace ? '\n' + data.trace : ''));
+  sessionId = data.session_id;
+  if (drawingEngine) {
+    drawingEngine.state.drawings = [];
+    drawingEngine.redraw();
+  }
+  managementEvents = [];
+  entryCursor = null;
+  activeRiskRewardId = null;
+  document.getElementById('sim-result').style.display = 'none';
+  renderState(data);
+}
+
+async function step(n) {
+  if (!sessionId) return;
+  const resp = await fetch('/api/blind/step', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, step: n, max_step: 96 }),
+  });
+  const data = await resp.json();
+  if (data.error) return alert(data.error);
+  renderState(data);
+}
+
+function renderState(data) {
+  currentState = data;
+  candleSeries.setData(data.candles || []);
+  if (drawingEngine) drawingEngine.setCandles(data.candles || []);
+  chart.timeScale().fitContent();
+  document.getElementById('m-session').textContent = data.session_id.slice(0, 8);
+  document.getElementById('m-cursor').textContent = `${data.cursor + 1} / ${data.total_loaded}`;
+  document.getElementById('m-time').textContent = new Date(data.cursor_time * 1000).toLocaleString('en-GB');
+  document.getElementById('m-decisions').textContent = data.decisions;
+  renderIndicators();
+  renderPlanLines();
+}
+
+async function saveDecision() {
+  if (!sessionId || !currentState) return;
+  const payload = {
+    session_id: sessionId,
+    bias: document.getElementById('bias').value,
+    action: document.getElementById('action').value,
+    direction: document.getElementById('direction').value,
+    entry: document.getElementById('entry').value || null,
+    sl: document.getElementById('sl').value || null,
+    tp: document.getElementById('tp').value || null,
+    confidence: document.getElementById('confidence').value,
+    notes: document.getElementById('notes').value,
+    drawings: drawingEngine ? drawingEngine.state.drawings : [],
+    management_events: managementEvents,
+    active_indicators: activeIndicators(),
+    saved_context_bars: 150,
+  };
+  const resp = await fetch('/api/blind/decision', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (data.error) return alert(data.error);
+  appendLog(data.decision);
+  document.getElementById('notes').value = '';
+  document.getElementById('m-decisions').textContent = data.total;
+}
+
+async function simulatePlan() {
+  if (!sessionId || !currentState) return;
+  const payload = {
+    session_id: sessionId,
+    cursor: entryCursor ?? currentState.cursor,
+    direction: document.getElementById('direction').value,
+    entry: document.getElementById('entry').value,
+    sl: document.getElementById('sl').value,
+    tp: document.getElementById('tp').value,
+    max_bars: 288,
+    management_events: managementEvents,
+  };
+  const resp = await fetch('/api/blind/simulate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if (data.error) return alert(data.error);
+  const revealed = (currentState.candles || []).concat(data.revealed_candles || []);
+  candleSeries.setData(revealed);
+  if (drawingEngine) drawingEngine.setCandles(revealed);
+  chart.timeScale().fitContent();
+  renderIndicators();
+  renderPlanLines();
+  const box = document.getElementById('sim-result');
+  box.style.display = '';
+  const cls = data.r_multiple > 0 ? '#22c55e' : data.r_multiple < 0 ? '#ef4444' : '#d4d4d4';
+  box.innerHTML = `
+    <div class="meta-label">SIM RESULT</div>
+    <div style="color:${cls};font-size:16px;font-weight:700">${String(data.outcome).toUpperCase()} ${data.r_multiple}R</div>
+    <div class="muted">${data.bars_elapsed} bars · RR ${data.rr} · MFE ${data.mfe_r}R · MAE ${data.mae_r}R</div>
+    <div class="muted">SL ${data.active_sl} · remaining ${Math.round(data.remaining_frac * 100)}% · mgmt ${data.applied_events.length}</div>
+    <div class="muted">${data.exit_time ? new Date(data.exit_time * 1000).toLocaleString('en-GB') : 'not closed in window'}</div>`;
+}
+
+function setTool(name) {
+  if (!drawingEngine) return;
+  const next = drawingEngine.state.currentTool === name ? 'cursor' : name;
+  drawingEngine.setTool(next);
+  document.querySelectorAll('.tool-btn').forEach(b => b.classList.toggle('active', b.dataset.tool === next));
+}
+
+function openTrade(direction) {
+  if (!currentState || !drawingEngine || !currentState.candles.length) return;
+  managementEvents = [];
+  const c = currentState.candles[currentState.candles.length - 1];
+  const entry = Number(c.close);
+  const atr = latestIndicatorValue('atr14') || Math.max(Number(c.high) - Number(c.low), Math.abs(entry) * 0.001);
+  const risk = Math.max(atr, Math.abs(entry) * 0.0005);
+  const isLong = direction === 'long';
+  const sl = isLong ? entry - risk : entry + risk;
+  const tp = isLong ? entry + risk * 2 : entry - risk * 2;
+  const startTime = c.time;
+  const endTime = startTime + _tfSeconds() * 48;
+
+  const drawing = drawingEngine.addDrawing({
+    type: 'riskreward',
+    side: direction,
+    points: [
+      { time: startTime, price: entry },
+      { time: startTime, price: sl },
+      { time: startTime, price: tp },
+      { time: endTime, price: entry },
+    ],
+  });
+  activeRiskRewardId = drawing.id;
+  entryCursor = currentState.cursor;
+  document.getElementById('direction').value = direction;
+  document.getElementById('action').value = 'trade_plan';
+  setPlanValues(entry, sl, tp);
+  syncFromRiskBox();
+}
+
+function setPlanValues(entry, sl, tp) {
+  document.getElementById('entry').value = Number(entry).toFixed(4);
+  document.getElementById('sl').value = Number(sl).toFixed(4);
+  document.getElementById('tp').value = Number(tp).toFixed(4);
+  renderPlanLines();
+}
+
+function syncFromRiskBox() {
+  if (!drawingEngine) return;
+  let rr = activeRiskRewardId
+    ? drawingEngine.state.drawings.find(d => d.id === activeRiskRewardId)
+    : null;
+  if (!rr) {
+    rr = [...drawingEngine.state.drawings].reverse().find(d => d.type === 'riskreward');
+    if (rr) activeRiskRewardId = rr.id;
+  }
+  if (!rr || rr.points.length < 3) return;
+  const entry = rr.points[0].price;
+  const sl = rr.points[1].price;
+  const tp = rr.points[2].price;
+  document.getElementById('direction').value = rr.side === 'short' ? 'short' : 'long';
+  setPlanValues(entry, sl, tp);
+}
+
+function undoDrawing() {
+  if (!drawingEngine) return;
+  drawingEngine.state.drawings.pop();
+  drawingEngine.redraw();
+}
+
+function clearDrawings() {
+  if (!drawingEngine) return;
+  drawingEngine.state.drawings = [];
+  drawingEngine.redraw();
+}
+
+function useCursorClose() {
+  if (!currentState || !currentState.candles.length) return;
+  const c = currentState.candles[currentState.candles.length - 1];
+  document.getElementById('entry').value = Number(c.close).toFixed(4);
+  entryCursor = currentState.cursor;
+  renderPlanLines();
+}
+
+function renderIndicators() {
+  Object.values(indicatorSeries).forEach(s => chart.removeSeries(s));
+  indicatorSeries = {};
+  if (!currentState || !currentState.indicators) return;
+  document.querySelectorAll('[data-ind]').forEach(input => {
+    if (!input.checked) return;
+    const key = input.dataset.ind;
+    const data = currentState.indicators[key] || [];
+    if (!data.length) return;
+    const series = chart.addLineSeries({
+      color: indicatorColors[key] || '#94a3b8',
+      lineWidth: key === 'atr14' ? 1 : 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      title: key.toUpperCase(),
+    });
+    series.setData(data);
+    indicatorSeries[key] = series;
+  });
+}
+
+function activeIndicators() {
+  return Array.from(document.querySelectorAll('[data-ind]'))
+    .filter(input => input.checked)
+    .map(input => input.dataset.ind);
+}
+
+function latestIndicatorValue(key) {
+  const data = currentState?.indicators?.[key] || [];
+  if (!data.length) return null;
+  return Number(data[data.length - 1].value);
+}
+
+function _tfSeconds() {
+  const tf = document.getElementById('tf').value;
+  return ({ '1': 60, '5': 300, '15': 900, '30': 1800, '60': 3600 })[tf] || 300;
+}
+
+function renderPlanLines() {
+  planLines.forEach(line => candleSeries.removePriceLine(line));
+  planLines = [];
+  const specs = [
+    ['entry', '#e5e7eb', 'ENTRY'],
+    ['sl', '#ef4444', 'SL'],
+    ['tp', '#22c55e', 'TP'],
+  ];
+  specs.forEach(([id, color, title]) => {
+    const val = parseFloat(document.getElementById(id).value);
+    if (!Number.isFinite(val)) return;
+    planLines.push(candleSeries.createPriceLine({
+      price: val,
+      color,
+      lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true,
+      title,
+    }));
+  });
+}
+
+function currentClose() {
+  if (!currentState || !currentState.candles.length) return null;
+  return currentState.candles[currentState.candles.length - 1].close;
+}
+
+async function addManagementEvent(ev) {
+  if (!sessionId || !currentState) return;
+  const resp = await fetch('/api/blind/manage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, ...ev }),
+  });
+  const data = await resp.json();
+  if (data.error) return alert(data.error);
+  managementEvents.push(data.event);
+  appendLog({
+    visible_until: data.event.visible_until,
+    bias: 'mgmt',
+    action: data.event.type,
+    direction: '',
+    notes: `${data.event.type} ${data.event.price || data.event.fraction || ''}`,
+  });
+}
+
+function manageMoveSlBe() {
+  const entry = document.getElementById('entry').value;
+  if (entry) {
+    document.getElementById('sl').value = entry;
+    renderPlanLines();
+    syncSlIntoRiskBox(Number(entry));
+  }
+  addManagementEvent({ type: 'move_sl_be', notes: 'move SL to breakeven' });
+}
+
+function manageMoveSlPrice() {
+  const price = prompt('New SL price', document.getElementById('sl').value || currentClose());
+  if (!price) return;
+  document.getElementById('sl').value = price;
+  renderPlanLines();
+  syncSlIntoRiskBox(Number(price));
+  addManagementEvent({ type: 'move_sl', price, notes: 'manual SL move' });
+}
+
+function syncSlIntoRiskBox(price) {
+  if (!drawingEngine || !Number.isFinite(price)) return;
+  const rr = activeRiskRewardId
+    ? drawingEngine.state.drawings.find(d => d.id === activeRiskRewardId)
+    : [...drawingEngine.state.drawings].reverse().find(d => d.type === 'riskreward');
+  if (!rr || rr.points.length < 2) return;
+  rr.points[1].price = price;
+  drawingEngine.redraw();
+}
+
+function managePartial() {
+  addManagementEvent({ type: 'partial', fraction: 0.5, notes: 'partial close 50%' });
+}
+
+function manageClose() {
+  addManagementEvent({ type: 'close', notes: 'manual close' });
+}
+
+function appendLog(d) {
+  const el = document.getElementById('log');
+  const time = new Date(d.visible_until * 1000).toLocaleString('en-GB');
+  const item = document.createElement('div');
+  item.className = 'log-item';
+  item.innerHTML = `<div>${time} <span class="muted">${d.bias}/${d.action}/${d.direction || '-'}</span></div><div>${escapeHtml(d.notes || '')}</div>`;
+  el.prepend(item);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowRight') step(1);
+  if (e.key === 'ArrowLeft') step(-1);
+  if (e.key === 'Enter') saveDecision();
+  if (e.key === 'l') setTool('hline');
+  if (e.key === 'z') setTool('rect');
+  if (e.key === 't') setTool('trendline');
+  if (e.key === 'r') setTool('long');
+  if (e.key === 'x') setTool('sweep');
+});
+
+['entry', 'sl', 'tp'].forEach(id => document.getElementById(id).addEventListener('input', renderPlanLines));
+initChart();
+</script>
+</body>
+</html>

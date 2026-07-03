@@ -134,10 +134,17 @@
       <input type="date" id="cfg-end" value="2026-05-23">
     </div>
     <div>
+      <label title="Hides exit price/PnL/R-multiple/exit reason and the stats bar. Use this before marking levels/bias so your read isn't anchored to the outcome.">
+        <input type="checkbox" id="cfg-blind"> Blind review
+      </label>
+    </div>
+    <div>
       <label>Strategy</label>
       <select id="cfg-strategy" onchange="toggleStrategy()">
         <option value="TrFvg" selected>TrFvg (FVG sweep)</option>
         <option value="TrIct">TrIct (ICT/SMC)</option>
+        <option value="Lvl1Trend">Lvl1Trend (HTF EMA regime + VWAP, gated)</option>
+        <option value="Lvl2Structure">Lvl2Structure (CHoCH/BOS regime + prior-day TP)</option>
       </select>
     </div>
     <div id="cfg-fvg-fields">
@@ -247,6 +254,7 @@
 let trades        = [];
 let allCandles    = [];
 let structureData = { pivots: [], bos_events: [] };
+let isBlind       = false;
 let currentIdx    = 0;
 let currentSymbol   = 'XAUUSD';
 let currentTf       = '5';
@@ -385,6 +393,7 @@ async function runBacktest() {
         start: document.getElementById('cfg-start').value || undefined,
         end:   document.getElementById('cfg-end').value   || undefined,
         strategy: currentStrategy, params,
+        blind: document.getElementById('cfg-blind').checked,
       }),
     });
     const data = await resp.json();
@@ -393,8 +402,10 @@ async function runBacktest() {
     trades        = data.trades || [];
     allCandles    = data.candles || [];
     structureData = data.structure || { pivots: [], bos_events: [] };
+    isBlind        = !!data.blind;
     if (drawingEngine) drawingEngine.setCandles(allCandles);
-    renderStats(data.report);
+    document.getElementById('stats').style.display = isBlind ? 'none' : '';
+    if (!isBlind) renderStats(data.report);
     renderTradeList();
     if (trades.length > 0) showTrade(0);
   } catch(e) {
@@ -482,7 +493,12 @@ function showTrade(idx) {
   const ctx     = parseInt(document.getElementById('cfg-context').value) || 150;
   const entryI  = bisect(allCandles, entryTs);
   const lo      = Math.max(0, entryI - ctx);
-  const hi      = Math.min(allCandles.length, entryI + Math.ceil(ctx * 0.5));
+  // Blind mode: hard-stop at the entry bar. No future bars rendered, period —
+  // this is the actual leak (field-stripping alone doesn't fix it, the chart
+  // always loaded what-happened-next by default).
+  const hi      = isBlind
+    ? Math.min(allCandles.length, entryI + 1)
+    : Math.min(allCandles.length, entryI + Math.ceil(ctx * 0.5));
   const slice   = allCandles.slice(lo, hi);
   if (slice.length === 0) return;
 
@@ -532,10 +548,12 @@ function showTrade(idx) {
     else drawingEngine.redraw();
   }
 
-  chart.timeScale().setVisibleLogicalRange({
-    from: (entryI - lo) - Math.floor(slice.length * 0.4),
-    to:   (entryI - lo) + Math.ceil(slice.length  * 0.4),
-  });
+  chart.timeScale().setVisibleLogicalRange(isBlind
+    ? { from: Math.max(0, slice.length - ctx), to: slice.length - 1 }
+    : {
+        from: (entryI - lo) - Math.floor(slice.length * 0.4),
+        to:   (entryI - lo) + Math.ceil(slice.length  * 0.4),
+      });
 }
 
 function _renderAutoStructure(t, winStart, winEnd, isLong) {
@@ -660,8 +678,16 @@ function clearAnnotations() {
 function updateMeta(t) {
   const fmt = s => new Date(s).toLocaleString('en-GB', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
   document.getElementById('m-entry').textContent  = fmt(t.entry_time);
-  document.getElementById('m-exit').textContent   = fmt(t.exit_time);
   document.getElementById('m-dir').textContent    = t.direction;
+  if (isBlind) {
+    document.getElementById('m-exit').textContent   = 'hidden';
+    document.getElementById('m-reason').textContent = t.label ? `(blind) · ${t.label}` : '(blind)';
+    const rEl = document.getElementById('m-r');
+    rEl.textContent = '—';
+    rEl.style.color = '#ccc';
+    return;
+  }
+  document.getElementById('m-exit').textContent   = fmt(t.exit_time);
   document.getElementById('m-reason').textContent = t.exit_reason;
   if (t.label) document.getElementById('m-reason').textContent = `${t.exit_reason} · ${t.label}`;
   const r = t.r_multiple;
@@ -703,11 +729,11 @@ function renderTradeList() {
     const ul   = userLabels[labelKey(t)];
     const lc   = ul && ul.label ? ' labeled-' + ul.label : '';
     const dir  = t.direction === 'LONG' || t.direction.toLowerCase().includes('long') ? 'long' : 'short';
-    const r    = t.r_multiple;
-    const rStr = r != null ? (r>=0?'+':'') + r.toFixed(2) + 'R' : '';
+    const r    = isBlind ? null : t.r_multiple;
+    const rStr = r != null ? (r>=0?'+':'') + r.toFixed(2) + 'R' : (isBlind ? 'blind' : '');
     const rCol = r != null ? (r>=0 ? '#22c55e' : '#ef4444') : '#888';
     const date = new Date(t.entry_time).toLocaleDateString('en-GB', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    const exit = t.exit_reason === 'TP1' ? 'TP' : t.exit_reason === 'SL' ? 'SL' : (t.exit_reason||'');
+    const exit = isBlind ? '' : (t.exit_reason === 'TP1' ? 'TP' : t.exit_reason === 'SL' ? 'SL' : (t.exit_reason||''));
     el.innerHTML += `
       <div class="trade-item${lc}" id="ti-${i}" onclick="showTrade(${i})">
         <div class="trade-num">${i+1}</div>

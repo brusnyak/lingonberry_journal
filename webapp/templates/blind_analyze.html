@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blind Dataset Analysis</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0d0d0d; color: #d4d4d4; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; }
+  header { padding: 14px 18px; border-bottom: 1px solid #242424; display: flex; justify-content: space-between; align-items: center; }
+  button { background: #2563eb; color: #fff; border: 0; border-radius: 4px; padding: 8px 12px; font: inherit; cursor: pointer; }
+  main { padding: 16px 18px; }
+  #cards { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .card { border: 1px solid #242424; background: #111; padding: 10px; }
+  .label { color: #737373; font-size: 10px; }
+  .value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; background: #111; }
+  th, td { border-bottom: 1px solid #242424; padding: 7px 8px; text-align: left; vertical-align: top; }
+  th { color: #a3a3a3; font-weight: 600; position: sticky; top: 0; background: #111; }
+  .pos { color: #22c55e; }
+  .neg { color: #ef4444; }
+  .muted { color: #737373; }
+  #buckets { margin: 10px 0 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .bucket { border: 1px solid #333; padding: 5px 8px; border-radius: 4px; background: #151515; }
+</style>
+</head>
+<body>
+<header>
+  <strong>BLIND DATASET ANALYSIS</strong>
+  <button onclick="loadAnalysis()">Refresh</button>
+</header>
+<main>
+  <div id="cards"></div>
+  <div id="buckets"></div>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th><th>Symbol</th><th>Dir</th><th>R</th><th>Outcome</th><th>MFE/MAE</th><th>Mgmt</th><th>Notes</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script>
+async function loadAnalysis() {
+  const resp = await fetch('/api/blind/analyze?max_bars=288');
+  const data = await resp.json();
+  if (data.error) return alert(data.error + (data.trace ? '\n' + data.trace : ''));
+  renderSummary(data.summary || {});
+  renderRows(data.rows || []);
+}
+
+function renderSummary(s) {
+  const cards = [
+    ['Total', s.total ?? 0],
+    ['Valid', s.valid ?? 0],
+    ['WR', pct(s.win_rate)],
+    ['Avg R', num(s.avg_r)],
+    ['Median R', num(s.median_r)],
+    ['Worst R', num(s.worst_r)],
+  ];
+  document.getElementById('cards').innerHTML = cards.map(([k,v]) =>
+    `<div class="card"><div class="label">${k}</div><div class="value">${v}</div></div>`
+  ).join('');
+  document.getElementById('buckets').innerHTML = (s.buckets || []).map(b =>
+    `<span class="bucket">${b.bucket} · n=${b.n} · ${num(b.avg_r)}R · WR ${pct(b.win_rate)}</span>`
+  ).join('');
+}
+
+function renderRows(rows) {
+  document.getElementById('rows').innerHTML = rows.map(r => {
+    const rr = Number(r.sim_r_multiple);
+    const cls = rr > 0 ? 'pos' : rr < 0 ? 'neg' : '';
+    return `<tr>
+      <td>${fmtTime(r.visible_until_iso)}</td>
+      <td>${esc(r.symbol)} ${esc(r.tf)}</td>
+      <td>${esc(r.direction || '')}</td>
+      <td class="${cls}">${Number.isFinite(rr) ? rr.toFixed(2) : esc(r.score_error || '-')}</td>
+      <td>${esc(r.sim_outcome || '-')}</td>
+      <td>${num(r.sim_mfe_r)} / ${num(r.sim_mae_r)}</td>
+      <td>${(r.management_events || []).length}</td>
+      <td>${esc(r.notes || '')}<div class="muted">${(r.drawings || []).length} drawings</div></td>
+    </tr>`;
+  }).join('');
+}
+
+function pct(x) { return Number.isFinite(Number(x)) ? (Number(x) * 100).toFixed(1) + '%' : '-'; }
+function num(x) { return Number.isFinite(Number(x)) ? Number(x).toFixed(2) : '-'; }
+function fmtTime(x) { return x ? new Date(x).toLocaleString('en-GB') : '-'; }
+function esc(x) { return String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+loadAnalysis();
+</script>
+</body>
+</html>

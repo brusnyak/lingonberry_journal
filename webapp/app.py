@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import uuid
 from html import escape
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +35,8 @@ except ImportError:
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)  # Enable CORS for all routes
+
+_BLIND_SESSIONS: dict[str, dict] = {}
 
 
 def _safe_ts(value: Optional[str]) -> Optional[datetime]:
@@ -1656,6 +1659,11 @@ def review_page():
     return render_template("review.html")
 
 
+@app.route("/blind")
+def blind_review_page():
+    return render_template("blind_review.html")
+
+
 def _review_asset_type(symbol: str) -> str:
     if symbol in ("XAUUSD", "XAGUSD"):
         return "commodity"
@@ -1677,6 +1685,322 @@ def _candles_json_from_df(df) -> list[dict]:
         }
         for _, row in df.iterrows()
     ]
+
+
+def _tf_minutes(tf: str) -> int:
+    return {"1": 1, "5": 5, "15": 15, "30": 30, "60": 60, "240": 240, "1440": 1440}.get(str(tf), 5)
+
+
+def _blind_public_state(session: dict, cursor: int | None = None, context_bars: int | None = None) -> dict:
+    candles = session["candles"]
+    indicators = session.get("indicators", {})
+    cursor = session["cursor"] if cursor is None else int(cursor)
+    context_bars = session["context_bars"] if context_bars is None else int(context_bars)
+    cursor = max(0, min(cursor, len(candles) - 1))
+    lo = max(0, cursor - context_bars + 1)
+    visible = candles[lo: cursor + 1]
+    current = candles[cursor]
+    return {
+        "session_id": session["session_id"],
+        "symbol": session["symbol"],
+        "tf": session["tf"],
+        "cursor": cursor,
+        "cursor_time": current["time"],
+        "visible_from": visible[0]["time"] if visible else current["time"],
+        "visible_to": current["time"],
+        "candles": visible,
+        "indicators": {name: vals[lo: cursor + 1] for name, vals in indicators.items()},
+        "has_prev": cursor > 0,
+        "has_next": cursor < len(candles) - 1,
+        "total_loaded": len(candles),
+        "decisions": len(session.get("decisions", [])),
+        "management_events": len(session.get("management_events", [])),
+    }
+
+
+def _blind_store_path() -> Path:
+    return Path(__file__).resolve().parent / "blind_decisions.jsonl"
+
+
+def _blind_append_decision(row: dict) -> None:
+    path = _blind_store_path()
+    with open(path, "a") as f:
+        f.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+
+def _jsonl_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def _value_at_or_before(series: list[dict], ts: int) -> Optional[float]:
+    val = None
+    for row in series:
+        if int(row.get("time", 0)) > ts:
+            break
+        val = row.get("value")
+    return float(val) if val is not None else None
+
+
+def _indicator_snapshot(session: dict, cursor: int) -> dict:
+    ts = int(session["candles"][cursor]["time"])
+    return {
+        name: _value_at_or_before(vals, ts)
+        for name, vals in session.get("indicators", {}).items()
+    }
+
+
+def _indicator_json_from_df(df) -> dict[str, list[dict]]:
+    import pandas as pd
+
+    out: dict[str, list[dict]] = {}
+    d = df.copy().reset_index(drop=True)
+    close = pd.to_numeric(d["close"], errors="coerce")
+    for period in (9, 21, 50, 200):
+        ema = close.ewm(span=period, adjust=False).mean()
+        out[f"ema{period}"] = [
+            {"time": int(ts.timestamp()), "value": float(val)}
+            for ts, val in zip(d["ts"], ema)
+            if pd.notna(val)
+        ]
+
+    typical = (d["high"] + d["low"] + d["close"]) / 3.0
+    volume = d["volume"] if "volume" in d.columns else pd.Series([1.0] * len(d))
+    day = pd.to_datetime(d["ts"], utc=True).dt.date
+    pv = typical * volume
+    vwap = pv.groupby(day).cumsum() / volume.groupby(day).cumsum().replace(0, float("nan"))
+    out["vwap"] = [
+        {"time": int(ts.timestamp()), "value": float(val)}
+        for ts, val in zip(d["ts"], vwap)
+        if pd.notna(val)
+    ]
+
+    prev_close = close.shift(1).fillna(close)
+    tr = pd.concat(
+        [
+            d["high"] - d["low"],
+            (d["high"] - prev_close).abs(),
+            (d["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr14 = tr.ewm(alpha=1 / 14, adjust=False).mean()
+    out["atr14"] = [
+        {"time": int(ts.timestamp()), "value": float(val)}
+        for ts, val in zip(d["ts"], atr14)
+        if pd.notna(val)
+    ]
+    return out
+
+
+def _load_blind_decision_candles(row: dict, max_bars: int = 288) -> tuple[list[dict], int]:
+    import pandas as pd
+    from backtesting.engine.data import load_data
+
+    symbol = str(row.get("symbol", "XAUUSD")).upper()
+    tf = str(row.get("tf", "5"))
+    visible_ts = pd.Timestamp(row.get("visible_until_iso"))
+    visible_ts = visible_ts.tz_localize("UTC") if visible_ts.tzinfo is None else visible_ts.tz_convert("UTC")
+    minutes = _tf_minutes(tf)
+    start = (visible_ts - pd.Timedelta(minutes=minutes)).isoformat()
+    end = (visible_ts + pd.Timedelta(minutes=minutes * (max_bars + 4))).isoformat()
+    df = load_data(symbol, tf=tf, start=start, end=end, asset_type=_review_asset_type(symbol))
+    if df.empty:
+        return [], 0
+    df = df.sort_values("ts").reset_index(drop=True)
+    df["ts"] = pd.to_datetime(df["ts"], utc=True)
+    candles = _candles_json_from_df(df)
+    target = int(visible_ts.timestamp())
+    cursor = 0
+    for i, c in enumerate(candles):
+        if int(c["time"]) <= target:
+            cursor = i
+        else:
+            break
+    return candles, cursor
+
+
+def _score_blind_decision(row: dict, max_bars: int = 288) -> dict:
+    candles, cursor = _load_blind_decision_candles(row, max_bars=max_bars)
+    if not candles:
+        return {**row, "score_error": "no candles"}
+    if not row.get("entry") or not row.get("sl") or not row.get("tp") or not row.get("direction"):
+        return {**row, "score_error": "missing trade plan"}
+    try:
+        sim = _simulate_blind_plan(
+            candles,
+            cursor,
+            row,
+            max_bars=max_bars,
+            management_events=row.get("management_events", []),
+        )
+    except Exception as e:
+        return {**row, "score_error": str(e)}
+    return {**row, **{f"sim_{k}": v for k, v in sim.items() if k != "revealed_candles"}}
+
+
+def _blind_analysis_summary(scored: list[dict]) -> dict:
+    valid = [r for r in scored if "sim_r_multiple" in r]
+    if not valid:
+        return {"total": len(scored), "valid": 0}
+    rs = [float(r["sim_r_multiple"]) for r in valid]
+    wins = [r for r in rs if r > 0]
+    by_key = {}
+    for r in valid:
+        for key in ("symbol", "tf", "bias", "direction"):
+            val = str(r.get(key) or "")
+            if not val:
+                continue
+            bucket = by_key.setdefault(f"{key}:{val}", [])
+            bucket.append(float(r["sim_r_multiple"]))
+    buckets = [
+        {
+            "bucket": k,
+            "n": len(v),
+            "avg_r": round(sum(v) / len(v), 3),
+            "win_rate": round(sum(1 for x in v if x > 0) / len(v), 3),
+        }
+        for k, v in by_key.items()
+    ]
+    buckets.sort(key=lambda x: (x["n"], x["avg_r"]), reverse=True)
+    return {
+        "total": len(scored),
+        "valid": len(valid),
+        "win_rate": round(len(wins) / len(valid), 3),
+        "avg_r": round(sum(rs) / len(rs), 3),
+        "median_r": round(sorted(rs)[len(rs) // 2], 3),
+        "best_r": round(max(rs), 3),
+        "worst_r": round(min(rs), 3),
+        "buckets": buckets[:20],
+    }
+
+
+def _simulate_blind_plan(
+    candles: list[dict],
+    cursor: int,
+    plan: dict,
+    max_bars: int = 288,
+    management_events: list[dict] | None = None,
+) -> dict:
+    direction = str(plan.get("direction") or "").lower()
+    entry = float(plan.get("entry"))
+    sl = float(plan.get("sl"))
+    tp = float(plan.get("tp"))
+    if direction not in ("long", "short"):
+        raise ValueError("direction must be long or short")
+    risk = abs(entry - sl)
+    reward = abs(tp - entry)
+    if risk <= 0 or reward <= 0:
+        raise ValueError("entry/sl/tp must define positive risk and reward")
+
+    outcome = "open"
+    active_sl = sl
+    remaining_frac = 1.0
+    banked_r = 0.0
+    exit_price = None
+    exit_time = None
+    exit_cursor = None
+    mfe = 0.0
+    mae = 0.0
+    start = min(cursor + 1, len(candles))
+    stop = min(len(candles), start + max(1, max_bars))
+    reveal = []
+    events = sorted(
+        [e for e in (management_events or []) if int(e.get("cursor", -1)) > cursor],
+        key=lambda e: int(e.get("cursor", 0)),
+    )
+    event_idx = 0
+    applied_events = []
+
+    for i in range(start, stop):
+        c = candles[i]
+        high = float(c["high"])
+        low = float(c["low"])
+        reveal.append(c)
+
+        while event_idx < len(events) and int(events[event_idx].get("cursor", -1)) == i:
+            ev = events[event_idx]
+            ev_type = str(ev.get("type") or "")
+            close = float(c["close"])
+            if ev_type == "move_sl":
+                active_sl = float(ev.get("price"))
+            elif ev_type == "move_sl_be":
+                active_sl = entry
+            elif ev_type == "partial":
+                pct = max(0.0, min(float(ev.get("fraction", 0.5)), remaining_frac))
+                move = (close - entry) if direction == "long" else (entry - close)
+                banked_r += pct * (move / risk)
+                remaining_frac -= pct
+            elif ev_type == "close":
+                move = (close - entry) if direction == "long" else (entry - close)
+                banked_r += remaining_frac * (move / risk)
+                remaining_frac = 0.0
+                outcome, exit_price, exit_time, exit_cursor = "manual_close", close, c["time"], i
+                applied_events.append({**ev, "applied_price": close})
+                break
+            applied_events.append(ev)
+            event_idx += 1
+        if outcome == "manual_close":
+            break
+
+        if direction == "long":
+            mfe = max(mfe, high - entry)
+            mae = max(mae, entry - low)
+            # Conservative same-bar ordering: if SL and TP are both inside one
+            # candle, count the stop first. No intrabar path fantasy.
+            if low <= active_sl:
+                outcome, exit_price, exit_time, exit_cursor = "sl", active_sl, c["time"], i
+                break
+            if high >= tp:
+                outcome, exit_price, exit_time, exit_cursor = "tp", tp, c["time"], i
+                break
+        else:
+            mfe = max(mfe, entry - low)
+            mae = max(mae, high - entry)
+            if high >= active_sl:
+                outcome, exit_price, exit_time, exit_cursor = "sl", active_sl, c["time"], i
+                break
+            if low <= tp:
+                outcome, exit_price, exit_time, exit_cursor = "tp", tp, c["time"], i
+                break
+
+    r_multiple = banked_r
+    if outcome == "tp":
+        r_multiple += remaining_frac * (reward / risk)
+    elif outcome == "sl":
+        stop_r = ((active_sl - entry) / risk) if direction == "long" else ((entry - active_sl) / risk)
+        r_multiple += remaining_frac * stop_r
+    elif reveal:
+        last = float(reveal[-1]["close"])
+        move = (last - entry) if direction == "long" else (entry - last)
+        r_multiple += remaining_frac * (move / risk)
+
+    return {
+        "outcome": outcome,
+        "exit_price": exit_price,
+        "exit_time": exit_time,
+        "exit_cursor": exit_cursor,
+        "bars_elapsed": (exit_cursor - cursor) if exit_cursor is not None else len(reveal),
+        "r_multiple": round(r_multiple, 4),
+        "rr": round(reward / risk, 4),
+        "mfe_r": round(mfe / risk, 4),
+        "mae_r": round(mae / risk, 4),
+        "remaining_frac": round(remaining_frac, 4),
+        "active_sl": round(active_sl, 6),
+        "applied_events": applied_events,
+        "revealed_candles": reveal,
+    }
 
 
 def _strict_ict_structure_overlay(df, left: int = 3, right: int = 3) -> dict:
@@ -1739,6 +2063,196 @@ def _strict_ict_structure_overlay(df, left: int = 3, right: int = 3) -> dict:
                 }
             )
     return structure_data
+
+
+@app.route("/api/blind/session", methods=["POST"])
+def api_blind_session():
+    """
+    Start a server-side candle replay session.
+
+    Unlike /api/review/run, this endpoint never returns the full candle range.
+    The full data stays in _BLIND_SESSIONS and the client only receives candles
+    up to the current cursor, which is the minimum needed for trustworthy
+    forward-only manual labels.
+    """
+    import pandas as pd
+
+    body = request.get_json(silent=True) or {}
+    symbol = str(body.get("symbol", "XAUUSD")).upper()
+    tf = str(body.get("tf", "5"))
+    start = body.get("start")
+    end = body.get("end")
+    # Context is always a strict backward slice from cursor (see
+    # _blind_public_state) -- it can never leak future bars, so there's no
+    # hindsight-bias reason to cap it small. Raised from 500 after user
+    # feedback that even 1000 bars wasn't enough to match how they read
+    # charts live (full prior history, multiple timeframes).
+    context_bars = max(1, min(int(body.get("context_bars", 150)), 20_000))
+    warmup_bars = max(0, min(int(body.get("warmup_bars", context_bars)), 20_000))
+
+    try:
+        from backtesting.engine.data import load_data
+
+        df = load_data(symbol, tf=tf, start=start, end=end, asset_type=_review_asset_type(symbol))
+        if df.empty:
+            return jsonify({"error": "No data for requested range"}), 400
+        df = df.sort_values("ts").reset_index(drop=True)
+        df["ts"] = pd.to_datetime(df["ts"], utc=True)
+        candles = _candles_json_from_df(df)
+        if not candles:
+            return jsonify({"error": "No candles after loading range"}), 400
+
+        start_cursor = min(max(warmup_bars, 0), len(candles) - 1)
+        session_id = uuid.uuid4().hex
+        session = {
+            "session_id": session_id,
+            "symbol": symbol,
+            "tf": tf,
+            "start": start,
+            "end": end,
+            "context_bars": context_bars,
+            "cursor": start_cursor,
+            "candles": candles,
+            "indicators": _indicator_json_from_df(df),
+            "decisions": [],
+            "management_events": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _BLIND_SESSIONS[session_id] = session
+        return jsonify(_blind_public_state(session))
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc(limit=5)}), 500
+
+
+@app.route("/api/blind/step", methods=["POST"])
+def api_blind_step():
+    body = request.get_json(silent=True) or {}
+    session_id = str(body.get("session_id", ""))
+    session = _BLIND_SESSIONS.get(session_id)
+    if not session:
+        return jsonify({"error": "Unknown or expired blind session"}), 404
+    step = int(body.get("step", 1))
+    max_step = max(1, min(int(body.get("max_step", 1)), 96))
+    step = max(-max_step, min(step, max_step))
+    session["cursor"] = max(0, min(session["cursor"] + step, len(session["candles"]) - 1))
+    return jsonify(_blind_public_state(session))
+
+
+@app.route("/api/blind/decision", methods=["POST"])
+def api_blind_decision():
+    body = request.get_json(silent=True) or {}
+    session_id = str(body.get("session_id", ""))
+    session = _BLIND_SESSIONS.get(session_id)
+    if not session:
+        return jsonify({"error": "Unknown or expired blind session"}), 404
+
+    cursor = int(session["cursor"])
+    candle = session["candles"][cursor]
+    context_bars = int(body.get("saved_context_bars", session.get("context_bars", 150)))
+    lo = max(0, cursor - max(1, context_bars) + 1)
+    row = {
+        "made_at": datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "symbol": session["symbol"],
+        "tf": session["tf"],
+        "cursor": cursor,
+        "visible_until": candle["time"],
+        "visible_until_iso": datetime.fromtimestamp(candle["time"], tz=timezone.utc).isoformat(),
+        "bias": body.get("bias"),
+        "action": body.get("action"),
+        "direction": body.get("direction"),
+        "entry": body.get("entry"),
+        "sl": body.get("sl"),
+        "tp": body.get("tp"),
+        "confidence": body.get("confidence"),
+        "notes": body.get("notes", ""),
+        "tags": body.get("tags", []),
+        "drawings": body.get("drawings", []),
+        "management_events": body.get("management_events", session.get("management_events", [])),
+        "cursor_ohlc": candle,
+        "indicator_snapshot": _indicator_snapshot(session, cursor),
+        "visible_candles": session["candles"][lo: cursor + 1],
+        "visible_indicators": {
+            name: vals[lo: cursor + 1]
+            for name, vals in session.get("indicators", {}).items()
+        },
+        "active_indicators": body.get("active_indicators", []),
+    }
+    session["decisions"].append(row)
+    _blind_append_decision(row)
+    return jsonify({"ok": True, "decision": row, "total": len(session["decisions"])})
+
+
+@app.route("/api/blind/manage", methods=["POST"])
+def api_blind_manage():
+    body = request.get_json(silent=True) or {}
+    session_id = str(body.get("session_id", ""))
+    session = _BLIND_SESSIONS.get(session_id)
+    if not session:
+        return jsonify({"error": "Unknown or expired blind session"}), 404
+    cursor = int(session["cursor"])
+    candle = session["candles"][cursor]
+    event = {
+        "made_at": datetime.now(timezone.utc).isoformat(),
+        "type": body.get("type"),
+        "cursor": cursor,
+        "visible_until": candle["time"],
+        "visible_until_iso": datetime.fromtimestamp(candle["time"], tz=timezone.utc).isoformat(),
+        "price": body.get("price"),
+        "fraction": body.get("fraction"),
+        "notes": body.get("notes", ""),
+    }
+    if event["type"] not in ("move_sl", "move_sl_be", "partial", "close"):
+        return jsonify({"error": "Unknown management event type"}), 400
+    session["management_events"].append(event)
+    return jsonify({"ok": True, "event": event, "total": len(session["management_events"])})
+
+
+@app.route("/api/blind/simulate", methods=["POST"])
+def api_blind_simulate():
+    body = request.get_json(silent=True) or {}
+    session_id = str(body.get("session_id", ""))
+    session = _BLIND_SESSIONS.get(session_id)
+    if not session:
+        return jsonify({"error": "Unknown or expired blind session"}), 404
+    cursor = int(body.get("cursor", session["cursor"]))
+    cursor = max(0, min(cursor, len(session["candles"]) - 1))
+    max_bars = max(1, min(int(body.get("max_bars", 288)), 2_000))
+    plan = {
+        "direction": body.get("direction"),
+        "entry": body.get("entry"),
+        "sl": body.get("sl"),
+        "tp": body.get("tp"),
+    }
+    events = body.get("management_events", session.get("management_events", []))
+    try:
+        return jsonify(_simulate_blind_plan(
+            session["candles"],
+            cursor,
+            plan,
+            max_bars=max_bars,
+            management_events=events,
+        ))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/blind/analyze")
+def blind_analyze_page():
+    return render_template("blind_analyze.html")
+
+
+@app.route("/api/blind/analyze")
+def api_blind_analyze():
+    try:
+        max_bars = max(1, min(int(request.args.get("max_bars", 288)), 2_000))
+        rows = _jsonl_rows(_blind_store_path())
+        scored = [_score_blind_decision(row, max_bars=max_bars) for row in rows]
+        return jsonify({"summary": _blind_analysis_summary(scored), "rows": scored})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "trace": traceback.format_exc(limit=5)}), 500
 
 
 @app.route("/callback")
@@ -1818,6 +2332,9 @@ def api_review_run():
             if start and not data[tf].empty and "ts" in data[tf].columns:
                 start_ts = pd.Timestamp(start, tz="UTC")
                 data[tf] = data[tf][data[tf]["ts"] >= start_ts].reset_index(drop=True)
+        # lvl1/lvl2 need their HTF regime timeframe (60m by default)
+        if strategy in ("Lvl1Trend", "Lvl2Structure") and "60" not in data:
+            data["60"] = load_data(symbol, tf="60", start=load_start, end=end, **load_kw)
         if data[tf].empty:
             return jsonify({"error": "No data for requested range"}), 400
 
@@ -1841,6 +2358,48 @@ def api_review_run():
             min_rr   = float(params.get("min_rr", 1.5))
             strat = TrIct(risk_pct=risk_pct, min_rr=min_rr, sessions_only=True)
             costs = ForexCosts()
+        elif strategy == "Lvl1Trend":
+            import numpy as np
+            from backtesting.lvl1_trend.htf_ema_vwap import HtfEmaVwap
+            from backtesting.engine.regime import efficiency_ratio
+
+            class GatedHtfEmaVwap(HtfEmaVwap):
+                """ER+ATR trend gate — see backtesting/lvl1_trend/, CLEAN.md."""
+                def init(self, data):
+                    super().init(data)
+                    er = efficiency_ratio(self._close, period=10)
+                    tr_ = np.maximum(self._high - self._low, np.maximum(
+                        np.abs(self._high - np.roll(self._close, 1)),
+                        np.abs(self._low - np.roll(self._close, 1))))
+                    atr = pd.Series(tr_).rolling(14).mean().to_numpy()
+                    atr_avg100 = pd.Series(atr).rolling(100).mean().to_numpy()
+                    self._gate = (er > 0.3) & (atr <= 1.3 * atr_avg100)
+                def next(self, bar, state):
+                    i = bar.index
+                    if i >= len(self._gate) or not self._gate[i]:
+                        return None
+                    return super().next(bar, state)
+
+            lvl1_cost_cfg = {
+                "XAUUSD": dict(pip_size=0.01, pip_value_per_lot=1.0, fixed_spread_pips=30.0),
+                "XAGUSD": dict(pip_size=0.001, pip_value_per_lot=5.0, fixed_spread_pips=40.0),
+                "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
+            }
+            strat = GatedHtfEmaVwap()
+            costs = ForexCosts(seed=0, **lvl1_cost_cfg.get(symbol, dict(pip_size=0.0001)))
+        elif strategy == "Lvl2Structure":
+            from backtesting.lvl1_trend.htf_structure_vwap import HtfStructureVwap
+            lvl1_cost_cfg = {
+                "XAUUSD": dict(pip_size=0.01, pip_value_per_lot=1.0, fixed_spread_pips=30.0),
+                "XAGUSD": dict(pip_size=0.001, pip_value_per_lot=5.0, fixed_spread_pips=40.0),
+                "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
+            }
+            strat = HtfStructureVwap(
+                min_rr=float(params.get("min_rr", 1.0)),
+                cooldown_bars=int(params.get("cooldown_bars", 9)),
+                atr_ceiling_mult=float(params.get("atr_ceiling_mult", 1.3)),
+            )
+            costs = ForexCosts(seed=0, **lvl1_cost_cfg.get(symbol, dict(pip_size=0.0001)))
         else:
             return jsonify({"error": f"Unknown strategy: {strategy}"}), 400
 
@@ -1969,6 +2528,20 @@ def api_review_run():
                        if k not in ("equity_curve", "trade_pnls", "trade_r_multiples")}
         safe_report["trades"] = int(safe_report.get("trades", 0))
 
+        # Blind review mode: strip every outcome field so the reviewer only sees
+        # what was knowable at signal time (entry/sl/tp1), never the result.
+        # Aggregate stats are hidden too — seeing WR/PF upfront biases labels
+        # toward matching the displayed number. This is the fix for the
+        # hindsight-bias finding in selection_edge_unmeasurable (211 reviews,
+        # 73% next-bar-favorable) — see CLEAN.md §11.
+        blind = bool(body.get("blind", False))
+        if blind:
+            OUTCOME_FIELDS = ("exit_time", "exit_price", "exit_reason", "pnl", "r_multiple")
+            for t in trades_json:
+                for f in OUTCOME_FIELDS:
+                    t.pop(f, None)
+            safe_report = {"trades": safe_report.get("trades", 0)}
+
         return jsonify({
             "symbol": symbol,
             "tf": tf,
@@ -1977,6 +2550,7 @@ def api_review_run():
             "trades": trades_json,
             "candles": candles_json,
             "structure": structure_data,
+            "blind": blind,
         })
 
     except Exception as e:

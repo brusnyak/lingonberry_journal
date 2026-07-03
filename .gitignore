@@ -64,3 +64,6 @@ notes.txt
 notes*.txt
 core/config.txt
 catboost_info/
+infra/telegram_signals/.login_state.json
+data/telegram_signals/
+webapp/blind_decisions.jsonl
