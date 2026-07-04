@@ -1594,3 +1594,70 @@ Tests: 95/95 pass (3 new for OvernightDrift's `stop_mode="structure"`).
 - User is now reviewing ORB + OvernightDrift trades in the (now-corrected)
   UI in parallel; agreed next work-stream split is ML/further-improvement
   research while that manual review continues.
+
+## 30. Combined-book validation: ORB + OvernightDrift on one shared account
+
+### Why this needed checking
+Both strategies were validated in ISOLATION, each on its own $10k baseline.
+They're designed to be time-disjoint (ORB flat by ~15:55 NY, OvernightDrift
+holds 16:00->09:30 NY, exiting right as ORB's session opens) but that was
+a design assumption, never actually verified end-to-end against real data
+gaps (holidays, early closes). Before running both live on one account,
+built `backtesting/portfolio/combined_book.py` (`CombinedBook`): a
+Strategy wrapper that runs N sub-strategies against ONE shared position
+slot (reusing the engine's existing global `has_open_position`, not a new
+mechanism), logs any bar where more than one member wants to enter at
+once (`.collisions`), and dispatches `should_close` by matching the closed
+position's label back to its owning sub-strategy.
+
+### Result: no real overlap, but risk stacking is real
+Zero `next()`-level collisions across the full dataset (571 raw trade-log
+rows). A naive first pass flagged 48 "overlaps" comparing entry/exit
+times, which turned out to be a false-positive artifact of the multi-
+target ladder's partial-close logging (ORB's tp1/tp2/final legs each get
+their own row with the SAME entry_time and increasing exit_time) --
+collapsing to one row per logical position (max exit_time per entry_time
+cluster) brought genuine concurrent-position overlaps to **zero**. The
+sequential handoff holds.
+
+But combining both strategies' individually-calibrated risk still
+breaches the 100k account:
+```
+                     disc                    hold
+100k @ 0.4%/0.4%   breached=True(maxDD 6.27%)   breached=False, ret 63.9%
+```
+Two strategies that separately never breach a tighter drawdown ceiling
+can still stack sequential losing streaks into one drawdown run that
+crosses it when run together -- a real, previously-unmeasured risk of
+combining two validated-in-isolation strategies, not a bug in either one.
+
+**Recalibrated combined risk, both accounts, both windows clean:**
+```
+              disc                          hold
+25k @ 0.4%/0.4%   ret 60.2%  maxDD 7.1%    ret 63.9%  maxDD 4.0%   (also re-checked 0.5%/0.5%: passes but only 1.2pp DD margin -- 0.4% recommended for margin)
+100k @ 0.3%/0.3%  ret 42.7%  maxDD ~5%     ret 45.0%  maxDD ~5%
+```
+**Recommended combined-book production config**: run ORB and OvernightDrift
+together at `risk_pct=0.004` (25k) / `risk_pct=0.003` (100k) EACH, not
+their solo-calibrated 0.5%/0.4% -- both still comfortably clear the profit
+target with this derating.
+
+Extracted the repeated hand-rolled prop-check logic into
+`backtesting/analysis/prop_check.py` (`check_prop_compliance`) since it
+had been copy-pasted inline across three scratch scripts this session --
+same standing instruction as `backtesting/analysis/` from earlier.
+
+Tests: 105/105 pass (5 new for `CombinedBook`, 5 new for `check_prop_compliance`).
+
+### Next in the priority queue (agreed with user)
+1. DONE -- combined-book validation (this section).
+2. Walk-forward across rolling windows (not just one discovery/holdout
+   split) -- `backtesting/analysis/rolling_pass_rate.py` already exists,
+   apply it to both strategies' current configs.
+3. ML confidence-filter plan (P(win) gate on top of already-triggered
+   signals, NOT a new direction predictor) -- plan first, given small
+   sample size (~130-160 discovery trades/strategy) and this project's
+   history of overfitting traps.
+4. Regime detection upgrade: test `ict_state` (causal BOS/CHoCH state
+   machine, already trusted for the review UI) as a replacement/addition
+   to the blunt EMA-slope HTF filter.
