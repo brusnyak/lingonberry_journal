@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtesting.crypto.validation import RollingValidation, rolling_validate, print_validation_table
 from backtesting.engine.base import Strategy
 from backtesting.engine.costs import CryptoCosts
 from backtesting.engine.data import load_data, load_funding_rate
@@ -153,6 +154,7 @@ def make_crypto_configs(
     days: Optional[int] = 30,
     initial_equity: float = 20.0,
     leverage: float = 50.0,
+    default_risk_pct: float | None = None,
 ) -> list[CryptoRunConfig]:
     if entry_tfs is None:
         entry_tfs = ["5", "15"]
@@ -162,6 +164,10 @@ def make_crypto_configs(
         exchanges = ["binance"]
     if param_grid is None:
         param_grid = getattr(strategy_cls, "spaces", {})
+
+    # Override risk_pct in param_grid if default_risk_pct is set
+    if default_risk_pct is not None and "risk_pct" in param_grid:
+        param_grid = {**param_grid, "risk_pct": [default_risk_pct]}
 
     keys = list(param_grid.keys())
     combos = list(itertools.product(*param_grid.values()))
@@ -188,12 +194,16 @@ SWEEP_STRATEGIES: dict[str, Type[Strategy]] = {}
 def _load_strategies():
     global SWEEP_STRATEGIES
     from backtesting.strategies.tr_fvg import TrFvg
-    from backtesting.crypto.strategies.bos_fade import TrBosFade
     from backtesting.strategies.tr_accumulation import TrAccumulation
+    from backtesting.crypto.strategies.bos_fade import TrBosFade
+    from backtesting.crypto.strategies.ict import TrIct
+    from backtesting.crypto.strategies.tsmom_breakout import CryptoTsmomBreakout
     SWEEP_STRATEGIES = {
         "tr_fvg": TrFvg,
         "tr_bos_fade": TrBosFade,
         "tr_accumulation": TrAccumulation,
+        "tr_ict": TrIct,
+        "crypto_tsmom": CryptoTsmomBreakout,
     }
 
 
@@ -310,6 +320,14 @@ def main():
                         help="Initial equity for $20 scaling test")
     parser.add_argument("--leverage", type=float, default=50.0,
                         help="Leverage")
+    parser.add_argument("--risk-pct", type=float, default=None,
+                        help="Override risk_pct for all strategies (e.g. 0.05 for 5%%, scaling_plan default)")
+    parser.add_argument("--validate", action="store_true",
+                        help="Run rolling window validation on top results")
+    parser.add_argument("--validate-window", type=int, default=60,
+                        help="Validation window days (default 60)")
+    parser.add_argument("--validate-step", type=int, default=14,
+                        help="Validation step days (default 14)")
     parser.add_argument("--output", default="backtesting/results/crypto_sweep.csv",
                         help="Output CSV path")
     args = parser.parse_args()
@@ -317,6 +335,9 @@ def main():
     pairs = [s.strip().upper() for s in args.pairs.split(",")]
     exchanges = [s.strip().lower() for s in args.exchanges.split(",")]
     tfs = [s.strip() for s in args.tfs.split(",")]
+
+    # Default risk: 5% per scaling_plan.md unless strategy has narrow-compatible defaults
+    default_risk = args.risk_pct if args.risk_pct is not None else 0.05
 
     strategies_to_run = list(SWEEP_STRATEGIES.keys()) if args.sweep == "all" else [args.sweep]
 
@@ -330,6 +351,7 @@ def main():
         configs = make_crypto_configs(
             cls, pairs=pairs, entry_tfs=tfs, exchanges=exchanges,
             days=args.days, initial_equity=args.equity, leverage=args.leverage,
+            default_risk_pct=default_risk,
         )
         if not configs:
             print("  No configs (strategy has no spaces or no pairs)")
@@ -339,8 +361,30 @@ def main():
         df = run_crypto_sweep(cls, configs, workers=args.workers, min_trades=1)
         elapsed = time.time() - t0
 
-        print_sweep_table(df, title=f"{sname} | {args.days}d | ${args.equity:.0f} @ {args.leverage}x")
+        print_sweep_table(df, title=f"{sname} | {args.days}d | ${args.equity:.0f} @ {args.leverage}x | risk={default_risk:.1%}")
         print(f"  Elapsed: {elapsed:.1f}s")
+
+        # Rolling validation on top configs
+        if args.validate:
+            top = df[df["error"].isna() & (df["trades"] >= 5)].head(5)
+            if not top.empty:
+                val_results = []
+                for _, row in top.iterrows():
+                    cfg = CryptoRunConfig(
+                        pair=row["pair"], entry_tf=row["entry_tf"],
+                        exchange=row["exchange"], params=row.to_dict(),
+                        days=args.days * 6,  # longer data for validation windows
+                        initial_equity=args.equity, leverage=args.leverage,
+                    )
+                    try:
+                        vt = _validate_one(cls, cfg, args.validate_window, args.validate_step)
+                        label = f"{row['pair']} {row['entry_tf']}m"
+                        val_results.append((label, vt))
+                    except Exception:
+                        pass
+                if val_results:
+                    print_validation_table(val_results, title=f"{sname} validation: top 5 configs")
+
         all_dfs.append(df)
 
     if all_dfs:
@@ -348,6 +392,50 @@ def main():
         if args.output:
             combined.to_csv(args.output, index=False)
             print(f"\n  Results saved to {args.output}")
+
+
+def _validate_one(
+    strategy_cls: Type[Strategy],
+    cfg: CryptoRunConfig,
+    window_days: int,
+    step_days: int,
+) -> RollingValidation:
+    """Run a longer backtest and validate across rolling windows."""
+    import pandas as pd
+    tfs = list(dict.fromkeys([cfg.entry_tf] + cfg.support_tfs))
+    data: dict[str, pd.DataFrame] = {}
+    for tf in tfs:
+        df = load_data(cfg.pair, tf=tf, days=cfg.days, start=cfg.start, end=cfg.end,
+                       exchange=cfg.exchange)
+        if df.empty:
+            return RollingValidation(n_windows=0, n_with_trades=0, n_profitable=0, windows=[])
+        data[tf] = df
+
+    funding_df = load_funding_rate(cfg.pair, exchange=cfg.exchange)
+    specs = _load_market_specs(cfg.pair, cfg.exchange)
+    costs = CryptoCosts(
+        leverage=cfg.leverage,
+        funding_df=funding_df if not funding_df.empty else None,
+        min_notional=specs.get("min_notional", 0.0),
+        min_qty=specs.get("min_qty", 0.0),
+        qty_step=specs.get("qty_step", 0.0),
+        tick_size=specs.get("tick_size", 0.0),
+    )
+
+    result = run(
+        strategy_cls(**cfg.params),
+        data,
+        entry_tf=cfg.entry_tf,
+        costs=costs,
+        initial_equity=cfg.initial_equity,
+    )
+    return rolling_validate(
+        result.to_df(),
+        window_days=window_days,
+        step_days=step_days,
+        min_trades=3,
+        initial_equity=cfg.initial_equity,
+    )
 
 
 if __name__ == "__main__":
