@@ -18,13 +18,29 @@ Mechanism, fixed ex-ante from the literature (not fit to data):
     is the first mechanism tried for the crypto track rather than porting
     an equity-session concept (ORB/overnight-drift/closing-momentum) that
     doesn't map onto a 24/7 market with no cash session.
-  - Sizing: fixed-fractional risk_pct per trade against an ATR-based stop,
+  - Sizing: fixed-fractional risk_pct per trade against an initial stop,
     same convention as every other strategy in this project -- NOT the
     volatility-targeting used in the academic TSMOM paper (that scales
     position size inversely to trailing realized vol to equalize risk
     contribution across assets in a multi-asset book; this is a single-
     asset per-instance backtest, so it's out of scope until/unless this
     strategy is run as a portfolio across multiple coins at once).
+
+Stop modes (`stop_mode`), ready to A/B once real data lands -- this
+project's standing lesson is that ATR-multiple stops sometimes work
+(OvernightDrift, §29) and sometimes don't fix anything (IntradayMomentum,
+§28), so a fallback is built in from the start rather than retrofitted:
+  - "atr" (default): close -/+ stop_atr_mult * ATR(atr_period).
+  - "structure": stop behind the nearest CONFIRMED swing low/high, via
+    the same causal engine (`ict_structure.build_ict_structure_index`)
+    already validated for both equity-index strategies. Falls back to atr
+    if no swing is confirmed yet or the swing sits the wrong side of price.
+  - "channel": stop at the exit-channel's opposite bound (the same
+    `exit_len`-bar Donchian level used for exits) -- a lighter, Turtle-
+    native alternative that needs no extra engine dependency: if price
+    round-trips back through the SHORTER channel, the trend thesis is
+    already broken, so use that level as the initial stop directly instead
+    of an arbitrary ATR multiple.
 
 No lookahead: entry/exit channel bounds and ATR are computed from bars
 strictly BEFORE the current bar (channel excludes the current close).
@@ -38,6 +54,7 @@ import pandas as pd
 
 from backtesting.engine.base import BarData, EngineState, Strategy
 from backtesting.engine.orders import Direction, Signal
+from backtesting.features.ict_structure import build_ict_structure_index
 
 
 def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
@@ -60,6 +77,10 @@ class CryptoTsmomBreakout(Strategy):
         exit_len: int = 10,      # shorter exit channel -- asymmetric to avoid whipsaw
         atr_period: int = 14,
         stop_atr_mult: float = 2.0,
+        stop_mode: str = "atr",           # "atr", "structure", or "channel"
+        structure_buffer_atr: float = 0.1,
+        structure_left: int = 3,
+        structure_right: int = 3,
     ):
         self.risk_pct = risk_pct
         self.direction = direction
@@ -67,6 +88,10 @@ class CryptoTsmomBreakout(Strategy):
         self.exit_len = exit_len
         self.atr_period = atr_period
         self.stop_atr_mult = stop_atr_mult
+        self.stop_mode = stop_mode
+        self.structure_buffer_atr = structure_buffer_atr
+        self.structure_left = structure_left
+        self.structure_right = structure_right
         self._pos_dir = 0  # 0 flat, 1 long, -1 short -- tracked for should_close's exit-channel check
 
     def init(self, data: dict) -> None:
@@ -92,6 +117,20 @@ class CryptoTsmomBreakout(Strategy):
         self._exit_hi = high_s.shift(1).rolling(self.exit_len).max().to_numpy()
         self._exit_lo = low_s.shift(1).rolling(self.exit_len).min().to_numpy()
 
+        self._last_hl = None
+        self._last_ll = None
+        self._last_lh = None
+        self._last_hh = None
+        if self.stop_mode == "structure":
+            from backtesting.features.ict_structure import IctStructureConfig
+            struct_df = df[["ts", "open", "high", "low", "close"]].reset_index(drop=True)
+            cfg = IctStructureConfig(left=self.structure_left, right=self.structure_right)
+            struct = build_ict_structure_index(struct_df, cfg)
+            self._last_hl = struct["last_hl"].ffill().to_numpy()
+            self._last_ll = struct["last_ll"].ffill().to_numpy()
+            self._last_lh = struct["last_lh"].ffill().to_numpy()
+            self._last_hh = struct["last_hh"].ffill().to_numpy()
+
         self._pos_dir = 0
 
     def next(self, bar: BarData, state: EngineState) -> Optional[Signal]:
@@ -106,19 +145,47 @@ class CryptoTsmomBreakout(Strategy):
         close = bar.close
         if close > entry_hi and self.direction in ("long", "both"):
             self._pos_dir = 1
-            sl = close - self.stop_atr_mult * atr
+            sl = self._compute_sl(i, close, atr, long=True)
             return Signal(direction=Direction.LONG, entry=close, sl=sl,
                           tp1=close + 50 * (close - sl),  # effectively disabled; exit-channel/SL are the real exits
                           risk_pct=self.risk_pct, tp1_frac=0.0, tp2_frac=0.0,
                           trail=False, label="crypto_tsmom_long")
         if close < entry_lo and self.direction in ("short", "both"):
             self._pos_dir = -1
-            sl = close + self.stop_atr_mult * atr
+            sl = self._compute_sl(i, close, atr, long=False)
             return Signal(direction=Direction.SHORT, entry=close, sl=sl,
                           tp1=close - 50 * (sl - close),
                           risk_pct=self.risk_pct, tp1_frac=0.0, tp2_frac=0.0,
                           trail=False, label="crypto_tsmom_short")
         return None
+
+    def _compute_sl(self, i: int, close: float, atr: float, long: bool) -> float:
+        atr_sl = close - self.stop_atr_mult * atr if long else close + self.stop_atr_mult * atr
+
+        if self.stop_mode == "channel":
+            level = self._exit_lo[i] if long else self._exit_hi[i]
+            if np.isnan(level) or (level >= close if long else level <= close):
+                return atr_sl
+            return level
+
+        if self.stop_mode == "structure":
+            buf = self.structure_buffer_atr * atr
+            if long:
+                level = self._last_hl[i]
+                if np.isnan(level):
+                    level = self._last_ll[i]
+                if np.isnan(level) or level >= close:
+                    return atr_sl
+                return level - buf
+            else:
+                level = self._last_lh[i]
+                if np.isnan(level):
+                    level = self._last_hh[i]
+                if np.isnan(level) or level <= close:
+                    return atr_sl
+                return level + buf
+
+        return atr_sl
 
     def should_close(self, position, bar: BarData, state: EngineState) -> bool:
         i = bar.index

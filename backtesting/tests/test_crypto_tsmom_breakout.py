@@ -90,3 +90,42 @@ def test_direction_long_only_ignores_short_breakouts():
     assert s.next(_bar(close=94.0), _state()) is None
     sig = s.next(_bar(close=106.0), _state())
     assert sig is not None and sig.direction == Direction.LONG
+
+
+def test_channel_stop_long_uses_exit_channel_low():
+    s = _strategy()
+    s.stop_mode = "channel"
+    sig = s.next(_bar(close=106.0), _state())
+    assert sig.sl == 98.0  # s._exit_lo fixture value
+
+
+def test_channel_stop_falls_back_to_atr_when_channel_wrong_side():
+    s = _strategy()
+    s.stop_mode = "channel"
+    s._exit_lo = np.full(20, 107.0)  # above entry price -- unusable for a long
+    sig = s.next(_bar(close=106.0), _state())
+    assert sig.sl == 106.0 - 2.0 * 2.0
+
+
+def _structure_strategy():
+    s = _strategy()
+    s.stop_mode = "structure"
+    n = s._n
+    s._last_hl = np.full(n, np.nan)
+    s._last_ll = np.full(n, np.nan)
+    s._last_lh = np.full(n, np.nan)
+    s._last_hh = np.full(n, np.nan)
+    return s
+
+
+def test_structure_stop_long_uses_last_hl_minus_buffer():
+    s = _structure_strategy()
+    s._last_hl[10] = 95.0
+    sig = s.next(_bar(close=106.0), _state())
+    assert sig.sl == 95.0 - 0.1 * 2.0
+
+
+def test_structure_stop_falls_back_to_atr_when_no_swing():
+    s = _structure_strategy()
+    sig = s.next(_bar(close=106.0), _state())
+    assert sig.sl == 106.0 - 2.0 * 2.0
