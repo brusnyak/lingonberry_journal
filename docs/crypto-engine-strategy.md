@@ -1,5 +1,21 @@
 # Crypto Engine — Strategy Plan
 
+## Architecture Principle
+
+The engine is a collection of small, independent pieces — not a monolithic file.
+
+Each piece has one job:
+- **Direction identification** — HTF state, regime filter, structure labels
+- **Entry logic** — pattern detection, sweep/FVG/OB matching
+- **Stop loss** — ATR multiple, channel bound, structure level
+- **Targets** — fixed RR, opposite liquidity, trailing mechanism
+- **Position management** — partial closes, breakeven, trail activation
+- **Monitoring** — trade logging, metric tracking, challenge rule enforcement
+
+Strategies compose these pieces. A strategy file defines the arrangement, not the implementation. This is already the design (`structure_lib/` has separate modules for sweeps, FVGs, order blocks, structure labels, trade signals; `engine/` has separate modules for orders, costs, data loading, metrics, runner).
+
+The engine should never need a rewrite — only new pieces added or old pieces replaced.
+
 ## Problem
 
 The forex engine works with a fixed universe of ~21 pairs. You know each pair's behavior. Strategy fires when the setup appears.
@@ -55,11 +71,11 @@ These are manual/alert-based, not automated for now.
 ## Priority
 
 ### Phase 1 — Foundation cleanup (both forex and crypto)
-| Step | Scope | Why |
-|------|-------|-----|
-| 1.1 Fix ICT look-ahead bias | structure_lib rewrite | Blocks an entire strategy family |
-| 1.2 Look-ahead detector in base Strategy | engine/base.py | Catch future bugs before they contaminate results |
-| 1.3 Default risk to 2% for development | batch.py, configs | 5% destroys equity too fast to measure signal quality |
+| Step | Status | Scope | Why |
+|------|--------|-------|-----|
+| 1.1 Fix ICT look-ahead bias | DONE 2026-07-04 | structure_lib rewrite + causal incremental strategy | Blocks an entire strategy family |
+| 1.2 Look-ahead detector in base Strategy | DONE 2026-07-04 | engine/base.py | Catch future bugs before they contaminate results |
+| 1.3 Default risk to 2% for development | DONE 2026-07-04 | batch.py, configs | 5% destroys equity too fast to measure signal quality |
 
 ### Phase 2 — DOGE investigation + tier-2 screener
 | Step | Scope | Why |

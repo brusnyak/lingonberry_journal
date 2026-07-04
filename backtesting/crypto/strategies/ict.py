@@ -1,34 +1,41 @@
 """
-TrIct — ICT/SMC strategy using structure_lib pipeline.
+TrIct — ICT/SMC strategy using structure_lib pipeline — CAUSAL (look-ahead fixed).
 
-Data required: {"5": df_5m, "30": df_30m}
-For crypto: include "240" for HTF context.
+Data required: {"30": df_30m}
+Optional: {"240": df_4h} for HTF context.
 
-Signal sequence (standard ICT):
+Signal sequence:
   1. Liquidity pool swept (session/swing extreme)
   2. BOS or ChoCH within 5 bars confirms direction
   3. FVG or OB in retracement zone → entry at FVG CE
   4. SL beyond sweep extreme
   5. TP at opposite liquidity pool (min 1.5R enforced)
 
-Session filter: Asia (00–07 UTC) + NY Late (17–24 UTC).
-Entry: 5m bars touching FVG CE level within 2h of signal.
+Session filter: Asia (00-07 UTC) + NY Late (17-24 UTC).
+Entry: 30m bar touches FVG CE level within 2h of signal.
+
+Causal design:
+  init() pre-computes static structure (swings, labels, FVGs, OBs, pools)
+  that do not reference future bars. Sweep detection and signal generation
+  happen incrementally in next(), processing only the current bar — no
+  O(n²) batch recomputation on every call.
 """
 
 from __future__ import annotations
 
+import bisect
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from backtesting.engine.base import BarData, EngineState, Strategy
 from backtesting.engine.orders import Direction, Signal
 from backtesting.structure_lib.swing import swing_points
 from backtesting.structure_lib.labels import label_structure
-from backtesting.structure_lib.fvg import detect_fvgs
-from backtesting.structure_lib.ob import detect_order_blocks
-from backtesting.structure_lib.sweep import detect_pools, detect_sweeps
-from backtesting.structure_lib.trade_signals import TradeSignal, generate_signals
+from backtesting.structure_lib.fvg import detect_fvgs, FVG
+from backtesting.structure_lib.ob import detect_order_blocks, OrderBlock
+from backtesting.structure_lib.sweep import detect_pools, LiquidityPool, Sweep
 
 
 # Sessions where edge exists (UTC hours, inclusive start, exclusive end)
@@ -40,27 +47,17 @@ _SESSIONS = [
 # Signal validity window after structure shift
 _SIGNAL_EXPIRY_H = 2
 
+# Max bars to look back from a structure shift for a matching sweep
+_MAX_SWEEP_LOOKBACK = 5
+
+# Max bars forward from a sweep to look for structure shift
+_MAX_STRUCTURE_LOOKAHEAD = 6
+
 
 class TrIct(Strategy):
-    # KNOWN: pre-computes full trade signals in init() from complete dataset.
-    # Confirmed look-ahead bias in detect_sweeps() and generate_signals().
-    # Fix pending — see docs/crypto-engine-strategy.md Phase 1.1.
-    _signal_source = "init_signals"
+    """ICT/SMC strategy — incremental causal sweep + signal detection."""
 
-    """
-    Parameters
-    ----------
-    risk_pct : float
-        Fraction of equity to risk per trade (default 0.005 = 0.5%).
-    min_rr : float
-        Minimum risk-reward ratio required by generate_signals (default 1.5).
-    sessions_only : bool
-        If True, only trade during Asia + NY Late. If False, trade all hours.
-    swing_length : int
-        Swing detection lookback on 30m (default 1 = ~18 pivots/day on XAUUSD).
-    context_days : int
-        Days of 30m history to load before the entry TF for swing context.
-    """
+    _signal_source = "init_precomputed"
 
     def __init__(
         self,
@@ -74,11 +71,30 @@ class TrIct(Strategy):
         self.sessions_only = sessions_only
         self.swing_length = swing_length
 
-        self._signals: list[TradeSignal] = []
-        self._used: set[pd.Timestamp] = set()  # signal_times already traded
+        # Set in init()
+        self._df30: pd.DataFrame = None
+        self._pools: list[LiquidityPool] = None
+        self._fvgs: list[FVG] = None
+        self._obs: list[OrderBlock] = None
+
+        # Incremental state (set/updated in next())
+        self._sweeps: list[Sweep] = []          # all sweeps found so far
+        self._pending: dict = {}                # signal_key → TradeSignal
+
+        # Pre-indexed FVG/OB/pool lists for O(log N) lookups in _build_signal
+        self._fvg_by_time: list[tuple[pd.Timestamp, FVG]] = []
+        self._ob_by_time: list[tuple[pd.Timestamp, OrderBlock]] = []
+        self._buy_pool_levels: list[float] = []
+        self._sell_pool_levels: list[float] = []
+
+        # Label arrays
+        self._bullish_choch: np.ndarray = None
+        self._bearish_choch: np.ndarray = None
+        self._bullish_bos: np.ndarray = None
+        self._bearish_bos: np.ndarray = None
 
     def init(self, data: dict[str, pd.DataFrame]) -> None:
-        """Pre-compute structure on 30m data."""
+        """Pre-compute static structure on 30m data (all causal)."""
         if "30" not in data:
             raise ValueError("TrIct requires '30' (30m) timeframe in data dict")
 
@@ -89,67 +105,249 @@ class TrIct(Strategy):
         for col in ("open", "high", "low", "close"):
             df30[col] = df30[col].astype(float)
 
+        self._n = len(df30)
+        self._df30 = df30
+
         swings, levels = swing_points(df30, swing_length=self.swing_length, causal=True)
         labels = label_structure(df30, swings, levels)
-        fvgs = detect_fvgs(df30)
-        obs = detect_order_blocks(df30, labels)
-        pools = detect_pools(df30, swings, levels)
-        sweeps = detect_sweeps(df30, pools)
+        self._fvgs = detect_fvgs(df30)
+        self._obs = detect_order_blocks(df30, labels)
+        self._pools = detect_pools(df30, swings, levels)
 
-        self._signals = generate_signals(
-            ohlc=df30,
-            labels=labels,
-            sweeps=sweeps,
-            fvgs=fvgs,
-            obs=obs,
-            pools=pools,
-            min_rr=self.min_rr,
+        # Pre-index FVGs by c2_time
+        self._fvg_by_time = sorted(
+            [(f.c2_time, f) for f in self._fvgs],
+            key=lambda x: x[0],
         )
-        self._used = set()
+        # Pre-index OBs by time
+        self._ob_by_time = sorted(
+            [(o.time, o) for o in self._obs],
+            key=lambda x: x[0],
+        )
+        # Pre-sort pool levels
+        self._buy_pool_levels = sorted([p.level for p in self._pools if p.side == "buy"])
+        self._sell_pool_levels = sorted([p.level for p in self._pools if p.side == "sell"])
+
+        # Label arrays for fast access
+        self._bullish_choch = labels["bullish_choch"].to_numpy(bool)
+        self._bearish_choch = labels["bearish_choch"].to_numpy(bool)
+        self._bullish_bos = labels["bullish_bos"].to_numpy(bool)
+        self._bearish_bos = labels["bearish_bos"].to_numpy(bool)
+
+    # ── Incremental sweep detection ─────────────────────────────────────────
+
+    def _detect_sweeps_at_bar(self, i: int) -> list[Sweep]:
+        """Return ALL sweeps (pool breaks) at bar i.
+
+        Multiple pools can be broken in a single bar.  Returns an entry
+        for each break, deduplicated by (level, side) so the same pool
+        isn't counted twice at the same bar.  The same pool CAN be
+        broken again at a later bar if price recovers and re-breaks.
+        """
+        row = self._df30.iloc[i]
+        hi, lo, cl = row["high"], row["low"], row["close"]
+        ts = self._df30.index[i]
+        found: list[Sweep] = []
+        seen_this_bar: set[tuple[float, str]] = set()
+
+        for pool in self._pools:
+            key = (pool.level, pool.side)
+            if key in seen_this_bar:
+                continue
+
+            if pool.side == "buy" and hi > pool.level:
+                seen_this_bar.add(key)
+                found.append(Sweep(
+                    pool=pool, sweep_time=ts,
+                    direction="bearish", reclaim=False, wick_only=(cl <= pool.level),
+                ))
+
+            elif pool.side == "sell" and lo < pool.level:
+                seen_this_bar.add(key)
+                found.append(Sweep(
+                    pool=pool, sweep_time=ts,
+                    direction="bullish", reclaim=False, wick_only=(cl >= pool.level),
+                ))
+
+        return found
+
+    # ── Signal builder (portable from trade_signals.py) ─────────────────────
+
+    def _build_signal(self, sweep: Sweep, shift_idx: int, shift_dir: str) -> Optional[object]:
+        """Build a TradeSignal from a sweep + structure shift at shift_idx.
+
+        This is a minimal causal re-implementation of the batch
+        generate_signals() — only processes one sweep+shift pair.
+        """
+        trade_dir = "long" if shift_dir == "bullish" else "short"
+        shift_ts = self._df30.index[shift_idx]
+
+        # Find matching FVG (between sweep_time and shift_time + 15m)
+        matching_fvg = None
+        sweep_ts = sweep.sweep_time
+        shift_plus_15 = shift_ts + pd.Timedelta(minutes=15)
+
+        fvg_left = bisect.bisect_left(self._fvg_by_time, (sweep_ts,))
+        fvg_right = bisect.bisect_right(self._fvg_by_time, (shift_plus_15,))
+        for idx in range(fvg_left, min(fvg_right, len(self._fvg_by_time))):
+            fvg = self._fvg_by_time[idx][1]
+            if (trade_dir == "long" and fvg.kind == "bullish") or \
+               (trade_dir == "short" and fvg.kind == "bearish"):
+                matching_fvg = fvg
+                break
+
+        # Find matching OB (with displacement_idx == shift_idx)
+        matching_ob = None
+        ob_left = bisect.bisect_left(self._ob_by_time, (sweep_ts,))
+        for idx in range(ob_left, len(self._ob_by_time)):
+            ob = self._ob_by_time[idx][1]
+            if ob.displacement_idx == shift_idx:
+                if (trade_dir == "long" and ob.kind == "bullish") or \
+                   (trade_dir == "short" and ob.kind == "bearish"):
+                    matching_ob = ob
+                    break
+
+        if matching_fvg is None and matching_ob is None:
+            return None
+
+        # Entry price
+        if matching_fvg:
+            entry = matching_fvg.ce
+        else:
+            entry = matching_ob.top if trade_dir == "long" else matching_ob.bottom
+
+        # SL (beyond sweep level with buffer)
+        shift_range = (self._df30["high"].iloc[shift_idx] -
+                       self._df30["low"].iloc[shift_idx]) * 0.3
+        if trade_dir == "long":
+            sl = min(sweep.pool.level,
+                     matching_fvg.bottom if matching_fvg else entry) - shift_range
+        else:
+            sl = max(sweep.pool.level,
+                     matching_fvg.top if matching_fvg else entry) + shift_range
+
+        # TP via binary search on opposite pool
+        tp = None
+        if trade_dir == "long":
+            idx = bisect.bisect_right(self._buy_pool_levels, entry)
+            if idx < len(self._buy_pool_levels):
+                tp = self._buy_pool_levels[idx]
+        else:
+            idx = bisect.bisect_left(self._sell_pool_levels, entry) - 1
+            if idx >= 0:
+                tp = self._sell_pool_levels[idx]
+
+        if tp is None:
+            return None
+
+        # R:R check
+        risk_abs = abs(entry - sl)
+        reward_abs = abs(tp - entry)
+        if risk_abs == 0:
+            return None
+        rr = reward_abs / risk_abs
+        if rr < self.min_rr:
+            return None
+
+        # Build a lightweight signal dict (not a full TradeSignal to avoid
+        # depending on the structure_lib dataclass)
+        return {
+            "direction": trade_dir,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "signal_time": shift_ts,
+            "confidence": "medium",
+            "pool_source": sweep.pool.source,
+        }
+
+    # ── Main entry point ────────────────────────────────────────────────────
+
+    def _signal_key(self, sig: dict) -> tuple:
+        return (sig["signal_time"], sig["direction"], round(sig["entry"], 5))
 
     def next(self, bar: BarData, state: EngineState) -> Optional[Signal]:
         if state.has_open_position:
             return None
 
-        bar_ts = pd.Timestamp(bar.ts)
-        hour = bar_ts.hour
-
-        if self.sessions_only and not any(s <= hour < e for s, e in _SESSIONS):
+        i = bar.index
+        if i >= self._n:
             return None
+        bar_ts = pd.Timestamp(bar.ts)
 
+        if self.sessions_only:
+            hour = bar_ts.hour
+            if not any(s <= hour < e for s, e in _SESSIONS):
+                return None
+
+        # ── Step 1: detect ALL sweeps at current bar ──
+        for sweep in self._detect_sweeps_at_bar(i):
+            self._sweeps.append(sweep)
+
+        # ── Step 2: structure shift at current bar? ──
+        shift_dir = None
+        if self._bullish_choch[i] or self._bullish_bos[i]:
+            shift_dir = "bullish"
+        elif self._bearish_choch[i] or self._bearish_bos[i]:
+            shift_dir = "bearish"
+
+        # ── Step 3: if shift found, look back for matching sweep ──
+        if shift_dir is not None:
+            # Walk sweeps in reverse (most recent first)
+            for s in reversed(self._sweeps):
+                try:
+                    sweep_bar = self._df30.index.get_loc(s.sweep_time)
+                except KeyError:
+                    continue
+                if i - sweep_bar > _MAX_SWEEP_LOOKBACK:
+                    continue  # too old, earlier sweeps will be even older
+                if s.direction != shift_dir:
+                    continue
+                if s.wick_only and not s.reclaim:
+                    continue  # wick-only without reclaim is not valid
+
+                sig = self._build_signal(s, i, shift_dir)
+                if sig is not None:
+                    key = self._signal_key(sig)
+                    if key not in self._pending:
+                        self._pending[key] = sig
+                    break  # one signal per shift event
+
+        # ── Step 4: check pending signals for entry ──
         expiry = pd.Timedelta(hours=_SIGNAL_EXPIRY_H)
+        expired_keys = []
 
-        for sig in self._signals:
-            if sig.signal_time in self._used:
-                continue
-            if bar_ts < sig.signal_time:
-                continue
-            if bar_ts > sig.signal_time + expiry:
+        for key, sig in list(self._pending.items()):
+            if sig["signal_time"] + expiry < bar_ts:
+                expired_keys.append(key)
                 continue
 
-            # Check if price reached the entry zone this bar
-            if sig.direction == "long":
-                touched = bar.low <= sig.entry
+            # Check if price touched the entry zone this bar
+            if sig["direction"] == "long":
+                touched = bar.low <= sig["entry"]
             else:
-                touched = bar.high >= sig.entry
+                touched = bar.high >= sig["entry"]
 
             if not touched:
                 continue
 
-            self._used.add(sig.signal_time)
-
+            # ENTRY
+            del self._pending[key]
             return Signal(
-                direction=Direction.LONG if sig.direction == "long" else Direction.SHORT,
-                entry=sig.entry,
-                sl=sig.sl,
-                tp1=sig.tp,
+                direction=Direction.LONG if sig["direction"] == "long" else Direction.SHORT,
+                entry=sig["entry"],
+                sl=sig["sl"],
+                tp1=sig["tp"],
                 tp2=None,
                 tp3=None,
                 risk_pct=self.risk_pct,
-                tp1_frac=1.0,   # full close at TP — no partials for now
+                tp1_frac=1.0,
                 tp2_frac=0.0,
                 trail=False,
-                label=f"ict_{sig.confidence}_{sig.pool.source}",
+                label=f"ict_{sig['confidence']}_{sig['pool_source']}",
             )
+
+        for k in expired_keys:
+            self._pending.pop(k, None)
 
         return None

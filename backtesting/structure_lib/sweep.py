@@ -129,14 +129,21 @@ def detect_sweeps(
     pools: list[LiquidityPool],
     lookback: int = 3,
     reclaim_candles: int = 3,
+    max_bar: int | None = None,
 ) -> list[Sweep]:
     """
     Detect liquidity sweeps: price breaks a pool level and reclaims it.
 
     Only creates ONE sweep per pool per break event (at the break candle),
     not retrospectively on subsequent candles.
+
+    Parameters
+    ----------
+    max_bar : int or None
+        Upper bound (exclusive) for bar iteration. If None, uses len(ohlc).
+        Pass i+1 from next() to ensure reclaim checks don't see future bars.
     """
-    n = len(ohlc)
+    n = max_bar if max_bar is not None else len(ohlc)
     high = ohlc["high"].to_numpy(dtype=float)
     low = ohlc["low"].to_numpy(dtype=float)
     close = ohlc["close"].to_numpy(dtype=float)

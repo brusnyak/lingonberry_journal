@@ -61,12 +61,29 @@ def generate_signals(
     obs: list[OrderBlock],
     pools: list[LiquidityPool],
     min_rr: float = 1.5,
+    max_bar: int | None = None,
 ) -> list[TradeSignal]:
     """
     Generate trade signals by combining sweep + CHoCH + FVG/OB.
 
     Pre-indexes FVGs and OBs by time for O(log N) lookup per sweep.
+
+    Parameters
+    ----------
+    max_bar : int or None
+        Causal bound: only process bars up to this index (exclusive).
+        Pass i+1 from next() to prevent future-data lookahead in the
+        structure-shift search and FVG/OB pool lookups.
     """
+    if max_bar is not None:
+        cutoff = ohlc.index[max_bar - 1]
+        ohlc = ohlc.iloc[:max_bar]
+        labels = labels.iloc[:max_bar]
+        sweeps = [s for s in sweeps if s.sweep_time <= cutoff]
+        fvgs = [f for f in fvgs if f.c2_time <= cutoff]
+        obs = [o for o in obs if o.time <= cutoff]
+        pools = [p for p in pools if p.time is None or p.time <= cutoff]
+
     # ── Pre-index FVGs by c2_time for binary search ──
     fvgs_sorted = sorted(fvgs, key=lambda f: f.c2_time) if fvgs else []
     fvg_times = [f.c2_time for f in fvgs_sorted]
