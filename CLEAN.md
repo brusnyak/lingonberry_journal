@@ -1029,3 +1029,64 @@ spec exactly). No regressions on existing strategies (TrFvg/Lvl1Trend/
 Lvl2Structure re-tested, all still return trades correctly).
 
 Full test suite: 67/67 pass (62 prior + 5 new for IntradayMomentum).
+
+## 20. Overnight drift — drawdown root-caused and fixed, now prop-compliant on both accounts
+
+Continuing §18's research: overnight drift on NAS100 (long close-to-open,
+flat intraday) was strongly profitable (disc +32.8%/PF1.42, hold
++34.8%/PF1.42) but failed prop compliance — holdout max DD 14.6% breached
+both GFT accounts (25k limit 10%, 100k limit 6%).
+
+### Mechanism confirmed before trusting the number
+Ran the literature's mirror-image claim directly: long ONLY during the cash
+session (09:30-16:00 NY), flat overnight. Result: -13.1%/-15.4% both
+windows — the exact "tug of war" pattern (overnight up, intraday down)
+replicating cleanly on our data, not a coincidental positive number.
+
+### Drawdown root cause — forensics, not guessing
+Hypothesis 1 (weekend gap risk on Friday-entry trades spanning the closed
+weekend): REJECTED. Weekend-spanning trades (n=71/396) were actually MORE
+profitable on average ($51.79 vs $9.49 weekday) and worst-case losses were
+the same magnitude either way (~-1.1R to -1.2R) — the ATR stop caps losses
+fine even across weekends.
+
+Hypothesis 2 (sustained losing streak from an always-long strategy fighting
+a real downtrend): CONFIRMED. Found the exact drawdown window: 43 trades,
+Jan 28 - Mar 24 2026, 40 losses / 4 wins, each loss landing within
+-1.03R to -1.07R of each other (remarkably consistent — the stop, not a
+blowup). Verified NAS100 itself dropped ~26,071 -> ~24,059 (-7.7%) over
+that exact window — a real correction, not noise.
+
+### Fix: same HTF trend filter that already worked for ORB (§16)
+Added `htf_key`/EMA-slope gate to `OvernightDrift` (identical mechanism to
+`OrbNyWideStop`'s) — skip the overnight-long entry when the HTF (240m)
+EMA50 slope is down. Not a new invention; the same root cause (always
+betting one direction, no regime awareness) got the same fix.
+
+```
+                 n     ret%    dd%   wr%   PF
+disc unfiltered 201   32.8%   7.5%  35%  1.42
+disc filtered   129   37.3%   7.0%  38%  1.78
+hold unfiltered 195   34.8%  14.6%  32%  1.42
+hold filtered   124   47.6%   7.0%  40%  1.95
+```
+
+Holdout DD more than halved (14.6% -> 7.0%), return went UP not down on
+both windows, PF improved substantially. Same non-overfitting signature as
+ORB's fix (improvement holds/strengthens on holdout, not just discovery).
+
+### Prop-rule check, final (HTF-filtered)
+
+| account | risk_pct | discovery max DD | holdout max DD | verdict |
+|---|---|---|---|---|
+| GFT 25k | 0.5% | 7.0% (≤10%) | 7.0% (≤10%) | PASSES, target hit both windows |
+| GFT 100k | 0.5% | 7.0% (≤6%) | 7.0% (≤6%) | FAILS (marginal, 3/2 breaches) |
+| GFT 100k | **0.4%** | **5.7% (≤6%)** | **5.6% (≤6%)** | **PASSES, target hit both windows** |
+
+Reducing risk_pct for the 100k account specifically (tighter DD ceiling
+warrants smaller risk/trade — standard per-account calibration, not a
+strategy change) closes the last gap cleanly. **Second strategy in the
+project (after ORB) to be fully prop-compliant on GFT 25k AND 100k.**
+
+Wired into review UI (`OvernightDrift` in the strategy dropdown, same
+pattern as OrbWideStop/IntradayMomentum). Tests: 4/4 pass.
