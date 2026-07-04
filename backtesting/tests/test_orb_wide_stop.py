@@ -22,6 +22,8 @@ def _strategy() -> OrbNyWideStop:
     s._ltf_up_per_bar = None
     s._pending_dir = {}
     s._retested = {}
+    s._hold_count = {}
+    s._hold_dir = {}
     s._day_ord = np.zeros(n, dtype=int)
     s._or_high = np.full(n, 105.0)
     s._or_low = np.full(n, 95.0)
@@ -106,3 +108,29 @@ def test_retest_flips_pending_direction_on_opposite_break():
     s.next(_bar2(11, close=94.0, high=95.5, low=93.5), _state())     # breaks the OTHER side -> flips
     assert s._pending_dir[0] == -1
     assert s._retested.get(0, False) is False
+
+
+def test_confirm_bars_no_entry_before_hold_met():
+    s = _strategy()
+    s.confirm_bars = 2
+    sig = s.next(_bar2(10, close=106.0, high=106.5, low=105.5), _state())
+    assert sig is None
+    assert s._hold_count[0] == 1
+
+
+def test_confirm_bars_enters_after_hold_met():
+    s = _strategy()
+    s.confirm_bars = 2
+    s.next(_bar2(10, close=106.0, high=106.5, low=105.5), _state())   # 1st close beyond, hold=1
+    sig = s.next(_bar2(11, close=106.3, high=106.8, low=106.0), _state())  # 2nd, hold=2 -> enters
+    assert sig is not None
+    assert sig.direction == Direction.LONG
+
+
+def test_confirm_bars_resets_if_price_falls_back_inside_range():
+    s = _strategy()
+    s.confirm_bars = 2
+    s.next(_bar2(10, close=106.0, high=106.5, low=105.5), _state())   # hold=1
+    s.next(_bar2(11, close=100.0, high=101.0, low=99.0), _state())    # back inside OR -> resets
+    sig = s.next(_bar2(12, close=106.3, high=106.8, low=106.0), _state())  # fresh hold=1, no entry yet
+    assert sig is None

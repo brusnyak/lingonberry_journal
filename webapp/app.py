@@ -2412,7 +2412,7 @@ def api_review_run():
                 "US30": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=3.0),
                 "SPX500": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=0.7),
             }
-            strat = OrbNyWideStop(htf_key="240", ltf_key="30")
+            strat = OrbNyWideStop(htf_key="240", ltf_key="30", multi_target=True)
             costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
         elif strategy == "IntradayMomentum":
             from backtesting.lvl2_intraday_momentum.intraday_momentum import IntradayMomentum

@@ -37,7 +37,26 @@ class OrbNyWideStop(Strategy):
                  or_len_min: int = 15, entry_end_min: int = 15 * 60, eod_min: int = 15 * 60 + 55,
                  htf_key: str | None = None, htf_ema_period: int = 50,
                  vol_atr_period: int = 14, vol_rolling_window: int = 100, vol_min_pctile: float | None = None,
-                 require_retest: bool = False, ltf_key: str | None = None, ltf_ema_period: int = 20):
+                 require_retest: bool = False, ltf_key: str | None = None, ltf_ema_period: int = 20,
+                 multi_target: bool = False, tp1_r: float = 2.0, tp2_r: float = 5.0,
+                 confirm_bars: int = 0):
+        """
+        confirm_bars: DISTINCT from require_retest (which required a full
+        pullback to the OR level -- tested, rejected, worse both windows).
+        This requires the breakout to simply HOLD for N consecutive closes
+        beyond the level before entering (no pullback needed), a lighter
+        "let it prove itself" filter per the user's separate "force wait to
+        monitor price action" request.
+        """
+        """
+        multi_target: per user's request (real trades showed the single
+        10R target is rarely reached -- with tp1_frac/tp2_frac both 0.0,
+        NOTHING closes until either EOD or the far target, so almost every
+        trade's actual exit is the EOD backstop, not a clean R-multiple).
+        When True, adds a genuine partial-close ladder: 50% at tp1_r,
+        30% at tp2_r, remaining 20% rides to target_r (or EOD). Fib-like
+        progressive spacing (2R/5R/10R), not fit to our own data.
+        """
         """
         require_retest: per user's manual-review finding (real trades,
         n/a to forensics -- direct observation) -- ORB was entering on the
@@ -88,7 +107,13 @@ class OrbNyWideStop(Strategy):
         self.require_retest = require_retest
         self.ltf_key = ltf_key
         self.ltf_ema_period = ltf_ema_period
+        self.multi_target = multi_target
+        self.tp1_r = tp1_r
+        self.tp2_r = tp2_r
+        self.confirm_bars = confirm_bars
         self._last_trade_day = -1
+        self._hold_count: dict = {}    # day_ord -> consecutive bars held beyond the level
+        self._hold_dir: dict = {}      # day_ord -> direction currently being held
         self._pending_dir: dict = {}   # day_ord -> 1/-1, breakout seen, awaiting retest
         self._retested: dict = {}      # day_ord -> True once price has touched back
 
@@ -210,6 +235,19 @@ class OrbNyWideStop(Strategy):
         self._entry_ok = ((mins >= or_end) & (mins < self.entry_end_min)).to_numpy()
         self._eod = (mins >= self.eod_min).to_numpy()
 
+    def _make_signal(self, direction: Direction, entry: float, sl: float, risk: float, label: str) -> Signal:
+        sign = 1 if direction == Direction.LONG else -1
+        if self.multi_target:
+            return Signal(direction=direction, entry=entry, sl=sl,
+                          tp1=entry + sign * self.tp1_r * risk,
+                          tp2=entry + sign * self.tp2_r * risk,
+                          tp3=entry + sign * self.target_r * risk,
+                          risk_pct=self.risk_pct, tp1_frac=0.5, tp2_frac=0.3,
+                          trail=False, label=label)
+        return Signal(direction=direction, entry=entry, sl=sl,
+                      tp1=entry + sign * self.target_r * risk, risk_pct=self.risk_pct,
+                      tp1_frac=0.0, tp2_frac=0.0, trail=False, label=label)
+
     def next(self, bar: BarData, state: EngineState) -> Optional[Signal]:
         i = bar.index
         if state.has_open_position or not self._entry_ok[i]:
@@ -267,17 +305,11 @@ class OrbNyWideStop(Strategy):
             if pending == 1 and broke_up and htf_ok_long and vol_ok and ltf_ok_long:
                 self._last_trade_day = day
                 risk = close - or_l
-                return Signal(direction=Direction.LONG, entry=close, sl=or_l,
-                              tp1=close + self.target_r * risk, risk_pct=self.risk_pct,
-                              tp1_frac=0.0, tp2_frac=0.0, trail=False,
-                              label="orb_wide_long")
+                return self._make_signal(Direction.LONG, close, or_l, risk, "orb_wide_long")
             if pending == -1 and broke_down and htf_ok_short and vol_ok and ltf_ok_short:
                 self._last_trade_day = day
                 risk = or_h - close
-                return Signal(direction=Direction.SHORT, entry=close, sl=or_h,
-                              tp1=close - self.target_r * risk, risk_pct=self.risk_pct,
-                              tp1_frac=0.0, tp2_frac=0.0, trail=False,
-                              label="orb_wide_short")
+                return self._make_signal(Direction.SHORT, close, or_h, risk, "orb_wide_short")
             # Pending direction failed to reconfirm -- flip if the opposite broke.
             if pending == 1 and broke_down:
                 self._pending_dir[day] = -1
@@ -287,20 +319,36 @@ class OrbNyWideStop(Strategy):
                 self._retested[day] = False
             return None
 
+        if self.confirm_bars > 0:
+            day = self._day_ord[i]
+            cur_dir = 1 if broke_up else (-1 if broke_down else None)
+            if cur_dir is not None and self._hold_dir.get(day) == cur_dir:
+                self._hold_count[day] = self._hold_count.get(day, 0) + 1
+            elif cur_dir is not None:
+                self._hold_dir[day] = cur_dir
+                self._hold_count[day] = 1
+            else:
+                self._hold_dir[day] = None
+                self._hold_count[day] = 0
+
+            if broke_up and htf_ok_long and ltf_ok_long and self._hold_count.get(day, 0) >= self.confirm_bars:
+                self._last_trade_day = day
+                risk = close - or_l
+                return self._make_signal(Direction.LONG, close, or_l, risk, "orb_wide_long")
+            if broke_down and htf_ok_short and ltf_ok_short and self._hold_count.get(day, 0) >= self.confirm_bars:
+                self._last_trade_day = day
+                risk = or_h - close
+                return self._make_signal(Direction.SHORT, close, or_h, risk, "orb_wide_short")
+            return None
+
         if broke_up and htf_ok_long and ltf_ok_long:
             self._last_trade_day = self._day_ord[i]
             risk = close - or_l  # full-range stop, not midpoint
-            return Signal(direction=Direction.LONG, entry=close, sl=or_l,
-                          tp1=close + self.target_r * risk, risk_pct=self.risk_pct,
-                          tp1_frac=0.0, tp2_frac=0.0, trail=False,
-                          label="orb_wide_long")
+            return self._make_signal(Direction.LONG, close, or_l, risk, "orb_wide_long")
         if broke_down and htf_ok_short and ltf_ok_short:
             self._last_trade_day = self._day_ord[i]
             risk = or_h - close
-            return Signal(direction=Direction.SHORT, entry=close, sl=or_h,
-                          tp1=close - self.target_r * risk, risk_pct=self.risk_pct,
-                          tp1_frac=0.0, tp2_frac=0.0, trail=False,
-                          label="orb_wide_short")
+            return self._make_signal(Direction.SHORT, close, or_h, risk, "orb_wide_short")
         return None
 
     def should_close(self, position, bar: BarData, state: EngineState) -> bool:

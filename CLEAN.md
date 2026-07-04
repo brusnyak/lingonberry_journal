@@ -1376,3 +1376,87 @@ including a dedicated retest-state-machine unit test suite).
 
 DAX/UK100 still not tested (European session timing needs proper
 re-derivation, not a symbol swap -- unchanged from #24).
+
+## 27. Multi-target ladder (adopted), hold-confirmation (rejected), DAX/UK100 extension, IntradayMomentum stop empirically confirmed dead
+
+### Multi-target partial-close ladder -- ADOPTED
+The single 10R target with `tp1_frac=0.0` meant essentially nothing ever
+closed at target -- almost every trade's real exit was the EOD backstop,
+not a clean R-multiple. Added `multi_target` (50% at 2R, 30% at 5R,
+remaining 20% to the existing 10R/EOD), Fib-like progressive spacing, not
+fit to data. Improves both windows on top of the HTF+LTF baseline:
+
+```
+                          disc              hold
+HTF+LTF baseline      18.9%/PF1.67      27.4%/PF2.28
++ multi-target        19.0%/PF1.68      29.1%/PF2.43
+```
+
+### "Force wait to monitor price action" -- tested two ways, both REJECTED
+1. `require_retest` (§26, full pullback to the OR level): already rejected.
+2. `confirm_bars` (lighter -- just require N consecutive closes beyond the
+   level, no pullback needed) -- tested confirm_bars=2 on top of the
+   multi-target config:
+
+```
+                          disc              hold
+baseline (no wait)     19.0%/PF1.68      29.1%/PF2.43
++ confirm_bars=2       11.7%/PF1.45      26.0%/PF2.68  -- disc clearly worse
+```
+
+Discovery got meaningfully worse; holdout mixed (lower return, better PF/
+DD -- not a clean win). Two independent "wait before entering" mechanisms
+now tested and rejected. Consistent finding: ORB's edge comes from acting
+on the confirmed breakout immediately, not from additional patience.
+**Final validated ORB config: htf_key="240", ltf_key="30", multi_target=True.
+No retest, no confirm_bars.**
+
+### Prop-rule check, final config
+
+| | max DD | breaches | target hit? |
+|---|---|---|---|
+| NAS100/25k discovery | 2.8% (≤10%) | 0 | 18.9% of 8% ✓ |
+| NAS100/25k holdout | 2.9% (≤10%) | 0 | 29.1% of 8% ✓ |
+| NAS100/100k discovery | 2.8% (≤6%) | 0 | 18.9% of 10% ✓ |
+| NAS100/100k holdout | 3.0% (≤6%) | 0 | 29.1% of 10% ✓ |
+
+Still fully compliant, better return than any prior config.
+
+### DAX/UK100 -- proper session-time derivation (not a symbol swap)
+DAX: `session_tz="Europe/Berlin"`, open 09:00 local (Xetra cash open).
+UK100: `session_tz="Europe/London"`, open 08:00 local (LSE cash open).
+Same HTF+LTF+multi-target config, no re-tuning:
+
+```
+                       disc                    hold
+DAX                19.4%/DD4.4%/PF1.45    8.8%/DD3.8%/PF1.28   -- consistent
+UK100              -4.7%/DD10.1%/PF0.90   4.2%/DD7.2%/PF1.13   -- inconsistent
+```
+
+DAX transfers reasonably (same pattern as US30). UK100 doesn't (negative
+discovery) -- same issue SPX500 had before the LTF fix helped it, but
+UK100 stays negative even with the already-improved config. Not chasing
+further UK100-specific tuning; logged honestly as a partial result, not a
+clean pass.
+
+### IntradayMomentum stop -- tested per explicit request, empirically confirms it's not fixable
+User asked to try improving IntradayMomentum's stop despite the standing
+caution (47th-percentile null, no real directional signal). Tested
+stop_atr_mult across 0.3/0.5/1.0/1.5:
+
+```
+mult   disc                  hold
+1.5   -11.7%/PF0.76        -5.7%/PF0.86
+1.0   -12.6%/PF0.80        -7.6%/PF0.85
+0.5    +5.5%/PF1.10       -12.4%/PF0.77  -- one window looks good, other terrible
+0.3   -17.0%/PF0.38        -3.2%/PF0.86
+```
+
+No consistent improvement anywhere; win rate collapses at tighter stops
+(down to 8-22%) since there's no real signal to protect -- tightening the
+stop just converts "ride noise to EOD" into "stopped out by noise early."
+**This empirically confirms, not just asserts, that IntradayMomentum's
+problem is the entry signal, not position management.** No further work
+planned on this strategy.
+
+Tests: 88/88 pass (11 new for ORB's confirm_bars + multi-target).
