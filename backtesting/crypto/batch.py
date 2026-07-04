@@ -336,8 +336,9 @@ def main():
     exchanges = [s.strip().lower() for s in args.exchanges.split(",")]
     tfs = [s.strip() for s in args.tfs.split(",")]
 
-    # Default risk: 5% per scaling_plan.md unless strategy has narrow-compatible defaults
-    default_risk = args.risk_pct if args.risk_pct is not None else 0.05
+    # Default risk: 2% for development sweeps. Keeps multiple trades alive without
+    # destroying equity on a few losers. Override with --risk-pct for final validation.
+    default_risk = args.risk_pct if args.risk_pct is not None else 0.02
 
     strategies_to_run = list(SWEEP_STRATEGIES.keys()) if args.sweep == "all" else [args.sweep]
 

@@ -34,6 +34,9 @@ from backtesting.engine.orders import Direction, Signal
 class TrBosFade(Strategy):
     """Fade break-of-structure reversals."""
 
+    # Precomputes rolling high/low with shift(1) in init(); trade decisions in next().
+    _signal_source = "init_precomputed"
+
     spaces = {
         "bos_lookback": [10, 15, 20, 30],
         "sl_buffer_pips": [3, 5, 8, 10],

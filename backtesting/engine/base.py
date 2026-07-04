@@ -62,7 +62,23 @@ class EngineState:
 
 
 class Strategy(ABC):
-    """Base class for all backtested strategies."""
+    """Base class for all backtested strategies.
+
+    Declare _signal_source to document where trade decisions are made:
+      "next" (default) — signals generated bar-by-bar in next(). Safe.
+      "init_precomputed" — indicators/labels pre-computed in init() with
+        shift(1) or similar causal windowing; trade decisions still in next().
+        Safe when done correctly.
+      "init_signals" — full trade signals (entry, sl, tp) pre-computed in
+        init() on the complete dataset. HIGH RISK of look-ahead bias unless
+        every future-referencing function is explicitly bounded (e.g. by
+        truncating data to current bar index inside next()).
+
+    The engine calls _check_lookahead_risk() after init() and warns if it
+    detects pre-computed signal-like data without an explicit declaration.
+    """
+
+    _signal_source: str = "next"
 
     def init(self, data: dict[str, object]) -> None:
         """
@@ -93,3 +109,38 @@ class Strategy(ABC):
     def should_close(self, position: object, bar: BarData, state: EngineState) -> bool:
         """Return True to close a position at the current bar close."""
         return False
+
+    def _check_lookahead_risk(self) -> None:
+        """Post-init heuristic check for potential look-ahead bias.
+
+        Scans for pre-computed signal-like objects stored in init().
+        This is a best-effort warning — it can't prove absence of
+        look-ahead, but it flags the pattern we found in TrIct.
+        """
+        import warnings
+
+        # If the author has explicitly declared the signal source, trust that.
+        if self._signal_source in ("next", "init_precomputed"):
+            return
+
+        for attr_name in dir(self):
+            if attr_name.startswith("__"):
+                continue
+            attr = getattr(self, attr_name, None)
+            if attr is None or not isinstance(attr, (list, tuple)):
+                continue
+            if len(attr) == 0:
+                continue
+            item = attr[0]
+            # Duck-type: does it look like a trade signal?
+            if hasattr(item, "signal_time") or hasattr(item, "entry_price"):
+                warnings.warn(
+                    f"{type(self).__name__}.{attr_name}: pre-computed trade "
+                    f"signals in init() with _signal_source='{self._signal_source}'. "
+                    f"Set _signal_source='init_signals' to acknowledge the risk, "
+                    f"or better: move decision logic into next(). "
+                    f"This pattern was the source of confirmed look-ahead bias "
+                    f"in TrIct (see audit 2026-07-04).",
+                    stacklevel=2,
+                )
+                return

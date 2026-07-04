@@ -42,6 +42,11 @@ _SIGNAL_EXPIRY_H = 2
 
 
 class TrIct(Strategy):
+    # KNOWN: pre-computes full trade signals in init() from complete dataset.
+    # Confirmed look-ahead bias in detect_sweeps() and generate_signals().
+    # Fix pending — see docs/crypto-engine-strategy.md Phase 1.1.
+    _signal_source = "init_signals"
+
     """
     Parameters
     ----------

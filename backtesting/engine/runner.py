@@ -240,6 +240,7 @@ def run(
 
     # Init strategy
     strategy.init(data)
+    strategy._check_lookahead_risk()
 
     # Entry TF bars → numpy for fast indexing
     df = data[entry_tf].reset_index(drop=True)

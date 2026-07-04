@@ -83,6 +83,9 @@ def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> n
 
 
 class CryptoTsmomBreakout(Strategy):
+    # Precomputes channels/ATR with shift(1) in init(); trade decisions in next().
+    _signal_source = "init_precomputed"
+
     # Sweep-parameter space. Stay lean: one config per param initially — we learned
     # from TrBosFade that 144 combos on one pair is just overfit. Expand only after
     # a baseline has multi-pair support.
