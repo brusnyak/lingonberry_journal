@@ -36,7 +36,25 @@ class OrbNyWideStop(Strategy):
                  session_tz: str = "America/New_York", session_open_min: int = 9 * 60 + 30,
                  or_len_min: int = 15, entry_end_min: int = 15 * 60, eod_min: int = 15 * 60 + 55,
                  htf_key: str | None = None, htf_ema_period: int = 50,
-                 vol_atr_period: int = 14, vol_rolling_window: int = 100, vol_min_pctile: float | None = None):
+                 vol_atr_period: int = 14, vol_rolling_window: int = 100, vol_min_pctile: float | None = None,
+                 require_retest: bool = False, ltf_key: str | None = None, ltf_ema_period: int = 20):
+        """
+        require_retest: per user's manual-review finding (real trades,
+        n/a to forensics -- direct observation) -- ORB was entering on the
+        very first close beyond the opening range, without waiting to see
+        if the breakout holds. If True, the first breakout in a direction
+        only arms a pending signal; entry fires on a SECOND close beyond
+        the level after price has pulled back and touched it again (a
+        break-retest-continuation pattern), not on the first touch.
+
+        ltf_key: if set (e.g. "30"), ADDS a second, faster trend-agreement
+        check alongside htf_key (both must agree, not either/or) -- per
+        user's request to see if a same-day local trend read recovers some
+        of the reversal days the slow 240m HTF filter blocks (diagnosed in
+        CLEAN.md #26: 6/8 of the biggest missed days were HTF-blocked moves
+        that later reversed into the allowed direction, which the 240m EMA
+        was too slow to catch same-day).
+        """
         """
         htf_key: if set (e.g. "240"), gates entries to agree with that
         timeframe's EMA(htf_ema_period) slope direction -- forensics on this
@@ -67,10 +85,34 @@ class OrbNyWideStop(Strategy):
         self.vol_atr_period = vol_atr_period
         self.vol_rolling_window = vol_rolling_window
         self.vol_min_pctile = vol_min_pctile
+        self.require_retest = require_retest
+        self.ltf_key = ltf_key
+        self.ltf_ema_period = ltf_ema_period
         self._last_trade_day = -1
+        self._pending_dir: dict = {}   # day_ord -> 1/-1, breakout seen, awaiting retest
+        self._retested: dict = {}      # day_ord -> True once price has touched back
+
+    @staticmethod
+    def _ema_slope_up(close: np.ndarray, period: int) -> np.ndarray:
+        alpha = 2 / (period + 1)
+        ema = np.full(len(close), np.nan)
+        if len(close) >= period:
+            ema[period - 1] = close[:period].mean()
+            for i in range(period, len(close)):
+                ema[i] = alpha * close[i] + (1 - alpha) * ema[i - 1]
+        return np.concatenate([[False], np.diff(ema) > 0])
+
+    @staticmethod
+    def _map_to_entry_bars(htf_ts: np.ndarray, ltf_ts: np.ndarray, values: np.ndarray, n: int) -> np.ndarray:
+        idx = np.searchsorted(htf_ts, ltf_ts, side="right") - 1
+        valid = idx >= 0
+        out = np.zeros(n, dtype=bool)
+        out[valid] = values[idx[valid]]
+        return out
 
     def init(self, data: dict) -> None:
-        entry_key = self.htf_key and next(k for k in data if k != self.htf_key) or next(iter(data))
+        exclude = {k for k in (self.htf_key, self.ltf_key) if k}
+        entry_key = next(k for k in data if k not in exclude) if exclude else next(iter(data))
         df = data[entry_key].copy()
         if "ts" in df.columns:
             df = df.set_index("ts", drop=False)
@@ -124,6 +166,17 @@ class OrbNyWideStop(Strategy):
                 self._vol_ok_per_bar = np.zeros(self._n, dtype=bool)
                 self._vol_ok_per_bar[valid] = vol_ok_htf[idx[valid]]
 
+        self._ltf_up_per_bar = None
+        if self.ltf_key:
+            df_ltf = data[self.ltf_key].copy()
+            if "ts" in df_ltf.columns:
+                df_ltf = df_ltf.set_index("ts", drop=False)
+            df_ltf.sort_index(inplace=True)
+            ltf_slope_up = self._ema_slope_up(df_ltf["close"].to_numpy(), self.ltf_ema_period)
+            ltf_ts_arr = df_ltf["ts"].to_numpy() if "ts" in df_ltf.columns else df_ltf.index.to_numpy()
+            entry_ts_arr = df["ts"].to_numpy() if "ts" in df.columns else df.index.to_numpy()
+            self._ltf_up_per_bar = self._map_to_entry_bars(ltf_ts_arr, entry_ts_arr, ltf_slope_up, self._n)
+
         ts = pd.to_datetime(df["ts"])
         if ts.dt.tz is None:
             ts = ts.dt.tz_localize("UTC")
@@ -172,15 +225,76 @@ class OrbNyWideStop(Strategy):
             return None
         htf_ok_long = self._htf_up_per_bar is None or self._htf_up_per_bar[i]
         htf_ok_short = self._htf_up_per_bar is None or not self._htf_up_per_bar[i]
+        ltf_ok_long = self._ltf_up_per_bar is None or self._ltf_up_per_bar[i]
+        ltf_ok_short = self._ltf_up_per_bar is None or not self._ltf_up_per_bar[i]
+        high, low = bar.high, bar.low
 
-        if close > or_h and self.direction in ("long", "both") and htf_ok_long:
+        broke_up = close > or_h and self.direction in ("long", "both")
+        broke_down = close < or_l and self.direction in ("short", "both")
+
+        if self.require_retest:
+            # First breakout only ARMS a pending direction; entry requires
+            # price to have pulled back and touched the level again, then
+            # broken it a SECOND time. Filters (HTF/vol/LTF) are checked at
+            # the actual entry moment, not when the pending state was armed
+            # -- matches how a live decision would actually be gated.
+            day = self._day_ord[i]
+            pending = self._pending_dir.get(day)
+            retested = self._retested.get(day, False)
+
+            if pending is None:
+                if broke_up:
+                    self._pending_dir[day] = 1
+                elif broke_down:
+                    self._pending_dir[day] = -1
+                return None
+
+            if not retested:
+                if pending == 1 and low <= or_h:
+                    self._retested[day] = True
+                elif pending == -1 and high >= or_l:
+                    self._retested[day] = True
+                # A close through the OPPOSITE level while still pending
+                # invalidates the original breakout -- flip to the new one.
+                if pending == 1 and broke_down:
+                    self._pending_dir[day] = -1
+                    self._retested[day] = False
+                elif pending == -1 and broke_up:
+                    self._pending_dir[day] = 1
+                    self._retested[day] = False
+                return None
+
+            if pending == 1 and broke_up and htf_ok_long and vol_ok and ltf_ok_long:
+                self._last_trade_day = day
+                risk = close - or_l
+                return Signal(direction=Direction.LONG, entry=close, sl=or_l,
+                              tp1=close + self.target_r * risk, risk_pct=self.risk_pct,
+                              tp1_frac=0.0, tp2_frac=0.0, trail=False,
+                              label="orb_wide_long")
+            if pending == -1 and broke_down and htf_ok_short and vol_ok and ltf_ok_short:
+                self._last_trade_day = day
+                risk = or_h - close
+                return Signal(direction=Direction.SHORT, entry=close, sl=or_h,
+                              tp1=close - self.target_r * risk, risk_pct=self.risk_pct,
+                              tp1_frac=0.0, tp2_frac=0.0, trail=False,
+                              label="orb_wide_short")
+            # Pending direction failed to reconfirm -- flip if the opposite broke.
+            if pending == 1 and broke_down:
+                self._pending_dir[day] = -1
+                self._retested[day] = False
+            elif pending == -1 and broke_up:
+                self._pending_dir[day] = 1
+                self._retested[day] = False
+            return None
+
+        if broke_up and htf_ok_long and ltf_ok_long:
             self._last_trade_day = self._day_ord[i]
             risk = close - or_l  # full-range stop, not midpoint
             return Signal(direction=Direction.LONG, entry=close, sl=or_l,
                           tp1=close + self.target_r * risk, risk_pct=self.risk_pct,
                           tp1_frac=0.0, tp2_frac=0.0, trail=False,
                           label="orb_wide_long")
-        if close < or_l and self.direction in ("short", "both") and htf_ok_short:
+        if broke_down and htf_ok_short and ltf_ok_short:
             self._last_trade_day = self._day_ord[i]
             risk = or_h - close
             return Signal(direction=Direction.SHORT, entry=close, sl=or_h,

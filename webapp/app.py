@@ -2335,6 +2335,9 @@ def api_review_run():
         # lvl1/lvl2 need their HTF regime timeframe (60m by default)
         if strategy in ("Lvl1Trend", "Lvl2Structure") and "60" not in data:
             data["60"] = load_data(symbol, tf="60", start=load_start, end=end, **load_kw)
+        # OrbWideStop's validated config also needs a faster LTF trend check (30m)
+        if strategy == "OrbWideStop" and "30" not in data:
+            data["30"] = load_data(symbol, tf="30", start=load_start, end=end, **load_kw)
         if data[tf].empty:
             return jsonify({"error": "No data for requested range"}), 400
 
@@ -2409,7 +2412,7 @@ def api_review_run():
                 "US30": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=3.0),
                 "SPX500": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=0.7),
             }
-            strat = OrbNyWideStop(htf_key="240")
+            strat = OrbNyWideStop(htf_key="240", ltf_key="30")
             costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
         elif strategy == "IntradayMomentum":
             from backtesting.lvl2_intraday_momentum.intraday_momentum import IntradayMomentum

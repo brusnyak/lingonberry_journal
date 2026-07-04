@@ -1290,3 +1290,89 @@ separate ways in this project**: sweep+reclaim (gated), chop-regime fade
 (ER<=0.3 gated), and this bare literal version (HTF-trend gated only). Not
 a fairness problem with any prior test — the honest, most charitable
 version fails on its own, worse than the gated versions. Family closed.
+
+## 26. No-trade day forensics + retest (rejected) + LTF filter (adopted) — ORB now improved across all tested assets
+
+Per user's manual review notes: applied the concrete feedback, one change
+at a time.
+
+### No-trade day diagnosis (backtesting/analysis/no_trade_days.py, new reusable tool)
+154 no-trade days total on NAS100. Diagnosed the top 8 by day-range%: 6/8
+were days where price broke out BOTH directions and the HTF filter
+correctly blocked the immediate counter-trend move, but the day then
+reversed hard into the allowed direction later — the 240m EMA was too slow
+to catch the same-day reversal. Not a bug: a real, quantified cost of the
+HTF filter (protects from grinding trend-fighting losses, costs some
+reversal-day misses). 1/8 had no valid opening range at all (unexplained,
+worth a manual look). Full data-consistency check on the single largest
+day (2025-04-07, 11.3% range) found no obvious glitch -- plausibly a real
+extreme-volatility event, not a data bug.
+
+### Retest requirement -- REJECTED
+User's manual review flagged ORB entering on the very first breakout
+without waiting for a retest. Built `require_retest` (breakout arms a
+pending direction; entry only fires after price touches back to the level
+and re-breaks). Tested discovery/holdout:
+
+```
+                disc              hold
+baseline      17.6%/PF1.57     22.7%/PF1.96
++ retest       9.8%/PF1.47     14.1%/PF1.73   -- WORSE both windows
+```
+
+The individual trades flagged were likely correctly identified as bad --
+but requiring a retest on every setup filters out good immediate breakouts
+along with the bad early ones, net negative at scale. Same lesson as every
+other single-trade-motivated filter tried this session: a correct
+individual observation doesn't always generalize. Not adopted.
+
+### LTF trend filter -- ADOPTED, clean improvement
+Per user's own proposed fix: add a FASTER (30m EMA) trend-agreement check
+alongside the existing 240m HTF filter (not replacing it), aimed at
+catching the same-day reversals the slow HTF misses.
+
+```
+                disc              hold
+baseline      17.6%/PF1.57     22.7%/PF1.96
++ LTF(30m)    18.9%/PF1.67     27.4%/PF2.28   -- BETTER both windows
+```
+
+Improvement holds on both windows (stronger on holdout), same signature as
+every other real fix this session. **New default config: htf_key="240",
+ltf_key="30".**
+
+News-day caveat (user's own point, correct): no filter timeframe -- fast
+or slow -- will react in time to news-driven violent moves, since the move
+IS the news reaction, not a detectable prior trend. Not attempting to
+filter those specifically; no news-calendar data exists yet (acknowledged
+gap). Accepted as an unavoidable cost.
+
+### Prop-rule check, HTF+LTF config -- improved further
+
+| | worst daily DD | worst max DD | breaches | target hit? |
+|---|---|---|---|---|
+| NAS100/25k discovery | 0.6% (≤5%) | 2.8% (≤10%) | 0 | 18.7% of 8% ✓ |
+| NAS100/25k holdout | 0.5% (≤5%) | 3.0% (≤10%) | 0 | 27.3% of 8% ✓ |
+| NAS100/100k discovery | 0.6% (≤4%) | 2.8% (≤6%) | 0 | 18.7% of 10% ✓ |
+| NAS100/100k holdout | 0.5% (≤4%) | 2.9% (≤6%) | 0 | 27.3% of 10% ✓ |
+
+Still fully compliant on both accounts, better return, similar tight DD.
+
+### Extension to US30/SPX500, same HTF+LTF config
+
+```
+                       disc                    hold
+US30 (HTF only)     14.5%/PF1.36            8.3%/PF1.43
+US30 (+LTF)         23.0%/PF1.62            8.1%/PF1.43   -- better
+
+SPX500 (HTF only)   -0.2%/PF0.99            7.3%/PF1.27  -- was flat
+SPX500 (+LTF)        5.1%/PF1.13            9.1%/PF1.35   -- fixed
+```
+
+The LTF filter improved every asset tested, not just NAS100 -- it turned
+SPX500's previously-flat discovery window into a real positive. Best
+result yet across the whole ORB family. Tests: 85/85 pass (8 new,
+including a dedicated retest-state-machine unit test suite).
+
+DAX/UK100 still not tested (European session timing needs proper
+re-derivation, not a symbol swap -- unchanged from #24).

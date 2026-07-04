@@ -19,6 +19,9 @@ def _strategy() -> OrbNyWideStop:
     s._n = n
     s._htf_up_per_bar = None
     s._vol_ok_per_bar = None
+    s._ltf_up_per_bar = None
+    s._pending_dir = {}
+    s._retested = {}
     s._day_ord = np.zeros(n, dtype=int)
     s._or_high = np.full(n, 105.0)
     s._or_low = np.full(n, 95.0)
@@ -62,3 +65,44 @@ def test_one_trade_per_day_still_enforced():
     s = _strategy()
     assert s.next(_bar(i=10, close=106.0), _state()) is not None
     assert s.next(_bar(i=11, close=106.0), _state()) is None
+
+
+def _bar2(i: int, close: float, high: float, low: float) -> BarData:
+    return BarData(ts="2026-01-01T00:00:00Z", open_=close, high=high, low=low,
+                   close=close, volume=1, index=i)
+
+
+def test_retest_no_entry_on_first_breakout():
+    s = _strategy()
+    s.require_retest = True
+    sig = s.next(_bar2(10, close=106.0, high=106.5, low=105.5), _state())
+    assert sig is None
+    assert s._pending_dir[0] == 1
+
+
+def test_retest_no_entry_until_price_touches_back():
+    s = _strategy()
+    s.require_retest = True
+    s.next(_bar2(10, close=106.0, high=106.5, low=105.5), _state())   # arm pending long
+    sig = s.next(_bar2(11, close=107.0, high=107.5, low=106.5), _state())  # still above OR, no touch back
+    assert sig is None
+    assert s._retested.get(0, False) is False
+
+
+def test_retest_enters_on_reconfirmation_after_touch():
+    s = _strategy()
+    s.require_retest = True
+    s.next(_bar2(10, close=106.0, high=106.5, low=105.5), _state())        # arm pending long
+    s.next(_bar2(11, close=105.5, high=106.0, low=104.5), _state())        # touches back to or_h=105
+    sig = s.next(_bar2(12, close=106.2, high=106.5, low=105.6), _state())  # re-breaks above 105
+    assert sig is not None
+    assert sig.direction == Direction.LONG
+
+
+def test_retest_flips_pending_direction_on_opposite_break():
+    s = _strategy()
+    s.require_retest = True
+    s.next(_bar2(10, close=106.0, high=106.5, low=105.5), _state())  # arm pending long
+    s.next(_bar2(11, close=94.0, high=95.5, low=93.5), _state())     # breaks the OTHER side -> flips
+    assert s._pending_dir[0] == -1
+    assert s._retested.get(0, False) is False
