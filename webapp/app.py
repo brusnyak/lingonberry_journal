@@ -2817,8 +2817,10 @@ def api_review_label():
         with open(store_path) as f:
             labels = json_mod.load(f)
 
-    key = f"{body.get('symbol','?')}_{body.get('tf','?')}_{body.get('entry_time','?')}"
+    strategy = body.get("strategy", "?")
+    key = f"{strategy}_{body.get('symbol','?')}_{body.get('tf','?')}_{body.get('entry_time','?')}"
     labels[key] = {
+        "strategy": strategy,
         "symbol": body.get("symbol"),
         "tf": body.get("tf"),
         "entry_time": body.get("entry_time"),

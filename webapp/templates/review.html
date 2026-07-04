@@ -797,7 +797,7 @@ async function saveLabel() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      symbol: currentSymbol, tf: currentTf,
+      symbol: currentSymbol, tf: currentTf, strategy: currentStrategy,
       entry_time: t.entry_time, label: currentLabel, notes,
       params: currentParams,
       drawings: userLabels[key].drawings || [],
