@@ -964,3 +964,68 @@ against.
 **No further parameter search planned on this strategy.** Entry TF and HTF
 filter choice are both settled; any future work should be a genuinely new
 mechanism/factor, not more variants of this one.
+
+## 18. Intraday time-series momentum — FALSIFIED (session 8, new mechanism family)
+
+Per user request for deep market research before testing something new.
+Found a genuinely distinct mechanism (not another ORB/trend/mean-reversion
+variant): Gao, Han, Li & Zhou (2018, *Journal of Financial Economics*) —
+the return from prior session close to 10:00 America/New_York ("first
+half-hour", spans the overnight gap + first 30m of cash trading) predicts
+the return from 15:30-16:00 NY ("last half-hour") on US equities/ETFs.
+Cost-adjusted replication (Zarattini/Aziz/Barbon, SSRN 4824172): net Sharpe
+1.33 on SPY, 2007-2024.
+
+Spec taken directly from the paper, fixed ex-ante:
+`backtesting/lvl2_intraday_momentum/intraday_momentum.py`. Entry 15:30 NY,
+direction = sign(first-window return), flat by 16:00 NY. Stop (ATR-based)
+is NOT in the original paper — added here only for position sizing/prop
+compliance, disclosed as our addition. Unit-tested (5/5 pass), mechanics
+spot-checked against real trade timestamps (fires at 20:30 UTC in winter =
+15:30 EST, confirms timezone handling correct).
+
+```
+NAS100 5m       n     ret%   dd%   wr%   PF   avgR
+discovery      176   -11.7  12.2  39%  0.76  -0.13
+holdout        172    -5.7  13.6  47%  0.86  -0.06
+null (30 seeds): real result at the 47th percentile of random-direction
+-- indistinguishable from noise, not just unprofitable after costs.
+
+XAUUSD 5m       n     ret%   dd%   wr%   PF
+discovery      258   -29.7  30.8  36%  0.44
+holdout        172    -7.4   9.1  45%  0.76
+```
+
+**FALSIFIED on both assets tested.** The 47th-percentile null result on
+NAS100 is the most important number here — the signal carries no
+directional information on this instrument, not just insufficient after
+costs. Likely explanation: the paper's mechanism (late-informed trading
+into the NYSE closing auction, institutional portfolio-rebalancing flows)
+is tied to real equity/ETF market microstructure at the actual 4pm close;
+NAS100 as a CFD/index-proxy doesn't have that same closing-auction
+mechanism, so the effect may genuinely not transfer to this instrument
+class even though it's a real, peer-reviewed, cost-replicated finding on
+its original asset class. 11th falsified family — not pursuing further
+tuning on this mechanism.
+
+## 19. Review UI: per-trade stats + new strategies wired in (session 8)
+
+Per user request for clean per-trade evaluation (R:R, duration, outcome,
+return) across assets/timeframes. Most fields already existed in
+`/api/review/run` (duration_min, exit_reason, pnl, r_multiple) — added the
+two that didn't: `planned_rr` (target distance / stop distance AT ENTRY,
+distinct from realized `r_multiple`) and `return_pct` (pnl vs the $10k
+backtest baseline). Displayed in a new PLANNED RR / DURATION / RETURN row
+in the trade meta panel (`webapp/templates/review.html`).
+
+Wired `OrbWideStop` and `IntradayMomentum` into the strategy dropdown and
+backend dispatcher (`webapp/app.py`) — previously only TrFvg/TrIct/
+Lvl1Trend/Lvl2Structure were selectable; ORB wasn't in the review UI at
+all despite being the project's best-validated strategy. Added NAS100 to
+the symbol list and 30m/240m to the timeframe list. Verified end-to-end via
+Flask test client (both new strategies return correct trades with all
+fields populated; IntradayMomentum's 30-min duration matches its literature
+spec exactly). No regressions on existing strategies (TrFvg/Lvl1Trend/
+Lvl2Structure re-tested, all still return trades correctly).
+
+Full test suite: 67/67 pass (62 prior + 5 new for IntradayMomentum).

@@ -2400,6 +2400,24 @@ def api_review_run():
                 atr_ceiling_mult=float(params.get("atr_ceiling_mult", 1.3)),
             )
             costs = ForexCosts(seed=0, **lvl1_cost_cfg.get(symbol, dict(pip_size=0.0001)))
+        elif strategy == "OrbWideStop":
+            from backtesting.lvl2_orb.orb_wide_stop import OrbNyWideStop
+            lvl2_cost_cfg = {
+                "XAUUSD": dict(pip_size=0.01, pip_value_per_lot=1.0, fixed_spread_pips=30.0),
+                "XAGUSD": dict(pip_size=0.001, pip_value_per_lot=5.0, fixed_spread_pips=40.0),
+                "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
+            }
+            strat = OrbNyWideStop(htf_key="240")
+            costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
+        elif strategy == "IntradayMomentum":
+            from backtesting.lvl2_intraday_momentum.intraday_momentum import IntradayMomentum
+            lvl2_cost_cfg = {
+                "XAUUSD": dict(pip_size=0.01, pip_value_per_lot=1.0, fixed_spread_pips=30.0),
+                "XAGUSD": dict(pip_size=0.001, pip_value_per_lot=5.0, fixed_spread_pips=40.0),
+                "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
+            }
+            strat = IntradayMomentum()
+            costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
         else:
             return jsonify({"error": f"Unknown strategy: {strategy}"}), 400
 
@@ -2408,16 +2426,30 @@ def api_review_run():
 
         trades_json = []
         for _, row in df_trades.iterrows():
+            sl_val = float(row["sl"]) if pd.notna(row["sl"]) else None
+            tp1_val = float(row["tp1"]) if pd.notna(row["tp1"]) else None
+            entry_val = float(row["entry_price"])
+            # Planned R:R at entry (target distance / stop distance) -- distinct
+            # from the realized r_multiple, which reflects what actually
+            # happened (partial fills, breakeven stops, trailing, etc).
+            planned_rr = None
+            if sl_val is not None and tp1_val is not None:
+                stop_dist = abs(entry_val - sl_val)
+                if stop_dist > 0:
+                    planned_rr = round(abs(tp1_val - entry_val) / stop_dist, 2)
+            return_pct = round(float(row["pnl"]) / 10_000 * 100, 3)  # vs the $10k backtest baseline
             trades_json.append({
                 "id": int(row["id"]) if pd.notna(row["id"]) else 0,
                 "direction": str(row["direction"]),
                 "entry_time": row["entry_time"].isoformat() if hasattr(row["entry_time"], "isoformat") else str(row["entry_time"]),
                 "exit_time":  row["exit_time"].isoformat()  if hasattr(row["exit_time"],  "isoformat") else str(row["exit_time"]),
                 "duration_min": float(row["duration_min"]),
-                "entry_price": float(row["entry_price"]),
+                "entry_price": entry_val,
                 "exit_price":  float(row["exit_price"]),
                 "exit_reason": str(row["exit_reason"]),
-                "sl": float(row["sl"]) if pd.notna(row["sl"]) else None,
+                "planned_rr": planned_rr,
+                "return_pct": return_pct,
+                "sl": sl_val,
                 "tp1": float(row["tp1"]) if pd.notna(row["tp1"]) else None,
                 "pnl": float(row["pnl"]),
                 "r_multiple": float(row["r_multiple"]) if pd.notna(row["r_multiple"]) else None,
