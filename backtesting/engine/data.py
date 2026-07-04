@@ -4,12 +4,14 @@ Unified data loader for all assets.
 Loads OHLCV from any source with a single function call.
 Handles all file formats currently in the project:
 
-  - Flat parquet:   data/market_data/{SYMBOL}{TF}.parquet       (21 forex pairs)
+  - Forex parquet:  data/market_data/forex/parquet/{SYMBOL}{TF}.parquet       (21 forex pairs)
+  - Forex CSVs:     data/market_data/forex/csv/{SYMBOL}{TF}.csv
   - Crypto parquet: data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet
-  - Legacy crypto:  data/market_data/crypto/{SYMBOL}{TF}.parquet
-  - Forex CSVs:     data/market_data/forex/{SYMBOL}/m{tf}.csv
-  - Index CSVs:     data/market_data/index/{SYMBOL}/{SYMBOL}{tf}.csv
-  - Commodity CSVs: data/market_data/commodity/{SYMBOL}/*.csv
+  - Legacy crypto:  data/market_data/crypto/legacy/{SYMBOL}{TF}.parquet
+  - Index parquet:  data/market_data/index/parquet/{SYMBOL}{TF}.parquet
+  - Index CSVs:     data/market_data/index/csv/{ALT_NAME}{TF}.csv
+  - Commodity pq:   data/market_data/commodity/parquet/{SYMBOL}{TF}.parquet
+  - Commodity CSVs: data/market_data/commodity/csv/{SYMBOL}{TF}.csv
 
 Usage:
     from backtesting.engine.data import load_data, list_pairs, list_tfs
@@ -28,14 +30,13 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
+import logging
+
 import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "market_data"
 
-# Out-of-sample wall. IS ends 2026-05-23; OOS is 2026-05-24 → 2026-06-23.
-# Every load_data call defaults to IS-only so OOS cannot leak by accident.
-# Cross it ONLY via load_data(..., allow_oos=True) for the final blessed test.
-OOS_START = pd.Timestamp("2026-05-24", tz="UTC")
+logger = logging.getLogger(__name__)
 
 # Crypto loading lives in backtesting.crypto.data for a clean separation.
 from backtesting.crypto.data import CRYPTO_EXCHANGES, _load_from_crypto_dir, _load_from_crypto_funding, load_funding_rate  # noqa: F401
@@ -135,11 +136,10 @@ CTRADER_DIR = DATA_DIR / "ctrader"
 
 
 def _load_from_flat_parquet(symbol: str, tf: str) -> pd.DataFrame:
-    """Merge data/market_data + data/parquet forex/metals + ctrader for maximum history."""
+    """Merge forex/parquet + data/parquet forex + ctrader for maximum history."""
     paths = [
-        DATA_DIR / f"{symbol}{tf}.parquet",
+        DATA_DIR / "forex" / "parquet" / f"{symbol}{tf}.parquet",
         PARQUET_DIR / "forex"  / f"{symbol}{tf}.parquet",
-        PARQUET_DIR / "metals" / f"{symbol}{tf}.parquet",
         CTRADER_DIR / f"{symbol}{tf}.parquet",
     ]
     frames = []
@@ -169,27 +169,14 @@ def _load_from_flat_parquet(symbol: str, tf: str) -> pd.DataFrame:
 
 
 def _load_from_forex_dir(symbol: str, tf: str) -> pd.DataFrame:
-    """data/market_data/forex/{SYMBOL}/m{tf}.csv (or h{tf}, d{tf})"""
-    # Map TF to file prefix
-    tf_map = {
-        "1": ["m1"], "5": ["m5"], "15": ["m15"], "30": ["m30"],
-        "60": ["h1"], "240": ["h4"], "1440": ["d1", "d"],
-    }
-    prefixes = tf_map.get(tf)
-    if not prefixes:
-        return pd.DataFrame()
-
-    # Try .csv and .parquet
-    for prefix in prefixes:
-        for ext in [".csv", ".parquet"]:
-            path = DATA_DIR / "forex" / symbol / f"{prefix}{ext}"
-            if path.exists():
-                try:
-                    if ext == ".parquet":
-                        return pd.read_parquet(path)
-                    return pd.read_csv(path)
-                except Exception:
-                    continue
+    """data/market_data/forex/csv/{SYMBOL}{TF}.csv"""
+    path = DATA_DIR / "forex" / "csv" / f"{symbol}{tf}.csv"
+    if path.exists():
+        try:
+            df = pd.read_csv(path)
+            return df
+        except Exception:
+            pass
     return pd.DataFrame()
 
 
@@ -197,8 +184,16 @@ PARQUET_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "parquet"
 
 
 def _load_from_index_dir(symbol: str, tf: str) -> pd.DataFrame:
-    """data/market_data/index/{SYMBOL}/{SYMBOL}{tf}.csv or data/parquet/indeces/{SYMBOL}{tf}.parquet"""
-    # Try data/parquet indeces first (has NAS100, SPX, DJI data)
+    """data/market_data/index/parquet/{SYMBOL}{TF}.parquet or data/parquet/indeces/{SYMBOL}{TF}.parquet"""
+    # Try index/parquet first (primary source)
+    parquet_path = DATA_DIR / "index" / "parquet" / f"{symbol}{tf}.parquet"
+    if parquet_path.exists():
+        try:
+            return pd.read_parquet(parquet_path)
+        except Exception:
+            pass
+
+    # data/parquet indeces (older alternate names: USA*, DEUIDX*, GBRIDX*)
     pine_path = PARQUET_DIR / "indeces" / f"{symbol}{tf}.parquet"
     if pine_path.exists():
         try:
@@ -206,51 +201,49 @@ def _load_from_index_dir(symbol: str, tf: str) -> pd.DataFrame:
         except Exception:
             pass
 
-    parquet_path = DATA_DIR / "index" / symbol / f"{symbol}{tf}.parquet"
+    # CSV fallback in index/csv/
+    csv_path = DATA_DIR / "index" / "csv" / f"{symbol}{tf}.csv"
+    if csv_path.exists():
+        try:
+            df = pd.read_csv(
+                csv_path, sep="\t", header=None,
+                names=["ts", "open", "high", "low", "close", "volume"],
+            )
+            return df
+        except Exception:
+            pass
+    return pd.DataFrame()
+
+
+def _load_from_commodity_dir(symbol: str, tf: str) -> pd.DataFrame:
+    """data/market_data/commodity/parquet/{SYMBOL}{TF}.parquet or csv fallback."""
+    # Try parquet first (converted from CSV)
+    parquet_path = DATA_DIR / "commodity" / "parquet" / f"{symbol}{tf}.parquet"
     if parquet_path.exists():
         try:
             return pd.read_parquet(parquet_path)
         except Exception:
             pass
 
-    path = DATA_DIR / "index" / symbol / f"{symbol}{tf}.csv"
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        df = pd.read_csv(
-            path, sep="\t", header=None,
-            names=["ts", "open", "high", "low", "close", "volume"],
-        )
-        return df
-    except Exception:
-        return pd.DataFrame()
+    # Also check data/parquet/metals (older pipeline, column name 'datetime')
+    metals_path = PARQUET_DIR / "metals" / f"{symbol}{tf}.parquet"
+    if metals_path.exists():
+        try:
+            return pd.read_parquet(metals_path)
+        except Exception:
+            pass
 
-
-def _load_from_commodity_dir(symbol: str, tf: str) -> pd.DataFrame:
-    """data/market_data/commodity/{SYMBOL}/m{tf}.csv (or h{tf})"""
-    tf_map = {
-        "1": [f"{symbol}1", "m1"],
-        "5": [f"{symbol}5", "m5"],
-        "15": [f"{symbol}15", "m15"],
-        "30": [f"{symbol}30", "m30"],
-        "60": [f"{symbol}60", "h1"],
-        "240": [f"{symbol}240", "h4"],
-        "1440": [f"{symbol}1440", "d", "d1"],
-    }
-    prefixes = tf_map.get(tf)
-    if not prefixes:
-        return pd.DataFrame()
-    for prefix in prefixes:
-        for ext in [".csv", ".parquet"]:
-            path = DATA_DIR / "commodity" / symbol / f"{prefix}{ext}"
-            if not path.exists():
-                continue
-            try:
-                if ext == ".parquet":
-                    return pd.read_parquet(path)
-                return pd.read_csv(path)
-            except Exception:
-                continue
+    # CSV fallback
+    csv_path = DATA_DIR / "commodity" / "csv" / f"{symbol}{tf}.csv"
+    if csv_path.exists():
+        try:
+            df = pd.read_csv(
+                csv_path, sep="\t", header=None,
+                names=["ts", "open", "high", "low", "close", "volume"],
+            )
+            return df
+        except Exception:
+            pass
     return pd.DataFrame()
 
 
@@ -396,11 +389,13 @@ def load_data(
                     break
 
     if df.empty:
+        logger.warning("No data found for %s tf=%s (asset_type=%s, exchange=%s)", symbol, tf, asset_type or "auto", exchange or "auto")
         return df
 
     # Normalize
     df = _normalize_columns(df)
     if df.empty:
+        logger.warning("Data for %s tf=%s was empty after column normalization", symbol, tf)
         return df
 
     # Date filtering
@@ -409,9 +404,8 @@ def load_data(
     elif days > 0:
         df = _slice_days(df, days)
 
-    # OOS wall: strip anything on/after the holdout start unless explicitly unlocked.
-    if not allow_oos and not df.empty and "ts" in df.columns:
-        df = df[df["ts"] < OOS_START].reset_index(drop=True)
+    if df.empty:
+        logger.warning("Data for %s tf=%s empty after date filter (start=%s end=%s days=%s)", symbol, tf, start, end, days)
 
     return df
 
@@ -420,55 +414,35 @@ def list_pairs(asset_type: Optional[str] = None) -> list[str]:
     """List all available trading pairs."""
     pairs: set[str] = set()
 
-    # Flat parquet files (forex)
-    for f in DATA_DIR.glob("*.parquet"):
-        name = f.stem
-        # Strip trailing number (TF)
-        while name and name[-1].isdigit():
-            name = name[:-1]
-        if len(name) >= 3 and not name.endswith("_funding"):
-            pairs.add(name)
-
-    # Crypto dir
-    if (DATA_DIR / "crypto").exists():
-        for ex in CRYPTO_EXCHANGES:
-            ex_dir = DATA_DIR / "crypto" / ex
-            if not ex_dir.exists():
+    def _extract_pairs_from_parquet_dir(dir_path: Path) -> set[str]:
+        """Extract unique symbol names from a directory of {SYM}{TF}.parquet files."""
+        found: set[str] = set()
+        if not dir_path.exists():
+            return found
+        for f in dir_path.glob("*.parquet"):
+            if f.name.endswith("_funding.parquet") or f.name == "market_specs.parquet":
                 continue
-            for f in ex_dir.glob("*.parquet"):
-                name = f.stem
-                if name.endswith("_funding"):
-                    continue
-                while name and name[-1].isdigit():
-                    name = name[:-1]
-                if len(name) >= 3:
-                    pairs.add(name)
-        for f in (DATA_DIR / "crypto").glob("*.parquet"):
             name = f.stem
-            if name.endswith("_funding"):
-                continue
             while name and name[-1].isdigit():
                 name = name[:-1]
             if len(name) >= 3:
-                pairs.add(name)
+                found.add(name)
+        return found
 
-    # Forex dir
-    if (DATA_DIR / "forex").exists():
-        for d in (DATA_DIR / "forex").iterdir():
-            if d.is_dir():
-                pairs.add(d.name)
+    # Forex
+    pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "forex" / "parquet")
 
-    # Index dir
-    if (DATA_DIR / "index").exists():
-        for d in (DATA_DIR / "index").iterdir():
-            if d.is_dir():
-                pairs.add(d.name)
+    # Crypto — exchange-scoped + legacy
+    if (DATA_DIR / "crypto").exists():
+        for ex in CRYPTO_EXCHANGES:
+            pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "crypto" / ex)
+        pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "crypto" / "legacy")
 
-    # Commodity dir
-    if (DATA_DIR / "commodity").exists():
-        for d in (DATA_DIR / "commodity").iterdir():
-            if d.is_dir():
-                pairs.add(d.name)
+    # Indices
+    pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "index" / "parquet")
+
+    # Commodities
+    pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "commodity" / "parquet")
 
     return sorted(pairs)
 

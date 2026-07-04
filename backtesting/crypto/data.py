@@ -103,13 +103,16 @@ def _slice_days(df: pd.DataFrame, days: int) -> pd.DataFrame:
 
 
 def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) -> pd.DataFrame:
-    """data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet, with fallback."""
+    """data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet, with fallback to legacy."""
     paths = []
     if exchange:
         paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}{tf}.parquet")
+        # Also try legacy if exchange-scoped file is missing
+        paths.append(DATA_DIR / "crypto" / "legacy" / f"{symbol}{tf}.parquet")
     else:
-        paths.extend(DATA_DIR / "crypto" / ex / f"{symbol}{tf}.parquet" for ex in CRYPTO_EXCHANGES)
-        paths.append(DATA_DIR / "crypto" / f"{symbol}{tf}.parquet")
+        for ex in CRYPTO_EXCHANGES:
+            paths.append(DATA_DIR / "crypto" / ex / f"{symbol}{tf}.parquet")
+        paths.append(DATA_DIR / "crypto" / "legacy" / f"{symbol}{tf}.parquet")
     # data/parquet crypto parquets (BTCUSD, ETHUSD, XRPUSDT, ADAUSDT)
     paths.append(PARQUET_DIR / "crypto" / f"{symbol}{tf}.parquet")
 
@@ -128,9 +131,11 @@ def _load_from_crypto_funding(symbol: str, exchange: Optional[str] = None) -> pd
     paths = []
     if exchange:
         paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}_funding.parquet")
+        paths.append(DATA_DIR / "crypto" / "legacy" / f"{symbol}_funding.parquet")
     else:
-        paths.extend(DATA_DIR / "crypto" / ex / f"{symbol}_funding.parquet" for ex in CRYPTO_EXCHANGES)
-        paths.append(DATA_DIR / "crypto" / f"{symbol}_funding.parquet")
+        for ex in CRYPTO_EXCHANGES:
+            paths.append(DATA_DIR / "crypto" / ex / f"{symbol}_funding.parquet")
+        paths.append(DATA_DIR / "crypto" / "legacy" / f"{symbol}_funding.parquet")
 
     for path in paths:
         if not path.exists():
@@ -143,8 +148,8 @@ def _load_from_crypto_funding(symbol: str, exchange: Optional[str] = None) -> pd
 
 
 def _load_from_legacy_crypto_dir(symbol: str, tf: str) -> pd.DataFrame:
-    """data/market_data/crypto/{SYMBOL}{TF}.parquet (flat, no exchange namespace)."""
-    path = DATA_DIR / "crypto" / f"{symbol}{tf}.parquet"
+    """data/market_data/crypto/legacy/{SYMBOL}{TF}.parquet."""
+    path = DATA_DIR / "crypto" / "legacy" / f"{symbol}{tf}.parquet"
     if not path.exists():
         return pd.DataFrame()
     try:
