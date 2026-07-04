@@ -2406,6 +2406,8 @@ def api_review_run():
                 "XAUUSD": dict(pip_size=0.01, pip_value_per_lot=1.0, fixed_spread_pips=30.0),
                 "XAGUSD": dict(pip_size=0.001, pip_value_per_lot=5.0, fixed_spread_pips=40.0),
                 "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
+                "US30": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=3.0),
+                "SPX500": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=0.7),
             }
             strat = OrbNyWideStop(htf_key="240")
             costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
@@ -2415,6 +2417,8 @@ def api_review_run():
                 "XAUUSD": dict(pip_size=0.01, pip_value_per_lot=1.0, fixed_spread_pips=30.0),
                 "XAGUSD": dict(pip_size=0.001, pip_value_per_lot=5.0, fixed_spread_pips=40.0),
                 "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
+                "US30": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=3.0),
+                "SPX500": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=0.7),
             }
             strat = IntradayMomentum()
             costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
@@ -2424,6 +2428,8 @@ def api_review_run():
                 "XAUUSD": dict(pip_size=0.01, pip_value_per_lot=1.0, fixed_spread_pips=30.0),
                 "XAGUSD": dict(pip_size=0.001, pip_value_per_lot=5.0, fixed_spread_pips=40.0),
                 "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
+                "US30": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=3.0),
+                "SPX500": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=0.7),
             }
             strat = OvernightDrift()
             costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
