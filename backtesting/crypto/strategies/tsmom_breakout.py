@@ -83,6 +83,17 @@ def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> n
 
 
 class CryptoTsmomBreakout(Strategy):
+    # Sweep-parameter space. Stay lean: one config per param initially — we learned
+    # from TrBosFade that 144 combos on one pair is just overfit. Expand only after
+    # a baseline has multi-pair support.
+    spaces = {
+        "entry_len": [20, 40],
+        "exit_len": [10],
+        "stop_atr_mult": [2.0, 3.0],
+        "stop_mode": ["atr", "channel"],
+        "risk_pct": [0.005],
+    }
+
     def __init__(
         self,
         risk_pct: float = 0.005,
