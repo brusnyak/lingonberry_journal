@@ -2827,6 +2827,8 @@ def api_review_label():
         "label": body.get("label"),       # "good" / "bad" / "skip"
         "notes": body.get("notes", ""),
         "params": body.get("params", {}),
+        "drawings": body.get("drawings", []),
+        "markers": body.get("markers", []),
     }
     with open(store_path, "w") as f:
         json_mod.dump(labels, f, indent=2)
