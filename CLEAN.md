@@ -1255,3 +1255,38 @@ would be the exact multiple-comparisons trap this project avoids elsewhere.
 needs its own literature search (CME futures settlement timing, funding-
 rate cycles, documented session/volume patterns) before testing again --
 not a mechanical port of an equity-session concept onto a 24/7 market.
+
+## 25. VWAP bounce (literal, PB Investing's actual rules) — FALSIFIED, family closed
+
+User asked to reconsider VWAP after the earlier rejection (KL sweep+reclaim,
+PF 0.99) — fair concern: that test required a prior liquidity sweep before
+the VWAP reclaim, which PB Investing's public setups (crossover/bounce/
+flush/rejection) don't require. Research (two passes, one deep) confirmed
+no evidence exists for his setups beyond anecdotal single-trade screenshots,
+but the mechanics themselves hadn't been tested bare.
+
+Built `backtesting/lvl2_vwap_bounce/vwap_bounce.py` — literal VWAP
+CENTERLINE crossover (not the project's existing `vwap_bounce_long/short`
+columns, which trigger off the ±1σ band, a different level than PB
+describes), confirmed by a closing candle, gated only by HTF trend
+direction (matching his own "already in an uptrend" framing, same EMA
+filter already validated for ORB/OvernightDrift). No sweep precondition,
+no regime gate — the fairest, most literal version of his actual rules.
+
+```
+              disc                    hold
+NAS100    -16.2%/DD37.7%/PF0.95   +50.3%/DD21.8%/PF1.17
+XAUUSD    -18.3%/DD31.4%/PF0.96   +60.7%/DD12.2%/PF1.16
+```
+
+FALSIFIED. Discovery flat-to-negative on both assets; holdout is positive
+but the swing plus drawdown (up to 37.7%, far beyond any prop account
+tolerance) is the signature of noise, not edge. Also fires 700-1200 times
+per ~9 months — a bare VWAP cross with no other filter is a very low-bar
+trigger, low signal quality.
+
+**VWAP-as-a-level mean-reversion/continuation is now falsified three
+separate ways in this project**: sweep+reclaim (gated), chop-regime fade
+(ER<=0.3 gated), and this bare literal version (HTF-trend gated only). Not
+a fairness problem with any prior test — the honest, most charitable
+version fails on its own, worse than the gated versions. Family closed.
