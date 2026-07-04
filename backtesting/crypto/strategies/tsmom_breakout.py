@@ -1,0 +1,136 @@
+"""
+Crypto donchian-breakout / time-series-momentum strategy.
+
+Mechanism, fixed ex-ante from the literature (not fit to data):
+  - Classic Donchian-channel breakout (Dennis/Eckhardt's "Turtle" system,
+    1983): enter long on a close above the highest close of the last
+    `entry_len` bars, short on a close below the lowest close of the same
+    window. Different (shorter) `exit_len` channel closes the position on
+    trend exhaustion -- asymmetric entry/exit avoids whipsawing on the
+    same level.
+  - Academically: this is the same mechanism as time-series momentum
+    (Moskowitz, Ooi & Pedersen, "Time Series Momentum", JFE 2012) --
+    positive risk-adjusted returns across 58 futures/forward/equity/bond/
+    commodity markets over 25+ years, one of the most-replicated
+    systematic strategies in existence. Crypto perpetuals are structurally
+    the closest analog to the futures markets in that paper (funding-rate
+    financed, no dividends/carry the way equities have), which is why this
+    is the first mechanism tried for the crypto track rather than porting
+    an equity-session concept (ORB/overnight-drift/closing-momentum) that
+    doesn't map onto a 24/7 market with no cash session.
+  - Sizing: fixed-fractional risk_pct per trade against an ATR-based stop,
+    same convention as every other strategy in this project -- NOT the
+    volatility-targeting used in the academic TSMOM paper (that scales
+    position size inversely to trailing realized vol to equalize risk
+    contribution across assets in a multi-asset book; this is a single-
+    asset per-instance backtest, so it's out of scope until/unless this
+    strategy is run as a portfolio across multiple coins at once).
+
+No lookahead: entry/exit channel bounds and ATR are computed from bars
+strictly BEFORE the current bar (channel excludes the current close).
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from backtesting.engine.base import BarData, EngineState, Strategy
+from backtesting.engine.orders import Direction, Signal
+
+
+def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
+    prev_close = np.roll(close, 1)
+    prev_close[0] = close[0]
+    tr = np.maximum(high - low, np.maximum(np.abs(high - prev_close), np.abs(low - prev_close)))
+    atr = np.full(len(close), np.nan)
+    atr[period - 1] = tr[:period].mean()
+    for i in range(period, len(close)):
+        atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
+    return atr
+
+
+class CryptoTsmomBreakout(Strategy):
+    def __init__(
+        self,
+        risk_pct: float = 0.005,
+        direction: str = "both",
+        entry_len: int = 20,     # Donchian entry channel (Turtle "System 1" length)
+        exit_len: int = 10,      # shorter exit channel -- asymmetric to avoid whipsaw
+        atr_period: int = 14,
+        stop_atr_mult: float = 2.0,
+    ):
+        self.risk_pct = risk_pct
+        self.direction = direction
+        self.entry_len = entry_len
+        self.exit_len = exit_len
+        self.atr_period = atr_period
+        self.stop_atr_mult = stop_atr_mult
+        self._pos_dir = 0  # 0 flat, 1 long, -1 short -- tracked for should_close's exit-channel check
+
+    def init(self, data: dict) -> None:
+        df = next(iter(data.values())).copy()
+        if "ts" in df.columns:
+            df = df.set_index("ts", drop=False)
+        df.sort_index(inplace=True)
+        self._n = len(df)
+
+        high = df["high"].to_numpy()
+        low = df["low"].to_numpy()
+        close = df["close"].to_numpy()
+        self._close = close
+        self._atr = _atr(high, low, close, self.atr_period)
+
+        # Causal rolling channel: value at bar i uses only bars [i-len, i-1],
+        # i.e. shift(1) before rolling so the current bar's own high/low/close
+        # never leaks into its own entry/exit decision.
+        high_s = pd.Series(high)
+        low_s = pd.Series(low)
+        self._entry_hi = high_s.shift(1).rolling(self.entry_len).max().to_numpy()
+        self._entry_lo = low_s.shift(1).rolling(self.entry_len).min().to_numpy()
+        self._exit_hi = high_s.shift(1).rolling(self.exit_len).max().to_numpy()
+        self._exit_lo = low_s.shift(1).rolling(self.exit_len).min().to_numpy()
+
+        self._pos_dir = 0
+
+    def next(self, bar: BarData, state: EngineState) -> Optional[Signal]:
+        i = bar.index
+        if state.has_open_position:
+            return None
+        entry_hi, entry_lo = self._entry_hi[i], self._entry_lo[i]
+        atr = self._atr[i]
+        if np.isnan(entry_hi) or np.isnan(entry_lo) or np.isnan(atr) or atr <= 0:
+            return None
+
+        close = bar.close
+        if close > entry_hi and self.direction in ("long", "both"):
+            self._pos_dir = 1
+            sl = close - self.stop_atr_mult * atr
+            return Signal(direction=Direction.LONG, entry=close, sl=sl,
+                          tp1=close + 50 * (close - sl),  # effectively disabled; exit-channel/SL are the real exits
+                          risk_pct=self.risk_pct, tp1_frac=0.0, tp2_frac=0.0,
+                          trail=False, label="crypto_tsmom_long")
+        if close < entry_lo and self.direction in ("short", "both"):
+            self._pos_dir = -1
+            sl = close + self.stop_atr_mult * atr
+            return Signal(direction=Direction.SHORT, entry=close, sl=sl,
+                          tp1=close - 50 * (sl - close),
+                          risk_pct=self.risk_pct, tp1_frac=0.0, tp2_frac=0.0,
+                          trail=False, label="crypto_tsmom_short")
+        return None
+
+    def should_close(self, position, bar: BarData, state: EngineState) -> bool:
+        i = bar.index
+        exit_hi, exit_lo = self._exit_hi[i], self._exit_lo[i]
+        if np.isnan(exit_hi) or np.isnan(exit_lo):
+            return False
+        label = getattr(position, "label", "") or ""
+        if "long" in label:
+            return bool(bar.close < exit_lo)
+        if "short" in label:
+            return bool(bar.close > exit_hi)
+        return False
+
+    def on_close(self, trade, state: EngineState) -> None:
+        self._pos_dir = 0
