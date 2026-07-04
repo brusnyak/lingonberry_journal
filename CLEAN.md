@@ -1730,3 +1730,58 @@ done for the right reasons -- is still one data point. Walk-forward across
 many starting points is the only way to see the tail risk a lucky split
 hides. Apply this standard to ORB too the next time its risk or config
 changes, not just at initial validation.
+
+## 32. Session close -- standing state on `hypothesis-engine`, before splitting off to a crypto track
+
+### Where things stand, precisely (not the old numbers -- these are correct as of §31)
+- **ORB** -- `OrbNyWideStop(htf_key="240", ltf_key="30", multi_target=True)`,
+  NAS100 5m. Zero breaches across ALL 482 rolling windows (30/60/90d),
+  both GFT accounts, at risk 25k@0.5%/100k@0.4%. Strongest validated
+  result in the project. Transfers to US30/DAX; SPX500 weaker-but-
+  positive; UK100 not adopted.
+- **OvernightDrift** -- `OvernightDrift(htf_key="240", stop_mode="structure")`,
+  NAS100. **risk_pct=0.003 on BOTH accounts** (not 0.5%/0.4% -- that was a
+  lucky single-split result, corrected in §31). Higher raw return than
+  ORB, meaningfully riskier pre-correction, clean post-correction.
+- **Combined book** (both together, one account) -- `backtesting/portfolio/combined_book.py`.
+  Zero real time-overlap confirmed. Needs its OWN calibration when run
+  together: `risk_pct=0.004` (25k) / `0.003` (100k) EACH -- not either
+  strategy's solo number. NOT yet walk-forward tested (only single-split)
+  -- flagged as an open item, not a completed check.
+- **IntradayMomentum** -- closed for good. Falsified (null test), then
+  confirmed dead twice more (ATR stop-tuning, then the correct structural
+  stop) -- no viable fix exists on any of 7 assets tested.
+- **Tooling built this session, all reusable, all in git**:
+  `backtesting/analysis/{rolling_pass_rate,trait_forensics,no_trade_days,prop_check,report_rolling_pass}.py`,
+  `backtesting/portfolio/combined_book.py`. All wrap the existing
+  `engine.runner.run()` -- no parallel backtest logic anywhere.
+- **Review UI** -- ORB/OvernightDrift/IntradayMomentum all wired in with
+  correct validated configs (a real bug serving OvernightDrift unfiltered
+  was found and fixed, §29). Drawings/markers and strategy-tagging persist
+  correctly (bugs fixed earlier in the session, §26).
+
+### Agreed next-step priority queue (stated by user, in order)
+1. DONE -- combined-book validation (§30).
+2. DONE -- walk-forward validation (§31), which overturned OvernightDrift's
+   risk calibration.
+3. NOT STARTED -- ML confidence-filter (P(win) gate on top of already-
+   triggered ORB/OvernightDrift signals, NOT a new direction predictor).
+   Plan drafted, not yet built: 5 features max (HTF/LTF slope strength,
+   causal ATR percentile, `ict_state`, day-of-week, OR-width-for-ORB),
+   logistic regression or depth-2 tree only (sample size ~130-160
+   discovery trades/strategy can't support more), validate via
+   discovery-only fit + permutation test + walk-forward re-check (not
+   just single split) + pre-registered improve-without-worsening-DD bar.
+4. NOT STARTED -- regime detection upgrade: test `ict_state` (causal
+   BOS/CHoCH state machine) as a replacement/addition to the blunt
+   EMA-slope HTF filter on both strategies.
+5. NOT STARTED -- combined-book config (item above) has not itself been
+   walk-forward tested, only single-split. Natural next check once back
+   on this branch.
+
+### Why the session paused here
+User is switching to a separate crypto-focused track (freqtrade or
+similar, on a new branch off this HEAD) rather than continuing items 3-5
+immediately. Items 3-5 remain valid, pre-planned, and un-started --
+resume from this list when back on `hypothesis-engine`, don't re-derive
+the plan from scratch.
