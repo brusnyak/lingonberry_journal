@@ -1521,3 +1521,76 @@ the right reason (no entry edge exists to protect, tested with the
 correct kind of stop) rather than the wrong one (ATR tightening).
 
 Tests: 92/92 pass (4 new for `stop_mode="structure"`).
+
+## 29. OvernightDrift structural stop -- ADOPTED, plus a real review-UI config bug found and fixed
+
+### Quick sanity re-check before touching anything (user asked, correctly, before trusting a "revert to an earlier commit" impulse)
+Ran current HEAD's ORB and OvernightDrift configs fresh: numbers matched
+CLEAN.md's documented §27 state exactly (ORB 19.2%/29.1%, both accounts
+clean once risk is calibrated 25k@0.5%/100k@0.4%). **No revert needed** --
+the codebase already reflects everything validated so far.
+
+### OvernightDrift vs IntradayMomentum, by the numbers (not vibes)
+User's subjective read reviewing individual trades was that OvernightDrift
+"loses" to IntradayMomentum (feels like luck holding overnight, sometimes
+wrong direction). Actual numbers say the opposite -- OvernightDrift has
+the HIGHER return and comparable PF of the two validated strategies:
+```
+                    disc                      hold
+ORB             19.2%/DD2.8%/PF1.70      29.1%/DD2.9%/PF2.43
+OvernightDrift  37.3%/DD7.0%/PF1.78      47.6%/DD7.0%/PF1.95
+```
+Both pass both GFT accounts cleanly at calibrated risk, target hit, zero
+breach. The lower win rate (38-40%) is what reads as "luck" trade-by-trade
+-- expected texture for a strategy that wins big/loses small, not evidence
+it's broken.
+
+### Real bug found while checking this: review UI never used the validated config
+`webapp/app.py`'s `/api/review/run` was instantiating bare `OvernightDrift()`
+for the review dropdown -- NO `htf_key`, i.e. the pre-fix, always-long,
+un-filtered version, not the validated `htf_key="240"` config. Anyone
+reviewing OvernightDrift trades in the UI (including the manual review that
+produced the "loses to IM" impression) was looking at the worse, dead
+version of the strategy the whole time. Fixed: now instantiates
+`OvernightDrift(htf_key="240", stop_mode="structure")`. Also updated the
+UI's `IntradayMomentum()` call to `IntradayMomentum(stop_mode="structure")`
+for consistency (doesn't change IM's falsified status, just makes the UI
+show the correct, better-reasoned variant instead of the ATR one).
+
+### Structural stop applied to OvernightDrift -- same fix as IntradayMomentum, different outcome
+Same pattern as §28: added `stop_mode="structure"` to `OvernightDrift`
+(`backtesting/lvl2_overnight_drift/overnight_drift.py`), reusing
+`build_ict_structure_index`, stop placed behind the nearest confirmed
+swing low instead of a blunt ATR(2.0) multiple. Unlike IntradayMomentum,
+this one actually helps:
+```
+              disc                      hold
+ATR-2.0    37.3%/DD7.0%/PF1.78      47.6%/DD7.0%/PF1.95
+structure  50.8%/DD6.8%/PF2.12      43.1%/DD6.1%/PF1.93
+```
+Discovery clearly better (return +13.5pp, PF 1.78->2.12, DD down slightly).
+Holdout is a wash, not a loss (return -4.5pp but DD improves 7.0%->6.1%,
+PF essentially unchanged 1.95 vs 1.93) -- meets the same bar used to adopt
+ORB's multi-target ladder (§27): better on one window, not worse on
+either. **Adopted** as OvernightDrift's new production config:
+`OvernightDrift(htf_key="240", stop_mode="structure")` (constructor
+default stays `stop_mode="atr"` for backward compatibility). Re-checked
+prop compliance at this config, both accounts, both windows: all four
+clean, zero breach, target hit (25k 50.8%/43.1%, 100k 39.2%/33.4%).
+
+### Why ORB didn't need this fix
+ORB's stop was already structural by construction -- the far side of the
+actual opening-range level, not an ATR multiple -- which is the same kind
+of fix IntradayMomentum/OvernightDrift needed. Nothing to change there.
+"Proper multi-target" for ORB is already §27's Fib-like ladder, validated
+on both windows, not revisited here.
+
+Tests: 95/95 pass (3 new for OvernightDrift's `stop_mode="structure"`).
+
+### Open for next round
+- OvernightDrift has not been breadth-tested on US30/SPX500/DAX/UK100 the
+  way ORB was (§27) -- unlike ORB, this hasn't been checked yet. Candidate
+  for the next extension pass if pursued.
+- User is now reviewing ORB + OvernightDrift trades in the (now-corrected)
+  UI in parallel; agreed next work-stream split is ML/further-improvement
+  research while that manual review continues.

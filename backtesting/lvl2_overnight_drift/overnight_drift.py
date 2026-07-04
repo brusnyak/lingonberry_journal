@@ -40,6 +40,7 @@ import pandas as pd
 
 from backtesting.engine.base import BarData, EngineState, Strategy
 from backtesting.engine.orders import Direction, Signal
+from backtesting.features.ict_structure import build_ict_structure_index
 
 
 def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
@@ -75,6 +76,10 @@ class OvernightDrift(Strategy):
         stop_atr_mult: float = 2.0,
         htf_key: str | None = None,
         htf_ema_period: int = 50,
+        stop_mode: str = "atr",              # "atr" or "structure"
+        structure_buffer_atr: float = 0.1,
+        structure_left: int = 3,
+        structure_right: int = 3,
     ):
         self.risk_pct = risk_pct
         self.session_tz = session_tz
@@ -84,6 +89,10 @@ class OvernightDrift(Strategy):
         self.stop_atr_mult = stop_atr_mult
         self.htf_key = htf_key
         self.htf_ema_period = htf_ema_period
+        self.stop_mode = stop_mode
+        self.structure_buffer_atr = structure_buffer_atr
+        self.structure_left = structure_left
+        self.structure_right = structure_right
         self._last_entry_day = -1
 
     def init(self, data: dict) -> None:
@@ -98,6 +107,16 @@ class OvernightDrift(Strategy):
         low = df["low"].to_numpy()
         close = df["close"].to_numpy()
         self._atr = _atr(high, low, close, self.atr_period)
+
+        self._last_hl = None
+        self._last_ll = None
+        if self.stop_mode == "structure":
+            from backtesting.features.ict_structure import IctStructureConfig
+            struct_df = df[["ts", "open", "high", "low", "close"]].reset_index(drop=True)
+            cfg = IctStructureConfig(left=self.structure_left, right=self.structure_right)
+            struct = build_ict_structure_index(struct_df, cfg)
+            self._last_hl = struct["last_hl"].ffill().to_numpy()
+            self._last_ll = struct["last_ll"].ffill().to_numpy()
 
         self._htf_up_per_bar = None
         if self.htf_key:
@@ -151,11 +170,22 @@ class OvernightDrift(Strategy):
 
         self._last_entry_day = d
         close = bar.close
-        sl = close - self.stop_atr_mult * atr
+        sl = self._compute_sl(i, close, atr)
         return Signal(direction=Direction.LONG, entry=close, sl=sl,
-                      tp1=close + 20 * self.stop_atr_mult * atr,  # effectively disabled; next-open is the real exit
+                      tp1=close + 20 * (close - sl),  # effectively disabled; next-open is the real exit
                       risk_pct=self.risk_pct, tp1_frac=0.0, tp2_frac=0.0,
                       trail=False, label="overnight_drift_long")
+
+    def _compute_sl(self, i: int, close: float, atr: float) -> float:
+        if self.stop_mode != "structure":
+            return close - self.stop_atr_mult * atr
+        buf = self.structure_buffer_atr * atr
+        level = self._last_hl[i]
+        if np.isnan(level):
+            level = self._last_ll[i]
+        if np.isnan(level) or level >= close:
+            return close - self.stop_atr_mult * atr
+        return level - buf
 
     def should_close(self, position, bar: BarData, state: EngineState) -> bool:
         return bool(self._exit_ok[bar.index])

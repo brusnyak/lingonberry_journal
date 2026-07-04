@@ -2423,7 +2423,7 @@ def api_review_run():
                 "US30": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=3.0),
                 "SPX500": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=0.7),
             }
-            strat = IntradayMomentum()
+            strat = IntradayMomentum(stop_mode="structure")
             costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
         elif strategy == "OvernightDrift":
             from backtesting.lvl2_overnight_drift.overnight_drift import OvernightDrift
@@ -2434,7 +2434,7 @@ def api_review_run():
                 "US30": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=3.0),
                 "SPX500": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=0.7),
             }
-            strat = OvernightDrift()
+            strat = OvernightDrift(htf_key="240", stop_mode="structure")
             costs = ForexCosts(seed=42, **lvl2_cost_cfg.get(symbol, dict(pip_size=0.0001, pip_value_per_lot=10.0, fixed_spread_pips=1.5)))
         else:
             return jsonify({"error": f"Unknown strategy: {strategy}"}), 400

@@ -61,3 +61,32 @@ def test_exits_at_next_session_open():
     s._exit_ok[15] = True
     assert s.should_close(object(), _bar(i=15), _state()) is True
     assert s.should_close(object(), _bar(i=10), _state()) is False
+
+
+def _structure_strategy() -> OvernightDrift:
+    s = _strategy()
+    s.stop_mode = "structure"
+    n = s._n
+    s._last_hl = np.full(n, np.nan)
+    s._last_ll = np.full(n, np.nan)
+    return s
+
+
+def test_structure_stop_uses_last_hl_minus_buffer():
+    s = _structure_strategy()
+    s._last_hl[10] = 95.0
+    sig = s.next(_bar(close=100.0), _state())
+    assert sig.sl == 95.0 - 0.1 * 2.0
+
+
+def test_structure_stop_falls_back_to_atr_when_no_swing():
+    s = _structure_strategy()
+    sig = s.next(_bar(close=100.0), _state())
+    assert sig.sl == 100.0 - 2.0 * 2.0
+
+
+def test_structure_stop_falls_back_when_swing_above_price():
+    s = _structure_strategy()
+    s._last_hl[10] = 101.0
+    sig = s.next(_bar(close=100.0), _state())
+    assert sig.sl == 100.0 - 2.0 * 2.0
