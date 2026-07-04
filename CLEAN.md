@@ -1090,3 +1090,91 @@ project (after ORB) to be fully prop-compliant on GFT 25k AND 100k.**
 
 Wired into review UI (`OvernightDrift` in the strategy dropdown, same
 pattern as OrbWideStop/IntradayMomentum). Tests: 4/4 pass.
+
+## 21. Rolling-window pass-rate analysis (reusable tool, not a one-off script)
+
+Per user feedback: stop writing throwaway scratch scripts, use the existing
+engine properly. Built `backtesting/analysis/rolling_pass_rate.py`
+(post-processes a trades DataFrame from the SAME `engine.runner.run()` used
+everywhere else — no separate backtest logic) + `report_rolling_pass.py`
+CLI. Answers "if I started a real challenge on a random day, what fraction
+of 30-day windows would hit the phase target without breaching DD" — a
+different, more relevant question than cumulative 9-month return.
+
+```
+                    pass%   breach%   median days-to-pass
+ORB 25k             11.4%    0.0%          22
+ORB 100k             3.7%    0.0%          24
+OvernightDrift 25k  40.2%    1.7%          14
+OvernightDrift 100k 21.6%    2.7%          18
+```
+
+Real trade-off: ORB never breaches in any tested 30-day window but rarely
+hits target that fast (11.4%/3.7% of windows do). OvernightDrift hits
+target 2-4x more often and ~1 week faster on average, but carries real
+breach risk (1.7-2.7% of windows) — not negligible at prop-challenge
+frequency. Neither is a free lunch on speed-to-pass.
+
+## GFT/TradeLocker asset research (subagent)
+
+Dispatched to find what's tradeable for extending ORB/OvernightDrift to
+other instruments. Findings (self-reported low confidence on exact specs —
+GFT doesn't publish a symbol sheet, only visible logged into GFTTL):
+- Indices confirmed: US30, NAS100, SPX500, DAX/GER40, FTSE/UK100. **US30
+  and SPX500 are the closest ORB analogs** — same asset class, same
+  leverage tier (1:10 funded), same NY-cash-open session structure. Lowest-
+  risk extension of the validated mechanism. DAX is second-tier (European
+  session, opening-range timing needs re-derivation, not just a symbol
+  swap).
+- **Crypto explicitly NOT recommended for ORB**: 1:2 leverage (vs 1:10 for
+  indices) changes the sizing math entirely, and crypto trades 24/7 with no
+  clean session open/close — breaks the "opening range" concept the
+  strategy depends on. Same problem would apply to OvernightDrift (no
+  defined session close to anchor "overnight").
+- No US30/SPX500/DAX data currently in `data/market_data/` — would need
+  sourcing before any of this can be tested. Real gap, not yet resolved.
+
+## 22. Deep per-trait forensics on both strategies (reusable tool, full population)
+
+Built `backtesting/analysis/trait_forensics.py` (day-of-week, volatility-
+regime splits, reusable across strategies via a plain trades DataFrame +
+ATR series) and `run_trait_forensics.py`. Applied to both strategies'
+current best (HTF-filtered) versions.
+
+### ORB
+- Day-of-week: no meaningful pattern, all 5 days profitable (PF 1.21-2.31)
+  — normal variance, not a real effect. Nothing to build.
+- Volatility regime: real split — low-ATR-percentile entries PF 1.35 vs
+  mid/high PF ~2.0-2.07. Consistent with Zarattini's own "stocks in play"
+  methodology (filtering for elevated activity). **Promising, NOT yet
+  validated with discovery/holdout** — flagged as next candidate, not built
+  blind.
+
+### OvernightDrift
+- Volatility regime: mild, consistent-direction improvement with higher
+  vol (PF 1.36 low -> 2.06 mid -> 2.09 high), same direction as ORB.
+- Day-of-week (pooled, n=265): Monday looked like a clear net loser
+  (WR 26.8%, PF 0.91) vs Tuesday/Thursday/Friday (PF 2.5-2.94) — matched a
+  real, cited paper on weekly seasonality in overnight effects. Tested a
+  "skip Friday-close entries" filter (the leg that resolves into Monday)
+  with proper discovery/holdout split:
+
+```
+                          n     ret%    dd%    PF
+disc HTF-filtered only  129    37.3%   7.0%  1.78
+disc + skip-Friday      122    23.5%   6.7%  1.54   <- WORSE
+hold HTF-filtered only  124    47.6%   7.0%  1.95
+hold + skip-Friday      114    40.7%   7.0%  1.97
+```
+
+**REJECTED.** Discovery got meaningfully worse; holdout barely moved. The
+pooled-sample finding didn't survive a real discovery/holdout split — same
+trap as §12's cherry-picked-sample lesson and this session's rejected
+50%-progress-breakeven rule. Literature-plausible stories still need
+validation before being trusted; not adopting this filter.
+
+**Lesson reinforced, not new**: forensics on a combined/pooled dataset is a
+hypothesis generator, not a result. Every fix that's actually shipped this
+project (ORB's HTF filter, OvernightDrift's HTF filter) held up on BOTH
+windows independently; every one that didn't (this Monday filter, the
+progress-BE rule) got caught by checking properly before shipping.
