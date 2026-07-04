@@ -22,6 +22,7 @@ def _strategy() -> CryptoTsmomBreakout:
     s._entry_lo = np.full(n, 95.0)
     s._exit_hi = np.full(n, 102.0)
     s._exit_lo = np.full(n, 98.0)
+    s._er = None
     s._pos_dir = 0
     return s
 
@@ -129,3 +130,32 @@ def test_structure_stop_falls_back_to_atr_when_no_swing():
     s = _structure_strategy()
     sig = s.next(_bar(close=106.0), _state())
     assert sig.sl == 106.0 - 2.0 * 2.0
+
+
+def test_er_gate_blocks_entry_below_threshold():
+    s = _strategy()
+    s.min_er = 0.3
+    s._er = np.full(20, 0.1)
+    assert s.next(_bar(close=106.0), _state()) is None
+
+
+def test_er_gate_allows_entry_above_threshold():
+    s = _strategy()
+    s.min_er = 0.3
+    s._er = np.full(20, 0.5)
+    sig = s.next(_bar(close=106.0), _state())
+    assert sig is not None
+
+
+def test_er_gate_blocks_when_er_is_nan():
+    s = _strategy()
+    s.min_er = 0.3
+    s._er = np.full(20, np.nan)
+    assert s.next(_bar(close=106.0), _state()) is None
+
+
+def test_er_gate_disabled_by_default():
+    s = _strategy()
+    assert s.min_er is None
+    sig = s.next(_bar(close=106.0), _state())
+    assert sig is not None

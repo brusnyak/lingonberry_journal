@@ -6,22 +6,30 @@ GFT defaults:
                  phase 1 target 8%, phase 2 target 5%
   - 100k 1-Step: daily DD ≤ 4% (~$3,992), max loss ≤ 6% (~$5,988),
                   target 10%
+
+Crypto live-account defaults (not prop-firm challenges -- own capital, no
+"pass" gate, target_pct=None means unlimited/uncapped return, DD rules
+are a pure risk cap not a challenge requirement):
+  - 50/300: daily DD ≤5%, max loss ≤10% -- same shape as GFT 25k, chosen
+    deliberately (small absolute dollar loss regardless of %, room to let
+    a real edge compound rather than a prop challenge's tight tolerance).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
 class PropAccount:
-    """One prop firm account definition."""
+    """One account's risk rules -- prop-firm challenge or a live account."""
 
     name: str
     initial_equity: float
     daily_dd_pct: float          # max daily drawdown as decimal
     max_dd_pct: float             # max total drawdown as decimal
-    target_pct: float             # profit target to pass
+    target_pct: Optional[float] = None  # profit target to pass; None = no target/uncapped return
     position_step_lots: float = 0.01  # lot size increments (GFT: 0.01)
 
     @property
@@ -33,7 +41,9 @@ class PropAccount:
         return round(self.initial_equity * self.max_dd_pct, 2)
 
     @property
-    def target_dollars(self) -> float:
+    def target_dollars(self) -> Optional[float]:
+        if self.target_pct is None:
+            return None
         return round(self.initial_equity * self.target_pct, 2)
 
     def check_daily_dd(self, equity: float, day_start_equity: float) -> bool:
@@ -51,7 +61,12 @@ class PropAccount:
         return dd > self.max_dd_pct
 
     def check_target(self, equity: float) -> bool:
-        """True if profit target has been reached."""
+        """True if profit target has been reached. Accounts with no target
+        (target_pct=None -- uncapped-return live accounts) never 'pass' in
+        the challenge sense; always False. Use return_pct directly for
+        those instead of this gate."""
+        if self.target_pct is None:
+            return False
         return (equity - self.initial_equity) / self.initial_equity >= self.target_pct
 
     def __repr__(self) -> str:
@@ -79,9 +94,31 @@ GFT_100K_1STEP = PropAccount(
     target_pct=0.10,
 )
 
+# Crypto live accounts -- own capital, no challenge/target gate, DD rules
+# are a pure risk cap. Same daily/max DD shape as GFT 25k (see module
+# docstring for why), target_pct=None so return is tracked directly
+# rather than gated against a fixed "pass" threshold.
+CRYPTO_50 = PropAccount(
+    name="Crypto $50",
+    initial_equity=50.0,
+    daily_dd_pct=0.05,
+    max_dd_pct=0.10,
+    target_pct=None,
+)
+
+CRYPTO_300 = PropAccount(
+    name="Crypto $300",
+    initial_equity=300.0,
+    daily_dd_pct=0.05,
+    max_dd_pct=0.10,
+    target_pct=None,
+)
+
 ACCOUNTS: dict[str, PropAccount] = {
     "GFT_25k_2STEP": GFT_25K_2STEP,
     "GFT_100k_1STEP": GFT_100K_1STEP,
+    "CRYPTO_50": CRYPTO_50,
+    "CRYPTO_300": CRYPTO_300,
 }
 
 

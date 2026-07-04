@@ -56,3 +56,25 @@ def test_scale_invariant_across_initial_equity():
     r100k = check_prop_compliance(_trades([9000.0]), ACCT, initial_equity=100_000.0)
     assert r10k.target_hit == r100k.target_hit == True
     assert round(r10k.return_pct, 1) == round(r100k.return_pct, 1)
+
+
+NO_TARGET_ACCT = PropAccount(name="crypto_test", initial_equity=50.0,
+                              daily_dd_pct=0.05, max_dd_pct=0.10, target_pct=None)
+
+
+def test_no_target_account_returns_none_not_false():
+    r = check_prop_compliance(_trades([900.0]), NO_TARGET_ACCT, initial_equity=10_000.0)
+    assert r.target_hit is None
+    assert round(r.return_pct, 6) == 9.0
+
+
+def test_no_target_account_no_trades_still_none():
+    r = check_prop_compliance(pd.DataFrame(), NO_TARGET_ACCT)
+    assert r.target_hit is None
+
+
+def test_no_target_account_dd_rules_still_enforced():
+    r = check_prop_compliance(_trades([-600.0], days=["2026-01-01"]), NO_TARGET_ACCT, initial_equity=10_000.0)
+    assert r.breached is True
+    assert r.breach_type == "daily"
+    assert r.target_hit is None

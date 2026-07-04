@@ -44,6 +44,19 @@ project's standing lesson is that ATR-multiple stops sometimes work
 
 No lookahead: entry/exit channel bounds and ATR are computed from bars
 strictly BEFORE the current bar (channel excludes the current close).
+
+Regime gate (`min_er`, disabled by default): filters entries to only fire
+when Kaufman's Efficiency Ratio (`backtesting.engine.regime.efficiency_ratio`)
+is above a threshold, i.e. only trade the breakout when price has actually
+been trending, not chopping. UNLIKE every other design choice in this
+file, this is NOT literature-backed for crypto or any other market --
+web research (2026-07-05) found zero peer-reviewed or credible backtested
+validation of ER/ADX/Choppiness-style regime filters, in crypto or
+elsewhere; existing usage is retail-blog tier only. This is purely an
+internal discovery/holdout hypothesis, motivated by real holdout losses
+on BNBUSDT/DOGEUSDT (consistent with trend-following eating chop), not an
+imported result. Treat any positive finding here with the same
+overfitting suspicion as every other filter tested in this project.
 """
 from __future__ import annotations
 
@@ -54,6 +67,7 @@ import pandas as pd
 
 from backtesting.engine.base import BarData, EngineState, Strategy
 from backtesting.engine.orders import Direction, Signal
+from backtesting.engine.regime import efficiency_ratio
 from backtesting.features.ict_structure import build_ict_structure_index
 
 
@@ -81,6 +95,8 @@ class CryptoTsmomBreakout(Strategy):
         structure_buffer_atr: float = 0.1,
         structure_left: int = 3,
         structure_right: int = 3,
+        min_er: float | None = None,     # Kaufman ER regime gate -- None disables (default)
+        er_period: int = 10,             # Kaufman's own published convention, not fit to data
     ):
         self.risk_pct = risk_pct
         self.direction = direction
@@ -92,6 +108,8 @@ class CryptoTsmomBreakout(Strategy):
         self.structure_buffer_atr = structure_buffer_atr
         self.structure_left = structure_left
         self.structure_right = structure_right
+        self.min_er = min_er
+        self.er_period = er_period
         self._pos_dir = 0  # 0 flat, 1 long, -1 short -- tracked for should_close's exit-channel check
 
     def init(self, data: dict) -> None:
@@ -106,6 +124,7 @@ class CryptoTsmomBreakout(Strategy):
         close = df["close"].to_numpy()
         self._close = close
         self._atr = _atr(high, low, close, self.atr_period)
+        self._er = efficiency_ratio(close, self.er_period) if self.min_er is not None else None
 
         # Causal rolling channel: value at bar i uses only bars [i-len, i-1],
         # i.e. shift(1) before rolling so the current bar's own high/low/close
@@ -141,6 +160,10 @@ class CryptoTsmomBreakout(Strategy):
         atr = self._atr[i]
         if np.isnan(entry_hi) or np.isnan(entry_lo) or np.isnan(atr) or atr <= 0:
             return None
+        if self._er is not None:
+            er = self._er[i]
+            if np.isnan(er) or er < self.min_er:
+                return None
 
         close = bar.close
         if close > entry_hi and self.direction in ("long", "both"):

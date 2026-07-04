@@ -11,6 +11,7 @@ size -- pass `initial_equity` matching whatever baseline the trades'
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import pandas as pd
 
@@ -26,13 +27,14 @@ class PropCheckResult:
     breached: bool
     breach_at: object  # pd.Timestamp or None
     breach_type: str | None  # "daily", "max", or None
-    target_hit: bool
+    target_hit: Optional[bool]  # None for accounts with no target_pct (uncapped-return live accounts)
 
 
 def check_prop_compliance(trades: pd.DataFrame, account: PropAccount,
                            initial_equity: float = 10_000.0) -> PropCheckResult:
     if trades is None or len(trades) == 0:
-        return PropCheckResult(0, initial_equity, 0.0, 0.0, False, None, None, False)
+        no_target = None if account.target_pct is None else False
+        return PropCheckResult(0, initial_equity, 0.0, 0.0, False, None, None, no_target)
 
     tr = trades.sort_values("entry_time")
     equity = initial_equity
@@ -60,7 +62,8 @@ def check_prop_compliance(trades: pd.DataFrame, account: PropAccount,
                 breached, breach_at, breach_type = True, t["entry_time"], "max"
                 break
 
-    target_hit = (equity - initial_equity) / initial_equity >= account.target_pct
+    target_hit = (None if account.target_pct is None
+                  else (equity - initial_equity) / initial_equity >= account.target_pct)
     return PropCheckResult(
         n_trades=len(tr), final_equity=equity,
         return_pct=(equity / initial_equity - 1) * 100,
