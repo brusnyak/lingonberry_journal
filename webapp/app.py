@@ -2333,7 +2333,7 @@ def api_review_run():
                 start_ts = pd.Timestamp(start, tz="UTC")
                 data[tf] = data[tf][data[tf]["ts"] >= start_ts].reset_index(drop=True)
         # lvl1/lvl2 need their HTF regime timeframe (60m by default)
-        if strategy in ("Lvl1Trend", "Lvl2Structure") and "60" not in data:
+        if strategy == "Lvl1Trend" and "60" not in data:
             data["60"] = load_data(symbol, tf="60", start=load_start, end=end, **load_kw)
         # OrbWideStop's validated config also needs a faster LTF trend check (30m)
         if strategy == "OrbWideStop" and "30" not in data:
@@ -2389,19 +2389,6 @@ def api_review_run():
                 "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
             }
             strat = GatedHtfEmaVwap()
-            costs = ForexCosts(seed=0, **lvl1_cost_cfg.get(symbol, dict(pip_size=0.0001)))
-        elif strategy == "Lvl2Structure":
-            from backtesting.lvl1_trend.htf_structure_vwap import HtfStructureVwap
-            lvl1_cost_cfg = {
-                "XAUUSD": dict(pip_size=0.01, pip_value_per_lot=1.0, fixed_spread_pips=30.0),
-                "XAGUSD": dict(pip_size=0.001, pip_value_per_lot=5.0, fixed_spread_pips=40.0),
-                "NAS100": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
-            }
-            strat = HtfStructureVwap(
-                min_rr=float(params.get("min_rr", 1.0)),
-                cooldown_bars=int(params.get("cooldown_bars", 9)),
-                atr_ceiling_mult=float(params.get("atr_ceiling_mult", 1.3)),
-            )
             costs = ForexCosts(seed=0, **lvl1_cost_cfg.get(symbol, dict(pip_size=0.0001)))
         elif strategy == "OrbWideStop":
             from backtesting.lvl2_orb.orb_wide_stop import OrbNyWideStop
