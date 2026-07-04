@@ -18,6 +18,7 @@ def _strategy() -> OrbNyWideStop:
     n = 20
     s._n = n
     s._htf_up_per_bar = None
+    s._vol_ok_per_bar = None
     s._day_ord = np.zeros(n, dtype=int)
     s._or_high = np.full(n, 105.0)
     s._or_low = np.full(n, 95.0)

@@ -35,7 +35,8 @@ class OrbNyWideStop(Strategy):
     def __init__(self, risk_pct: float = 0.005, direction: str = "both", target_r: float = 10.0,
                  session_tz: str = "America/New_York", session_open_min: int = 9 * 60 + 30,
                  or_len_min: int = 15, entry_end_min: int = 15 * 60, eod_min: int = 15 * 60 + 55,
-                 htf_key: str | None = None, htf_ema_period: int = 50):
+                 htf_key: str | None = None, htf_ema_period: int = 50,
+                 vol_atr_period: int = 14, vol_rolling_window: int = 100, vol_min_pctile: float | None = None):
         """
         htf_key: if set (e.g. "240"), gates entries to agree with that
         timeframe's EMA(htf_ema_period) slope direction -- forensics on this
@@ -44,6 +45,14 @@ class OrbNyWideStop(Strategy):
         consistent with the literature's own recommended ORB trend filter.
         Tested here with real discovery/holdout discipline, not just on the
         combined set the forensics pass used.
+
+        vol_min_pctile: if set (e.g. 0.33), skip entries when the HTF ATR's
+        CAUSAL rolling percentile (rank within the trailing vol_rolling_window
+        bars only -- never the full dataset, which would be lookahead) is
+        below this threshold. Trait forensics (trait_forensics.py) found low-
+        vol entries underperform (PF 1.35 vs ~2.0 mid/high) on a full-sample
+        rank; this rolling version is what a live strategy could actually use,
+        tested here with real discovery/holdout discipline before trusting it.
         """
         self.risk_pct = risk_pct
         self.direction = direction
@@ -55,6 +64,9 @@ class OrbNyWideStop(Strategy):
         self.eod_min = eod_min
         self.htf_key = htf_key
         self.htf_ema_period = htf_ema_period
+        self.vol_atr_period = vol_atr_period
+        self.vol_rolling_window = vol_rolling_window
+        self.vol_min_pctile = vol_min_pctile
         self._last_trade_day = -1
 
     def init(self, data: dict) -> None:
@@ -66,6 +78,7 @@ class OrbNyWideStop(Strategy):
         self._n = len(df)
 
         self._htf_up_per_bar = None
+        self._vol_ok_per_bar = None
         if self.htf_key:
             df_htf = data[self.htf_key].copy()
             if "ts" in df_htf.columns:
@@ -86,6 +99,30 @@ class OrbNyWideStop(Strategy):
             valid = idx >= 0
             self._htf_up_per_bar = np.zeros(self._n, dtype=bool)
             self._htf_up_per_bar[valid] = slope_up[idx[valid]]
+
+            if self.vol_min_pctile is not None:
+                htf_high = df_htf["high"].to_numpy()
+                htf_low = df_htf["low"].to_numpy()
+                prev_close = np.roll(close, 1)
+                prev_close[0] = close[0]
+                tr = np.maximum(htf_high - htf_low, np.maximum(
+                    np.abs(htf_high - prev_close), np.abs(htf_low - prev_close)))
+                atr = np.full(len(close), np.nan)
+                ap = self.vol_atr_period
+                if len(close) >= ap:
+                    atr[ap - 1] = tr[:ap].mean()
+                    for i in range(ap, len(close)):
+                        atr[i] = (atr[i - 1] * (ap - 1) + tr[i]) / ap
+                # CAUSAL rolling percentile: rank of today's ATR within the
+                # trailing vol_rolling_window bars only (shift(1) so the
+                # current bar's own ATR isn't part of its own window).
+                atr_s = pd.Series(atr)
+                roll_pctile = atr_s.rolling(self.vol_rolling_window).apply(
+                    lambda w: (w.iloc[-1] > w.iloc[:-1]).mean() if len(w) > 1 else np.nan, raw=False
+                ).to_numpy()
+                vol_ok_htf = np.nan_to_num(roll_pctile, nan=0.0) >= self.vol_min_pctile
+                self._vol_ok_per_bar = np.zeros(self._n, dtype=bool)
+                self._vol_ok_per_bar[valid] = vol_ok_htf[idx[valid]]
 
         ts = pd.to_datetime(df["ts"])
         if ts.dt.tz is None:
@@ -130,6 +167,9 @@ class OrbNyWideStop(Strategy):
         if np.isnan(or_h) or np.isnan(or_l):
             return None
         close = bar.close
+        vol_ok = self._vol_ok_per_bar is None or self._vol_ok_per_bar[i]
+        if not vol_ok:
+            return None
         htf_ok_long = self._htf_up_per_bar is None or self._htf_up_per_bar[i]
         htf_ok_short = self._htf_up_per_bar is None or not self._htf_up_per_bar[i]
 

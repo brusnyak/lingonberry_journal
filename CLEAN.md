@@ -1178,3 +1178,80 @@ hypothesis generator, not a result. Every fix that's actually shipped this
 project (ORB's HTF filter, OvernightDrift's HTF filter) held up on BOTH
 windows independently; every one that didn't (this Monday filter, the
 progress-BE rule) got caught by checking properly before shipping.
+
+## 23. ORB volatility filter — validated causally, REJECTED
+
+§22's volatility-regime forensics used a full-SAMPLE percentile rank (low
+vol PF 1.35 vs mid/high ~2.0) — but that rank is subtly lookahead: a bar's
+percentile depends on the ENTIRE dataset including bars that hadn't
+happened yet. Implemented a proper CAUSAL version on `OrbNyWideStop`
+(`vol_min_pctile` param — rolling rank within the trailing 100 HTF bars
+only, `shift`-consistent, no future data) and validated with real
+discovery/holdout:
+
+```
+              n     ret%    dd%    PF
+disc HTF-only 147   17.6%   3.2%  1.57
+disc +vol     92    10.3%   3.4%  1.55
+hold HTF-only 137   22.7%   2.8%  1.96
+hold +vol     96    13.7%   2.9%  1.87
+```
+
+**REJECTED** — worse on both windows once made causal. Same category as
+§22's Monday filter: a real effect on a non-causal or pooled diagnostic
+doesn't necessarily survive becoming an actual, honestly-computed live
+filter. Third time this exact lesson has repeated this project (§12
+cherry-pick trap, the progress-breakeven rule, now this) — treat any
+forensics finding as a hypothesis until it's validated in a form a live
+strategy could actually compute at decision time, not after the fact.
+
+ORB and OvernightDrift stand as validated at their current (HTF-trend-
+filter-only) configuration. No further filters pending.
+
+## 24. Extension tests: US30/SPX500 (real analogs) and crypto (exploratory, inconclusive)
+
+### US30/SPX500 (per GFT asset research, §21) — new data added by user, converted
+`data/market_data/index/{US30,SPX500,UK100,DAX}/` converted from raw broker
+CSVs to the project's standard parquet convention. ORB and OvernightDrift
+(current best HTF-filtered configs, NO re-tuning) tested as-is:
+
+```
+US30      disc              hold
+ORB       14.5%/PF1.36     8.3%/PF1.43   -- consistent both windows
+Overnight  7.4%/PF1.13    23.6%/PF1.74   -- uneven but positive both sides
+
+SPX500    disc              hold
+ORB       -0.2%/PF0.99     7.3%/PF1.27   -- flat discovery, inconsistent
+Overnight  5.6%/PF1.22     4.3%/PF1.27   -- modest, stable both windows
+```
+
+First-pass only — no null test or prop-rule check run on these yet. ORB
+transfers reasonably to US30, weaker on SPX500. DAX/UK100 NOT tested yet:
+European session timing needs proper re-derivation (different cash-open
+time), not just a symbol swap — same mismatch lesson as §18's gold/NAS100
+test on an equity-specific paper.
+
+### Crypto (BTC/ETH) — exploratory, INCONCLUSIVE, not pursued further
+
+User clarified crypto interest is about testing the mechanism itself (with
+an eye toward Binance/Bybit/BingX execution, separate from the TradeLocker/
+GFT track), not GFT's crypto CFDs specifically. Tested both strategies with
+a UTC-00:00 daily anchor — no literature grounds this specific choice for
+crypto (unlike NAS100's genuine NYSE cash open/close):
+
+```
+                          disc              hold
+BTC ORB-style          -30.1%/PF0.94   +114.3%/PF1.32   -- wildly inconsistent
+BTC OvernightDrift-style -0.1%/PF1.00    +0.4%/PF1.02   -- dead flat
+ETH ORB-style           +48.7%/PF1.53   +27.4%/PF1.45   -- looks decent
+ETH OvernightDrift-style -4.7%/PF0.55    -2.1%/PF0.59   -- clean negative
+```
+
+4 untested combinations, 1 looks good (ETH ORB-style) -- but BTC's version
+of the same strategy swings -30% to +114% between windows, consistent with
+noise not signal. Picking the one good-looking result out of four guesses
+would be the exact multiple-comparisons trap this project avoids elsewhere.
+**Conclusion: no real crypto edge shown by this exploratory pass.** Crypto
+needs its own literature search (CME futures settlement timing, funding-
+rate cycles, documented session/volume patterns) before testing again --
+not a mechanical port of an equity-session concept onto a 24/7 market.
