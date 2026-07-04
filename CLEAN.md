@@ -1,7 +1,7 @@
 # CLEAN — Codebase Cleanup & Refactoring Reference
 
-Branch: `hypothesis-engine`
-Date: 2026-06-30
+Branch: `crypto-engine`
+Date: 2026-07-04
 
 ## Purpose
 
@@ -17,7 +17,7 @@ trading-journal/
 │   ├── engine/           ← Core backtesting engine [PRODUCTION]
 │   ├── strategies/       ← ~12 strategy files [mostly dead/FALSIFIED]
 │   ├── structure_lib/    ← ICT structure detection [keep]
-│   ├── crypto/           ← Crypto-specific engine [keep crypto/data.py]
+│   ├── crypto/           ← Crypto backtesting: data, batch runner, strategies (tsmom, bos_fade, ict) [ACTIVE]
 │   ├── features/         ← Feature engineering [keep as reference, replaced by v2]
 │   ├── features_v2/      ← NEW: Candle pattern extraction + registry (17 patterns)
 │   ├── ml_pipeline/      ← NEW: XGBoost training + time-series CV + eval
@@ -36,6 +36,22 @@ trading-journal/
 ├── scripts/              ← Data scripts [keep]
 ├── backtesting_config/   ← Settings [keep]
 └── CLEAN.md              ← THIS FILE
+```
+
+### market_data layout (restructured 2026-07-04)
+
+```
+data/market_data/
+├── forex/parquet/       ← 146 parquet (22 pairs × ≤7 TFs)
+├── forex/csv/           ← 146 CSV
+├── index/parquet/       ← 35 parquet (NAS100, US30, SPX500, DAX, UK100)
+├── index/csv/           ← 29 CSV
+├── commodity/parquet/   ← 14 parquet (XAUUSD, XAGUSD; converted from CSV)
+├── commodity/csv/       ← 14 CSV
+├── crypto/binance/      ← OHLCV + funding + market_specs per symbol
+├── crypto/bybit/        ← Same structure
+├── crypto/legacy/       ← 145 OHLCV + 10 funding parquet (deep history, 5+ yr)
+└── _archive/forex_legacy/ ← Unused (not loadable through engine)
 ```
 
 ---
@@ -105,6 +121,19 @@ trading-journal/
 - **Bug**: `detect_swings()` labels pivots at bar `i` but requires bars `i+1..i+period` to confirm. Same look-ahead bias our engine had and fixed.
 - **Status**: NOT FIXED (pine-review src/ deleted; use `backtesting/structure_lib/swing.swing_points()` instead)
 
+### B9 — `backtesting/crypto/data.py` exchange-scoped dirs shadow legacy data
+- **File**: `backtesting/crypto/data.py:105`
+- **Bug**: `_load_from_crypto_dir` tried exchange-scoped parquet first (`crypto/binance/{symbol}{tf}.parquet`). Most exchange files have only ~1 year of data (8994 1h bars) while `crypto/legacy/` has 5+ years (77633 BTCUSDT bars since 2017). The loader stopped at exchange and never reached legacy.
+- **Fix**: Rewritten to load legacy first (deep history), then load exchange-scoped and merge (dedup by ts, keep both ends). Also updated `_run_one_crypto` in `batch.py` to load `market_specs.parquet` so `CryptoCosts` enforces real `min_notional`, `min_qty`, `qty_step` from exchange metadata (previously all defaulted to 0.0).
+- **Also**: Removed `PARQUET_DIR/"metals"` from `_load_from_flat_parquet` in `engine/data.py` — was intercepting XAUUSD/XAGUSD before `_load_from_commodity_dir` could serve newer data.
+- **Status**: FIXED 2026-07-04
+
+### B10 — OOS wall never really fixed at source, only worked around
+- **File**: `backtesting/engine/data.py` (entire OOS_START constant + filtering logic)
+- **Bug**: B7 patched callers to pass `allow_oos=False` but the OOS wall (`OOS_START`, `_filter_oos`) still existed in `data.py`. Any code path that didn't pass the flag got OOS-filtered data silently.
+- **Fix**: Removed `OOS_START` constant, `_filter_oos` function, and OOS_START from `__init__.py` re-exports entirely. The `allow_oos` parameter kept as no-op for backward compat (6 callers in `hypothesis_engine/` and `features_v2/`). Added `logging.warning` when `load_data` returns empty (3 checkpoints: no source, normalization filter, date filter).
+- **Status**: FIXED 2026-07-04
+
 ---
 
 ## 4. Naming/Parameter Inconsistencies
@@ -114,7 +143,7 @@ trading-journal/
 | Spread model | Random 1-3 pip (ForexCosts) | Fixed flat dict (hypothesis_engine) | PnL not comparable |
 | Return units | $ PnL, lot-based | Log-return (%) | Metrics not substitutable |
 | Position sizing | Risk-based `calc_lots()` | Flat/implied | Different drawdown profiles |
-| OOS wall | Hardcoded in `data.py` | Not passed to `load_data()` | Hypothesis engine may run IS-only |
+| OOS wall | Removed 2026-07-04 | `allow_oos` is now a no-op | No risk of accidental OOS inclusion |
 | Session defs | Implicit in strategies | `SESSIONS` dict in scanner | Duplicate definitions |
 | Swing causal | Default True (structure_lib) | Default False (pine-review) | Different lookahead behavior |
 
@@ -178,10 +207,9 @@ Single file handles schema, CRUD, stats, analytics, monte carlo, webhooks.
 **Fix**: Added `fixed_spread_pips` param to `ForexCosts`. When set, uses flat spread instead of `random.uniform(1.0, 3.0)`, and suppresses extra slippage. Extract spread/slip into private `_spread_pips()`, `_exit_spread_pips()`, `_slip_pips()` helpers.
 **Status**: DONE 2026-06-30
 
-### C4 — OOS wall as shared constant
-Currently hardcoded in `backtesting/engine/data.py`.
-**Fix**: Re-exported `OOS_START`, `load_data`, `list_pairs`, `list_tfs` from `backtesting/engine/__init__.py`.
-**Status**: DONE 2026-06-30
+### C4 — OOS wall removed entirely
+Removed 2026-07-04: `OOS_START` constant and `_filter_oos()` deleted from `engine/data.py`. `allow_oos` param kept as no-op. `OOS_START` re-export removed from `engine/__init__.py`.
+**Status**: SUPERSEDED — wall removed, no longer just a shared-constant fix
 
 ### C5 — Session definitions as shared constant
 Currently in `hypothesis_engine/level0_statistical/scanner.py` as `SESSIONS` dict.
@@ -1785,3 +1813,52 @@ similar, on a new branch off this HEAD) rather than continuing items 3-5
 immediately. Items 3-5 remain valid, pre-planned, and un-started --
 resume from this list when back on `hypothesis-engine`, don't re-derive
 the plan from scratch.
+
+---
+
+## 33. Session 2026-07-04 — market_data restructure, OOS wall removed, crypto data/lots fixed
+
+Branch: `crypto-engine` (split from `hypothesis-engine`).
+
+### What changed
+
+**market_data directory restructure**: moved flat root files into tidy per-asset folders.
+
+| Before | After |
+|---|---|
+| 292 flat files at `market_data/` root | `forex/parquet/` (146) + `forex/csv/` (146) |
+| `index/{NAS100,US30,SPX500,DAX,UK100}/` mixed | `index/parquet/` (35) + `index/csv/` (29) |
+| `commodity/{XAUUSD,XAGUSD}/*.csv` | `commodity/parquet/` (14) + `commodity/csv/` (14) |
+| `crypto/*.parquet` (145 flat legacy) | `crypto/legacy/` (145) — exchange dirs untouched |
+
+**OOS wall removed**: `OOS_START` constant and `_filter_oos()` deleted from `engine/data.py`. `allow_oos` kept as no-op for 6 callers.
+
+**Commodity CSV → parquet**: XAUUSD, XAGUSD at all 7 TFs written as clean parquet (tab-separated source). Removed `PARQUET_DIR/"metals"` from `_load_from_flat_parquet` which was intercepting gold/silver with old data (Jan 2026) before commodity loader could serve newer data (Jun 2026).
+
+**Crypto data**: `_load_from_crypto_dir` rewritten: loads legacy first (deepest history, 5+ years), then exchange-scoped as supplement (most recent), merges both (dedup by ts). BTCUSDT went from 8994 rows → 77718 rows.
+
+**Crypto costs**: `_run_one_crypto` in `batch.py` now loads `market_specs.parquet` and populates `CryptoCosts` with real `min_notional`, `min_qty`, `qty_step`, `tick_size` per pair+exchange. Previously all defaulted to 0.0 (unconstrained). At 0.5% risk, small pairs block by min notional; at 5% risk (scaling_plan recommended), all trade.
+
+**Data loader warnings**: `logging.warning()` when `load_data` returns empty (3 checkpoints: no source, normalization empty, date filter empty).
+
+**Loader path updates**: `engine/data.py`, `engine/__init__.py`, `crypto/data.py` — all path references updated for new directory structure.
+
+### Bug fixes from this session
+- **B9** — crypto exchange dirs shadowed legacy data (FIXED)
+- **B10** — OOS wall removed at source, not just worked around (FIXED)
+
+### Pre-existing issues (not caused by this session)
+- USDJPY never had parquet files — only `_archive/forex_legacy/CSVs`, never loadable.
+- EURUSD1440 never existed as flat parquet.
+- 11 crypto pairs (ADAUSDT, ALGOUSDT, etc.) only in `crypto/legacy/`, not in exchange dirs — still work via legacy fallback.
+
+### What remains for crypto track
+1. **Rolling window validation** — batch runner does single-window sweeps. No walk-forward runner exists yet. Needed before trusting any crypto result.
+2. **ICT strategy not registered in SWEEP_STRATEGIES** — `TrIct` exists in `crypto/strategies/ict.py` with structure_lib pipeline. Smoke-tested on 6 core pairs (30d, 2% risk, 50x): SOLUSDT PF=3.42, DOGEUSDT PF=1.79, BTCUSDT PF=1.19, BNBUSDT PF=0.82. Sessions filter hardcoded for forex hours (Asia+NY Late) — crypto is 24/7.
+3. **Batch runner risk defaults** — currently 0.5% risk (forex-scale). For $20 crypto accounts, 5% is the recommended baseline (`scaling_plan.md`).
+4. **Cross-exchange sweeps** — defaults to binance only. Bybit data exists but isn't swept.
+5. **Delay between data download and analysis** — DOGEUSDT has extensive exchange data because it was downloaded earlier. Most other exchange pairs have only 1 year because the pipeline default is `--days 365`.
+
+### Commit log
+- `cdd1030` — refactor(engine): remove OOS wall, update data paths for restructured market_data, fix commodity auto-detect
+- `16f9255` — fix(crypto): load OHLCV from legacy first for full history, enforce exchange market specs
