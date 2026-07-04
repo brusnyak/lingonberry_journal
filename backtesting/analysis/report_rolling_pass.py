@@ -23,19 +23,22 @@ from backtesting.prop.rules import GFT_25K_2STEP, GFT_100K_1STEP
 
 STRATEGIES = {
     "orb": {
-        "symbol": "NAS100", "entry_tf": "5", "htf_tf": "240",
+        "symbol": "NAS100", "entry_tf": "5", "htf_tf": "240", "extra_tf": ["30"],
         "costs": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
         "module": "backtesting.lvl2_orb.orb_wide_stop", "cls": "OrbNyWideStop",
-        "kwargs": {"htf_key": "240"},
+        "kwargs": {"htf_key": "240", "ltf_key": "30", "multi_target": True},
     },
     "overnight": {
-        "symbol": "NAS100", "entry_tf": "5", "htf_tf": "240",
+        "symbol": "NAS100", "entry_tf": "5", "htf_tf": "240", "extra_tf": [],
         "costs": dict(pip_size=1.0, pip_value_per_lot=1.0, fixed_spread_pips=1.5),
         "module": "backtesting.lvl2_overnight_drift.overnight_drift", "cls": "OvernightDrift",
-        "kwargs": {"htf_key": "240"},
+        "kwargs": {"htf_key": "240", "stop_mode": "structure"},
     },
 }
 ACCOUNTS = {"25k": GFT_25K_2STEP, "100k": GFT_100K_1STEP}
+# Calibrated per-account risk from CLEAN.md §29/§30 -- solo config, not
+# the combined-book derated numbers (that's a separate concern, §30).
+DEFAULT_RISK = {"25k": 0.005, "100k": 0.004}
 
 
 def main() -> None:
@@ -52,13 +55,14 @@ def main() -> None:
     mod = importlib.import_module(spec["module"])
     strat_cls = getattr(mod, spec["cls"])
     kwargs = dict(spec["kwargs"])
-    if args.risk_pct is not None:
-        kwargs["risk_pct"] = args.risk_pct
+    kwargs["risk_pct"] = args.risk_pct if args.risk_pct is not None else DEFAULT_RISK[args.account]
     strat = strat_cls(**kwargs)
 
     data = {spec["entry_tf"]: load_data(spec["symbol"], spec["entry_tf"])}
     if spec.get("htf_tf"):
         data[spec["htf_tf"]] = load_data(spec["symbol"], spec["htf_tf"])
+    for tf in spec.get("extra_tf", []):
+        data[tf] = load_data(spec["symbol"], tf)
 
     result = run(strat, data, entry_tf=spec["entry_tf"],
                  costs=ForexCosts(seed=42, **spec["costs"]), initial_equity=account.initial_equity)

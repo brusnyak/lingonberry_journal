@@ -1661,3 +1661,72 @@ Tests: 105/105 pass (5 new for `CombinedBook`, 5 new for `check_prop_compliance`
 4. Regime detection upgrade: test `ict_state` (causal BOS/CHoCH state
    machine, already trusted for the review UI) as a replacement/addition
    to the blunt EMA-slope HTF filter.
+
+## 31. Walk-forward validation -- overturns OvernightDrift's "zero breach" claim, ORB unaffected
+
+### Why this mattered: one split is thin evidence
+Every prop-compliance number claimed for both strategies so far came from
+ONE fixed discovery/holdout split (disc: Dec27'24-Sep15'25, hold: Sep15'25-
+now). Ran `backtesting.analysis.report_rolling_pass` (pre-existing tool,
+updated to match both strategies' current validated configs -- it had
+drifted stale, missing ORB's `ltf_key`/`multi_target` and OvernightDrift's
+`stop_mode="structure"`) across rolling 30/60/90-day windows -- i.e.
+"if a real challenge attempt started on ANY of 482 different days in the
+dataset, would it pass, breach, or neither within N days?"
+
+### ORB: rock solid, no change needed
+Zero breaches at EVERY window length (30/60/90d) on BOTH accounts, at its
+existing calibrated risk (25k@0.5%, 100k@0.4%). Pass rate climbs with more
+time as expected (25k: 8.7%->37.8%->48.1% at 30/60/90d) -- ORB is a
+marathon, not a fast pass, but it has never once breached across any of
+the 482 different starting points tested. This is the strongest evidence
+yet for ORB specifically.
+
+### OvernightDrift: the single-split "zero breach" claim was a lucky window
+At the previously-"validated" risk (25k@0.5%, 100k@0.4%, both post-§29
+structural stop), rolling walk-forward finds a REAL, non-trivial breach
+rate that the single fixed split completely missed:
+```
+                30d      60d      90d
+25k breach    2.3%     9.1%     14.0%
+100k breach   3.5%    12.4%     17.3%
+```
+Nearly 1 in 6 90-day windows would have breached the 100k account's DD
+limit -- info the earlier "fully prop-compliant" claim did not capture,
+because it only ever looked at one specific 9-10 month split that happened
+to avoid the bad stretches. This is exactly the failure mode walk-forward
+exists to catch, and it caught it on the project's own second validated
+strategy.
+
+**Fix: de-rate OvernightDrift to `risk_pct=0.003` for BOTH accounts**
+(down from 0.5%/0.4%). At 0.3%, breach rate drops to 0.0% at every window
+length tested, both accounts, while still passing 19-71% of windows
+depending on length/account:
+```
+                30d       60d       90d
+25k  breach   0.0%      0.0%      0.0%    pass 18.9%/46.9%/70.6%
+100k breach   0.0%      0.0%      0.0%    pass 11.8%/34.3%/52.1%
+```
+
+### Corrected standing claim
+OvernightDrift is prop-compliant, but ONLY at `risk_pct=0.003` (both
+accounts), not the 0.5%/0.4% used in every prior single-split test this
+session (§20, §29) or the combined-book test (§30, which used 0.4%/0.4%
+and 0.3%/0.3% respectively and already landed close to this by coincidence
+for the 100k case, but not by design). CLAUDE.md's Active Context and the
+`overnight_drift_structural_stop` memory both overstate OvernightDrift's
+compliance and need correcting to cite this walk-forward result, not the
+single split, as the standing number. `backtesting/analysis/report_rolling_pass.py`'s
+`DEFAULT_RISK` map has NOT been changed to 0.3% -- it still reflects the
+solo single-split calibration on purpose, so re-running it stays a
+faithful record of what each number in this section was measured at
+unless the caller passes `--risk-pct` explicitly.
+
+### Standing lesson reinforced
+This is the same lesson repeated all session (retest, confirm_bars,
+causal-vol filter, Monday effect) but applied to VALIDATION itself, not a
+strategy filter: a single split -- even an honest discovery/holdout split,
+done for the right reasons -- is still one data point. Walk-forward across
+many starting points is the only way to see the tail risk a lucky split
+hides. Apply this standard to ORB too the next time its risk or config
+changes, not just at initial validation.
