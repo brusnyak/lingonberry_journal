@@ -34,6 +34,7 @@ import pandas as pd
 
 from backtesting.engine.base import BarData, EngineState, Strategy
 from backtesting.engine.orders import Direction, Signal
+from backtesting.features.ict_structure import build_ict_structure_index
 
 
 def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int) -> np.ndarray:
@@ -58,6 +59,10 @@ class IntradayMomentum(Strategy):
         eod_min: int = 16 * 60,                      # 16:00 NY (flat)
         atr_period: int = 14,
         stop_atr_mult: float = 1.5,
+        stop_mode: str = "atr",          # "atr" or "structure"
+        structure_buffer_atr: float = 0.1,  # small pad beyond the swing level
+        structure_left: int = 3,
+        structure_right: int = 3,
     ):
         self.risk_pct = risk_pct
         self.direction = direction
@@ -67,6 +72,10 @@ class IntradayMomentum(Strategy):
         self.eod_min = eod_min
         self.atr_period = atr_period
         self.stop_atr_mult = stop_atr_mult
+        self.stop_mode = stop_mode
+        self.structure_buffer_atr = structure_buffer_atr
+        self.structure_left = structure_left
+        self.structure_right = structure_right
         self._last_trade_day = -1
 
     def init(self, data: dict) -> None:
@@ -81,6 +90,23 @@ class IntradayMomentum(Strategy):
         close = df["close"].to_numpy()
         self._close = close
         self._atr = _atr(high, low, close, self.atr_period)
+
+        self._last_hl = None
+        self._last_ll = None
+        self._last_lh = None
+        self._last_hh = None
+        if self.stop_mode == "structure":
+            from backtesting.features.ict_structure import IctStructureConfig
+            struct_df = df[["ts", "open", "high", "low", "close"]].reset_index(drop=True)
+            cfg = IctStructureConfig(left=self.structure_left, right=self.structure_right)
+            struct = build_ict_structure_index(struct_df, cfg)
+            # forward-fill so every bar sees the most recent CONFIRMED swing level
+            # (build_ict_structure_index already only updates last_* at the
+            # confirm bar, so this ffill introduces no lookahead)
+            self._last_hl = struct["last_hl"].ffill().to_numpy()
+            self._last_ll = struct["last_ll"].ffill().to_numpy()
+            self._last_lh = struct["last_lh"].ffill().to_numpy()
+            self._last_hh = struct["last_hh"].ffill().to_numpy()
 
         ts = pd.to_datetime(df["ts"])
         if ts.dt.tz is None:
@@ -134,19 +160,44 @@ class IntradayMomentum(Strategy):
         close = bar.close
         if sig > 0 and self.direction in ("long", "both"):
             self._last_trade_day = d
-            sl = close - self.stop_atr_mult * atr
+            sl = self._structure_sl(i, close, atr, long=True)
+            if sl is None:
+                return None
             return Signal(direction=Direction.LONG, entry=close, sl=sl,
-                          tp1=close + 20 * self.stop_atr_mult * atr,  # effectively disabled; EOD is the real exit
+                          tp1=close + 20 * (close - sl),  # effectively disabled; EOD is the real exit
                           risk_pct=self.risk_pct, tp1_frac=0.0, tp2_frac=0.0,
                           trail=False, label="intraday_mom_long")
         if sig < 0 and self.direction in ("short", "both"):
             self._last_trade_day = d
-            sl = close + self.stop_atr_mult * atr
+            sl = self._structure_sl(i, close, atr, long=False)
+            if sl is None:
+                return None
             return Signal(direction=Direction.SHORT, entry=close, sl=sl,
-                          tp1=close - 20 * self.stop_atr_mult * atr,
+                          tp1=close - 20 * (sl - close),
                           risk_pct=self.risk_pct, tp1_frac=0.0, tp2_frac=0.0,
                           trail=False, label="intraday_mom_short")
         return None
+
+    def _structure_sl(self, i: int, close: float, atr: float, long: bool) -> Optional[float]:
+        """Stop behind the nearest confirmed swing point, ATR fallback if
+        no swing is available yet (e.g. start of dataset)."""
+        if self.stop_mode != "structure":
+            return close - self.stop_atr_mult * atr if long else close + self.stop_atr_mult * atr
+        buf = self.structure_buffer_atr * atr
+        if long:
+            level = self._last_hl[i]
+            if np.isnan(level):
+                level = self._last_ll[i]
+            if np.isnan(level) or level >= close:
+                return close - self.stop_atr_mult * atr  # fallback: no usable swing below price
+            return level - buf
+        else:
+            level = self._last_lh[i]
+            if np.isnan(level):
+                level = self._last_hh[i]
+            if np.isnan(level) or level <= close:
+                return close + self.stop_atr_mult * atr
+            return level + buf
 
     def should_close(self, position, bar: BarData, state: EngineState) -> bool:
         return bool(self._eod[bar.index])

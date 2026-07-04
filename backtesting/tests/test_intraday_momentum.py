@@ -68,3 +68,42 @@ def test_flat_at_eod():
     s = _strategy()
     s._eod[10] = True
     assert s.should_close(object(), _bar(i=10), _state()) is True
+
+
+def _structure_strategy() -> IntradayMomentum:
+    s = _strategy()
+    s.stop_mode = "structure"
+    n = s._n
+    s._last_hl = np.full(n, np.nan)
+    s._last_ll = np.full(n, np.nan)
+    s._last_lh = np.full(n, np.nan)
+    s._last_hh = np.full(n, np.nan)
+    return s
+
+
+def test_structure_stop_long_uses_last_hl_minus_buffer():
+    s = _structure_strategy()
+    s._last_hl[10] = 95.0
+    sig = s.next(_bar(close=100.0), _state())
+    assert sig.sl == 95.0 - 0.1 * 2.0  # structure_buffer_atr=0.1, atr=2.0
+
+
+def test_structure_stop_short_uses_last_lh_plus_buffer():
+    s = _structure_strategy()
+    s._signal_per_day = np.array([-1])
+    s._last_lh[10] = 105.0
+    sig = s.next(_bar(close=100.0), _state())
+    assert sig.sl == 105.0 + 0.1 * 2.0
+
+
+def test_structure_stop_falls_back_to_atr_when_no_swing_available():
+    s = _structure_strategy()
+    sig = s.next(_bar(close=100.0), _state())
+    assert sig.sl == 100.0 - 1.5 * 2.0  # ATR fallback, same as default stop_atr_mult
+
+
+def test_structure_stop_falls_back_when_swing_is_wrong_side_of_price():
+    s = _structure_strategy()
+    s._last_hl[10] = 101.0  # above entry price -- not a usable stop for a long
+    sig = s.next(_bar(close=100.0), _state())
+    assert sig.sl == 100.0 - 1.5 * 2.0

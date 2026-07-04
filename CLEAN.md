@@ -1455,8 +1455,69 @@ mult   disc                  hold
 No consistent improvement anywhere; win rate collapses at tighter stops
 (down to 8-22%) since there's no real signal to protect -- tightening the
 stop just converts "ride noise to EOD" into "stopped out by noise early."
-**This empirically confirms, not just asserts, that IntradayMomentum's
-problem is the entry signal, not position management.** No further work
-planned on this strategy.
+
+**Correction (§28): this ATR-tightening test answered the wrong question.**
+User's actual manual-review feedback was to WIDEN the stop behind the
+nearest order block / swing point, not tighten an ATR multiple -- see §28
+for the properly-scoped structural-stop test and its result.
 
 Tests: 88/88 pass (11 new for ORB's confirm_bars + multi-target).
+
+## 28. IntradayMomentum structural stop (behind swing point) -- built, tested, still closes the strategy
+
+### What was wrong with §27's stop test
+§27 tested `stop_atr_mult` at 1.5/1.0/0.5/0.3 -- all *tighter* than baseline.
+User's actual ask (after re-reading the manual-review notes) was the
+opposite: place the stop behind the nearest order block or swing point,
+which is typically WIDER than an ATR multiple, not narrower. An ATR-only
+stop has no concept of "behind structure" -- it's a blunt distance, and
+tightening it just converts "ride noise to EOD" into "stopped out by noise
+early," which is a different failure mode from what was actually proposed.
+
+### Structural stop -- built properly, reusing the existing causal engine
+Added `stop_mode="structure"` to `IntradayMomentum`
+(`backtesting/lvl2_intraday_momentum/intraday_momentum.py`), reusing
+`backtesting.features.ict_structure.build_ict_structure_index` (the same
+causal swing/BOS/CHoCH engine already trusted for the review UI's
+structure overlay) rather than writing new pivot detection. Long stop =
+`last_hl` (nearest confirmed Higher Low) minus a small ATR buffer, short
+stop = `last_lh` plus buffer; falls back to the existing ATR stop if no
+swing is confirmed yet or the swing sits on the wrong side of price. `ffill`
+is a no-op safety net -- `build_ict_structure_index`'s `last_hl`/`last_lh`
+are already causal running state, not per-row recomputed.
+
+### Result: better than ATR-tightening, still not viable, on any asset
+NAS100 5m, ATR-1.5 baseline vs structure stop:
+```
+              disc                    hold
+ATR-1.5    -11.7%/PF0.76/wr39%    -5.7%/PF0.86/wr47%
+structure   -8.8%/PF0.81/wr38%    -2.3%/PF0.93/wr47%
+```
+Confirms the user's instinct was the right *kind* of fix -- structural
+stop beats blunt ATR tightening on both windows. But breadth test across
+every asset with 5m data available (discovery/holdout split, 30-seed
+random-direction null on discovery):
+```
+              disc pctile-vs-null   disc ret   hold ret
+NAS100              63rd             -8.8%      -2.3%
+XAUUSD               3rd             -2.8%      -9.7%
+XAGUSD           no trades            --         --
+US30                93rd             +4.7%     -10.9%   -- flips sign
+SPX500              83rd             -3.4%      -4.1%
+DAX                100th             -1.2%     -13.9%   -- flips sign
+UK100               67th             -6.5%     -10.0%
+```
+US30 and DAX both beat the null at a high percentile on discovery, then
+flip to double-digit losses on holdout -- the same overfitting signature
+already documented for the causal-volatility filter and Monday-effect
+filter (§22-23): looks like a real edge on one slice, doesn't generalize.
+Every other asset is negative both windows outright.
+
+**Verdict: structural stop is the technically correct fix and is kept in
+the codebase (`stop_mode="structure"`, default remains `"atr"` for
+backward compatibility), but it does not create a viable strategy on any
+tested asset.** IntradayMomentum stays closed -- now confirmed dead for
+the right reason (no entry edge exists to protect, tested with the
+correct kind of stop) rather than the wrong one (ATR tightening).
+
+Tests: 92/92 pass (4 new for `stop_mode="structure"`).
