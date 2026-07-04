@@ -60,6 +60,27 @@ class CryptoRunConfig:
     leverage: float = 50.0
 
 
+def _load_market_specs(pair: str, exchange: str) -> dict:
+    """Load latest market specs for a pair from exchange market_specs.parquet."""
+    spec_path = Path("data/market_data/crypto") / exchange.lower() / "market_specs.parquet"
+    if not spec_path.exists():
+        return {}
+    try:
+        specs = pd.read_parquet(spec_path)
+        pair_specs = specs[specs["id"] == pair.upper()]
+        if pair_specs.empty:
+            return {}
+        latest = pair_specs.sort_values("ts").iloc[-1]
+        return {
+            "min_notional": float(latest.get("min_notional", 0) or 0),
+            "min_qty": float(latest.get("min_qty", 0) or 0),
+            "qty_step": float(latest.get("amount_precision", 0) or 0),
+            "tick_size": float(latest.get("price_precision", 0) or 0),
+        }
+    except Exception:
+        return {}
+
+
 def _run_one_crypto(strategy_cls: Type[Strategy], cfg: CryptoRunConfig) -> dict:
     try:
         tfs = list(dict.fromkeys([cfg.entry_tf] + cfg.support_tfs))
@@ -71,11 +92,16 @@ def _run_one_crypto(strategy_cls: Type[Strategy], cfg: CryptoRunConfig) -> dict:
                 return _err(cfg, f"no data: {cfg.pair} {cfg.exchange} tf={tf}")
             data[tf] = df
 
-        # Build CryptoCosts with funding rates
+        # Build CryptoCosts with funding rates + exchange market specs
         funding_df = load_funding_rate(cfg.pair, exchange=cfg.exchange)
+        specs = _load_market_specs(cfg.pair, cfg.exchange)
         costs = CryptoCosts(
             leverage=cfg.leverage,
             funding_df=funding_df if not funding_df.empty else None,
+            min_notional=specs.get("min_notional", 0.0),
+            min_qty=specs.get("min_qty", 0.0),
+            qty_step=specs.get("qty_step", 0.0),
+            tick_size=specs.get("tick_size", 0.0),
         )
 
         result = run(

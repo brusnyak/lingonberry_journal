@@ -103,27 +103,56 @@ def _slice_days(df: pd.DataFrame, days: int) -> pd.DataFrame:
 
 
 def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) -> pd.DataFrame:
-    """data/market_data/crypto/{exchange}/{SYMBOL}{TF}.parquet, with fallback to legacy."""
-    paths = []
+    """
+    Merge legacy + exchange-scoped OHLCV for maximum history.
+
+    Legacy has the deepest history (5+ years for most pairs). Exchange-scoped
+    files may have more recent bars. We load both and merge (dedup by ts),
+    which gives a single DataFrame with the full span: deep past from legacy +
+    latest bars from exchange.
+    """
+    df = pd.DataFrame()
+
+    # 1. Legacy first — deepest history
+    legacy_path = DATA_DIR / "crypto" / "legacy" / f"{symbol}{tf}.parquet"
+    if legacy_path.exists():
+        try:
+            df = pd.read_parquet(legacy_path)
+        except Exception:
+            pass
+
+    # 2. Exchange-scoped — may have more recent bars
+    exchange_paths: list[Path] = []
     if exchange:
-        paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}{tf}.parquet")
-        # Also try legacy if exchange-scoped file is missing
-        paths.append(DATA_DIR / "crypto" / "legacy" / f"{symbol}{tf}.parquet")
+        exchange_paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}{tf}.parquet")
     else:
         for ex in CRYPTO_EXCHANGES:
-            paths.append(DATA_DIR / "crypto" / ex / f"{symbol}{tf}.parquet")
-        paths.append(DATA_DIR / "crypto" / "legacy" / f"{symbol}{tf}.parquet")
-    # data/parquet crypto parquets (BTCUSD, ETHUSD, XRPUSDT, ADAUSDT)
-    paths.append(PARQUET_DIR / "crypto" / f"{symbol}{tf}.parquet")
+            exchange_paths.append(DATA_DIR / "crypto" / ex / f"{symbol}{tf}.parquet")
 
-    for path in paths:
+    for path in exchange_paths:
         if not path.exists():
             continue
         try:
-            return pd.read_parquet(path)
+            exch_df = pd.read_parquet(path)
+            if exch_df.empty:
+                continue
+            # Merge: legacy has older data, exchange has newer data
+            df = pd.concat([df, exch_df], ignore_index=True)
+            df = df.drop_duplicates(subset=["ts"], keep="last")
+            df = df.sort_values("ts").reset_index(drop=True)
         except Exception:
             continue
-    return pd.DataFrame()
+
+    # 3. data/parquet/crypto fallback (BTCUSD, ETHUSD, etc.)
+    if df.empty:
+        old_path = PARQUET_DIR / "crypto" / f"{symbol}{tf}.parquet"
+        if old_path.exists():
+            try:
+                df = pd.read_parquet(old_path)
+            except Exception:
+                pass
+
+    return df
 
 
 def _load_from_crypto_funding(symbol: str, exchange: Optional[str] = None) -> pd.DataFrame:
