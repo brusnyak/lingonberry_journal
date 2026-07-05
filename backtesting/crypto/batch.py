@@ -95,6 +95,8 @@ def _run_one_crypto(strategy_cls: Type[Strategy], cfg: CryptoRunConfig) -> dict:
 
         # Build CryptoCosts with funding rates + exchange market specs
         funding_df = load_funding_rate(cfg.pair, exchange=cfg.exchange)
+        if funding_df is not None and not funding_df.empty:
+            data["funding"] = funding_df  # expose to strategies
         specs = _load_market_specs(cfg.pair, cfg.exchange)
         costs = CryptoCosts(
             leverage=cfg.leverage,
@@ -197,6 +199,7 @@ def _load_strategies():
     from backtesting.strategies.tr_accumulation import TrAccumulation
     from backtesting.crypto.strategies.bos_fade import TrBosFade
     from backtesting.crypto.strategies.ict import TrIct
+    from backtesting.crypto.strategies.funding_mean_rev import CryptoFundingMeanRev
     from backtesting.crypto.strategies.tsmom_breakout import CryptoTsmomBreakout
     SWEEP_STRATEGIES = {
         "tr_fvg": TrFvg,
@@ -204,6 +207,7 @@ def _load_strategies():
         "tr_accumulation": TrAccumulation,
         "tr_ict": TrIct,
         "crypto_tsmom": CryptoTsmomBreakout,
+        "crypto_funding": CryptoFundingMeanRev,
     }
 
 
