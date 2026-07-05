@@ -197,6 +197,38 @@ the +10.37% XRP full-history return. Slippage is currently NOT modeled
 the single highest-priority open item before any live sizing decision.
 Do not treat ETH+XRP/TrIct as deployment-ready off the backtest alone.
 
+**Standing methodology change (2026-07-06, user decision)**: chasing real
+fill/slippage data is slow, depends on infrastructure that doesn't exist
+yet, and treats cost as something to be *measured after the fact* rather
+than *designed around*. Going forward, the project assumes a fixed
+worst-case cost tax up front and only accepts strategies that survive it
+BY CONSTRUCTION — wide-enough stops, high-enough R:R, good win rate —
+rather than validating fragile-by-design strategies against an estimate.
+
+`WorstCaseCryptoCosts` (`backtesting/engine/costs.py`) is the new
+**default cost model for all new strategy development**: applies
+`round_trip_pct=0.02` (2% of price, combined across entry+exit, split
+evenly) as adverse slippage on every fill — TP exits too, not just
+stop-outs. This is not a sensitivity check anymore, it's the bar a
+strategy has to clear before it's worth null-testing at all.
+
+Quantified confirmation that this forces a real redesign, not a
+parameter tweak: TrIct/XRP (min_stop_pct=0.25, median stop 0.26% of
+price) goes from +12.94% zero-cost to **-42.60%** under this model,
+WR 65%→4%. Even `CryptoTsmomBreakout`'s wider ATR-based stops (median
+1.84% of price, ~7x wider than TrIct's) still fail: +8.79%→**-48.39%**,
+WR 20%. A 2%-of-price round-trip cost is still larger than a 1.84% stop
+— **stops need to be several multiples of 2%, realistically 5%+ of
+price, before this tax becomes a tolerable fraction of risk.** That
+rules out 30m/1h intraday tight-stop scalping (both TrIct and TSMOM's
+current configs) as the right instrument for this cost regime, and
+points toward 4h/1d swing/structure timeframes where multi-percent
+stops are normal, not exceptional. Any strategy built at that timeframe
+still needs the full validation gauntlet from scratch (null test,
+split-half stability, rolling-window DD) — surviving the cost model is
+necessary, not sufficient; it doesn't manufacture directional edge that
+wasn't there to begin with.
+
 ### Phase 7 — Portfolio (deferred)
 Nothing here until Phase 6 produces confirmed signals. Same items as before:
 - Combined risk budgeting
@@ -215,16 +247,18 @@ Every time a result looks promising:
 4. **Run across all 6 core pairs** → must show edge on ≥ 3
 5. **Regime-stratified validation** → not calendar windows. Show PF by regime type. ≤ 20% of regime-stratified windows can be negative.
 6. **Check look-ahead** → scan `init()` for data leakage and verify `_signal_source` declaration
-7. **Compare gross vs net PF** → funding rate + fee impact. Also check
-   fee-to-risk ratio per trade, not just aggregate PF: a strategy with
-   tight stops can have fees eating a large % of intended risk on
-   individual trades even when overall PF looks fine. Then run a
-   **slippage sensitivity check** (0%, 0.05%, 0.1%, 0.2% adverse on
-   entries/stop-outs) — `CryptoCosts` assumes perfect fills by default,
-   so this is not caught anywhere else. If a 0.05% slippage assumption
-   erases most of the edge, the strategy is not trustworthy for live
-   sizing regardless of how clean the zero-slippage backtest looks
-   (found the hard way on ETH+XRP/TrIct, 2026-07-06 — see CLEAN.md §34).
+7. **Backtest against `WorstCaseCryptoCosts` (round_trip_pct=0.02) by
+   default, not `CryptoCosts`** — this is the standing cost model for all
+   new strategy work as of 2026-07-06 (see CLEAN.md §34), not an optional
+   sensitivity pass. A strategy that only looks good under zero-slippage
+   `CryptoCosts` isn't a candidate yet. Rule of thumb from the numbers
+   that established this: stops need to be several multiples of the
+   round-trip cost (realistically 5%+ of price for a 2% tax) before it's
+   worth null-testing at all — TrIct (0.26% stops) and TSMOM (1.84%
+   stops) both went strongly negative under this model despite looking
+   fine or mixed at zero cost. Check fee-to-risk ratio per trade too, not
+   just aggregate return — tight stops can look fine in aggregate while
+   individual trades are fee/cost-fragile.
 8. **Correlation check** → if two strategies show edge on the same pair, check they're not correlated >0.6. If they are, they're the same bet and the combined risk is wrong.
 9. **Only then**: consider it a real result
 

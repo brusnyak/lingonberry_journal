@@ -245,3 +245,46 @@ class CryptoCosts(CostModel):
         if direction == "long":
             return bar_low <= liq
         return bar_high >= liq
+
+
+@dataclass
+class WorstCaseCryptoCosts(CryptoCosts):
+    """
+    Stress-test cost model: applies a fixed, deliberately punishing adverse
+    slippage on every fill, on top of normal fees/funding.
+
+    Why this exists: chasing real fill/slippage data from live/testnet
+    trading is slow and depends on infrastructure this project doesn't have
+    yet. Rather than block strategy development on that, or ignore
+    execution cost entirely, `round_trip_pct` bakes in a fixed worst-case
+    assumption up front -- a strategy has to be designed to survive it BY
+    CONSTRUCTION (wide-enough stops, high-enough R:R, good win rate), not
+    validated against it after the fact. Use this as the DEFAULT cost model
+    for new strategy development, not an occasional sensitivity check.
+
+    round_trip_pct=0.02 (the default, and the number this project has
+    settled on 2026-07-06): total adverse slippage across entry + exit
+    combined is 2% of price -- split evenly, so each fill gets
+    round_trip_pct/2 adverse movement on top of normal fees. This is
+    brutal on purpose: TrIct's median stop (0.26% of price) is roughly
+    8x smaller than this cost alone, meaning any strategy with stops that
+    tight cannot survive this model regardless of directional skill --
+    that's the point. A strategy has to have structural (not tight
+    scalp-buffer) stops, wide enough that a 2%-of-price tax is a small
+    fraction of the risk being taken, to pass this bar at all.
+
+    Applies adversely on BOTH TP and SL exits (not just stop-outs) --
+    real slippage doesn't spare winners, and a genuine worst-case
+    shouldn't either.
+    """
+    round_trip_pct: float = 0.02
+
+    def entry_fill(self, price: float, direction: str) -> float:
+        adj = price * (self.round_trip_pct / 2.0)
+        return price + adj if direction == "long" else price - adj
+
+    def exit_fill(self, price: float, direction: str, is_sl: bool = False) -> float:
+        adj = price * (self.round_trip_pct / 2.0)
+        # Adverse regardless of direction or exit type: longs sell lower,
+        # shorts buy back higher, whether it's a TP or an SL.
+        return price - adj if direction == "long" else price + adj

@@ -2281,3 +2281,55 @@ eats, only the absolute dollar stakes. This DD milestone is a real
 backtest result, not a green light for live capital; the open blocker
 (real fill/slippage data) from Phase 6E is exactly as unresolved as
 before.
+
+### Phase 7 -- Methodology pivot: design for a worst-case cost tax instead of chasing real slippage data
+User pushback (2026-07-06, correct): chasing real fill/slippage data is
+slow, depends on infrastructure (live/testnet execution) that doesn't
+exist yet, and treats cost as something measured after the fact rather
+than designed around. Directive: assume a fixed, brutal worst-case cost
+up front and build an engine that survives it by construction -- wide
+stops, high R:R, good win rate, position management -- not validate
+fragile-by-design strategies against a slippage estimate. Confirmed the
+exact basis via clarifying question: **2% of price, round-trip**
+(entry+exit combined, not 2% per leg).
+
+**Built `WorstCaseCryptoCosts`** (`backtesting/engine/costs.py`) --
+subclasses `CryptoCosts`, applies `round_trip_pct=0.02` as adverse
+slippage split evenly across entry_fill and exit_fill, on EVERY exit
+(TP included, not just SL -- a genuine worst-case doesn't spare
+winners). This is now the **default cost model for all new crypto
+strategy development**, not an occasional sensitivity check -- a
+strategy has to clear this bar before it's worth null-testing at all.
+8 tests, 280 total passing.
+
+**Quantified confirmation this forces a real redesign, not a parameter
+tweak**:
+
+| Strategy | Median stop (% of price) | Zero-cost return | Worst-case-2% return | WR |
+|---|---|---|---|---|
+| TrIct/XRP (min_stop=0.25) | 0.26% | +12.94% | **-42.60%** | 65%→4% |
+| CryptoTsmomBreakout/SOL | 1.84% (~7x wider) | +8.79% | **-48.39%** | --→20% |
+
+Even TSMOM's much wider ATR-based stops fail -- a 2%-of-price round-trip
+cost is still larger than a 1.84% stop. **Conclusion: stops need to be
+several multiples of the round-trip cost, realistically 5%+ of price,
+before this tax becomes a tolerable fraction of risk.** That rules out
+30m/1h intraday tight-stop scalping (TrIct and TSMOM's current configs,
+and by extension the whole ICT-sweep/scalp family this project has
+built so far) as the right instrument for this cost regime.
+
+**Direction for next development phase**: move toward 4h/1d swing/
+structure timeframes, where multi-percent stops are the norm rather than
+the exception (typical daily crypto ATR runs 3-8%+ for majors, more for
+alts) -- structural swing-point stops, not tight sweep-buffer stops.
+Surviving `WorstCaseCryptoCosts` is necessary but not sufficient: any
+new candidate still needs the full validation gauntlet from scratch
+(null test, split-half stability, rolling-window DD) -- the cost model
+doesn't manufacture directional edge that wasn't there, it only screens
+out strategies too fragile to survive real-world execution regardless of
+whether they have one. All existing Phase 6 results (TrIct ETH+XRP+DOGE,
+TSMOM, FundingMeanRev) stay exactly as validated/rejected as documented
+above under zero-cost `CryptoCosts` terms -- none of them are retroactively
+"live-ready," they were never claimed to be past the zero-cost backtest
+stage, and this phase doesn't change that, it replaces the open
+slippage-data blocker with a concrete, actionable design constraint.
