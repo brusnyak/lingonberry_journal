@@ -50,8 +50,6 @@ _SIGNAL_EXPIRY_H = 2
 # Max bars to look back from a structure shift for a matching sweep
 _MAX_SWEEP_LOOKBACK = 5
 
-# Max bars forward from a sweep to look for structure shift
-_MAX_STRUCTURE_LOOKAHEAD = 6
 
 
 class TrIct(Strategy):
@@ -249,6 +247,15 @@ class TrIct(Strategy):
         if rr < self.min_rr:
             return None
 
+        # Confidence — same logic as batch generate_signals()
+        confidence = "medium"
+        if matching_fvg and matching_ob:
+            confidence = "high"
+        elif "prior_day" in sweep.pool.source or "session" in sweep.pool.source:
+            confidence = "high"
+        elif matching_fvg:
+            confidence = "high"
+
         # Build a lightweight signal dict (not a full TradeSignal to avoid
         # depending on the structure_lib dataclass)
         return {
@@ -257,7 +264,7 @@ class TrIct(Strategy):
             "sl": sl,
             "tp": tp,
             "signal_time": shift_ts,
-            "confidence": "medium",
+            "confidence": confidence,
             "pool_source": sweep.pool.source,
         }
 
@@ -300,7 +307,7 @@ class TrIct(Strategy):
                 except KeyError:
                     continue
                 if i - sweep_bar > _MAX_SWEEP_LOOKBACK:
-                    continue  # too old, earlier sweeps will be even older
+                    break  # too old; sweeps are chronological, rest are even older
                 if s.direction != shift_dir:
                     continue
                 if s.wick_only and not s.reclaim:
