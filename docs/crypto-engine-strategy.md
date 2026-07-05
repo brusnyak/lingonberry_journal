@@ -173,6 +173,30 @@ Goal: find out whether any of our strategies produce real edge. If none do, we l
 | 6F | **Correlation check** | Top configs across strategies: compute pair correlation + strategy correlation | Combined risk: if two strategies trade same pair in same direction, check they're not correlated >0.6 |
 | 6G | **Decision gate** | Review all results. If ≥2 strategies show edge on ≥3 core pairs → Phase 7 (portfolio). If none → stop adding strategies, investigate new signal sources | Stop condition: if after all 6 core pairs × 180 days no strategy shows edge, the problem is signal selection, not engine quality |
 
+### Phase 6 status (2026-07-06 update — see CLEAN.md §34 for full detail)
+6A (TSMOM) and 6B (FundingMeanRev): no confirmed multi-pair edge — both
+collapse to a coin-flip or fail split-half stability once checked
+properly. 6C (TrIct): a real O(n²) performance bug AND a repeated-sweep
+correctness bug were found and fixed (inflated the original "looks great
+everywhere" read); corrected result is a narrow but real edge on
+**ETH+XRP only** (null-tested, split-half stable on XRP's full ~13mo
+history). 6D (regime impact): tried — trend-only `RegimeGate` gating
+makes TrIct *worse* (it's a reversal strategy; trend-only is the wrong
+filter shape), still an open item. 6F (correlation): done for ETH/XRP —
+price-correlated (r=0.79) but zero trade-time overlap, safe to combine;
+see `backtesting/portfolio/cross_pair_book.py`.
+
+**Phase 6E audit finding (new, important)**: the ETH+XRP edge passes
+every check above but is **razor-thin against execution cost realism**.
+TrIct's stops are often very tight (median 0.26% of price), so fees
+alone eat a median 25% of intended per-trade risk, and a slippage
+assumption of just 0.05% on entries/stop-outs (plausible during the
+liquidity-sweep events this strategy targets) erases essentially all of
+the +10.37% XRP full-history return. Slippage is currently NOT modeled
+(`CryptoCosts.entry_fill`/`exit_fill` assume perfect fills) — this is
+the single highest-priority open item before any live sizing decision.
+Do not treat ETH+XRP/TrIct as deployment-ready off the backtest alone.
+
 ### Phase 7 — Portfolio (deferred)
 Nothing here until Phase 6 produces confirmed signals. Same items as before:
 - Combined risk budgeting
@@ -191,7 +215,16 @@ Every time a result looks promising:
 4. **Run across all 6 core pairs** → must show edge on ≥ 3
 5. **Regime-stratified validation** → not calendar windows. Show PF by regime type. ≤ 20% of regime-stratified windows can be negative.
 6. **Check look-ahead** → scan `init()` for data leakage and verify `_signal_source` declaration
-7. **Compare gross vs net PF** → funding rate + fee impact
+7. **Compare gross vs net PF** → funding rate + fee impact. Also check
+   fee-to-risk ratio per trade, not just aggregate PF: a strategy with
+   tight stops can have fees eating a large % of intended risk on
+   individual trades even when overall PF looks fine. Then run a
+   **slippage sensitivity check** (0%, 0.05%, 0.1%, 0.2% adverse on
+   entries/stop-outs) — `CryptoCosts` assumes perfect fills by default,
+   so this is not caught anywhere else. If a 0.05% slippage assumption
+   erases most of the edge, the strategy is not trustworthy for live
+   sizing regardless of how clean the zero-slippage backtest looks
+   (found the hard way on ETH+XRP/TrIct, 2026-07-06 — see CLEAN.md §34).
 8. **Correlation check** → if two strategies show edge on the same pair, check they're not correlated >0.6. If they are, they're the same bet and the combined risk is wrong.
 9. **Only then**: consider it a real result
 

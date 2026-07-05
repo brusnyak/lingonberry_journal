@@ -2041,3 +2041,105 @@ TrIct worse, not better -- still an open design question), (2) extending
 past ETH+XRP to DOGE/BNB/SOL, which remain negative/unreliable under
 TrIct and unconfirmed under TSMOM/FundingMeanRev, (3) live-readiness
 work (execution, monitoring) untouched this round.
+
+### Phase 6E -- Trustworthiness audit: the edge is real but cost-fragile
+Went back through the XRP/TrIct result specifically checking things the
+validation gauntlet above (null test, split-half, rolling-window) does
+NOT catch: execution realism and selection bias.
+
+**Cost model is genuinely applied, not a no-cost fantasy** -- confirmed
+by chasing down a trade with r_multiple=-2.89 on an exact-SL exit (should
+be ~-1R before costs). Root cause: TrIct's stops are often very tight
+(median 0.26% of price, min 0.042% on XRP/full-history) since ICT sweep
+stops sit just beyond the sweep wick, not a fixed ATR distance. Fixed
+dollar risk ÷ tiny stop % ⇒ large notional ⇒ fees (0.06% round-trip,
+proportional to notional) eat a **median 25% of intended per-trade risk,
+up to 67% on the tightest-stop trades** (21/48 trades lost >30% of their
+risk budget to fees alone). This is reassuring in one sense (costs are
+real and the edge survives them) and alarming in another (see below).
+
+**Slippage is NOT modeled** (`CryptoCosts.entry_fill`/`exit_fill` return
+price unchanged -- perfect fills assumed) and **funding was never loaded**
+in any of these runs (`funding_df=None` → `funding_cost()` returns 0;
+immaterial for 30min-2h holds but was silently zero, not deliberately
+zero). Given how fee-fragile the tight-stop trades already are, slippage
+sensitivity was the obvious next check. Result, XRP full-history,
+adverse slippage applied to entries and SL exits only (TP exits assumed
+still limit/maker, no slippage):
+
+| Slippage | Return |
+|---|---|
+| 0.00% (current) | +10.37% |
+| 0.05% | **+0.87%** (~breakeven) |
+| 0.10% | -7.83% |
+| 0.20% | -23.10% |
+
+**This is the headline finding: the edge is razor-thin against
+execution realism.** A slippage assumption of just 0.05% -- plausible on
+a stop-hunt/liquidity-sweep event, which is *literally the condition
+this strategy trades* -- erases essentially all of the edge. XRP-USDT
+perp is deep enough that 0.05%+ slippage on the tiny position sizes used
+here ($17-280 notional) is not certain, but it is not implausible either
+during the exact volatile micro-moment TrIct enters on. This has not
+been checked against real order-book/fill data and currently rests on
+an assumption, not a measurement.
+
+**Selection bias, disclosed explicitly**: TrIct was tested on 5 pairs;
+ETH+XRP were the 2 that survived. Passing null + split-half is a real
+bar, but "best 2 of 5, then split-half-and-null-test just those 2" is
+still weaker evidence than "picked ETH+XRP for an independent reason,
+then confirmed." No fix for this except genuinely new out-of-sample
+data (new date range once more history accrues, or a different
+exchange's history) -- re-slicing the same 5-pair universe further
+cannot resolve it.
+
+**Revised verdict: promising, not yet trustworthy for live capital.**
+Passes every check this project's methodology has built so far, but
+those checks don't cover execution cost realism, and the one check that
+does (slippage sensitivity) shows the edge sits inside the noise band of
+plausible real-world fills. Do not size this for live deployment before
+either (a) filtering out the tightest-stop trades (see improvement idea
+below -- informal test shows this may improve robustness without
+killing the edge) or (b) getting real fill/slippage data to replace the
+current zero-slippage assumption.
+
+### Improvement ideas surfaced by this audit (not yet built)
+1. **Min-stop-distance filter on TrIct** (highest priority, cheapest to
+   test). Informal post-hoc filter on the existing XRP trade log:
+   `stop>=0.25%`: n=25 (down from 48), ret=+11.56% (vs +10.37% baseline),
+   WR jumps 54%->64%. Excluding the tightest, most fee/slippage-fragile
+   trades did not cost return and improved win rate -- promising, but
+   this is a post-hoc filter on the SAME data the edge was found on, not
+   a fresh test; needs a proper re-run with the filter built into TrIct
+   as a real parameter, then null-tested + split-half-tested again before
+   trusting the improvement itself.
+2. **Maker vs. taker entry assumption**: TrIct's entry is "price touches
+   the FVG CE level" -- that's a limit-order pattern (rest an order at
+   the level, get filled on touch), which should be a maker fill
+   (0.02%), but `entry_commission` currently always charges taker
+   (0.04%). If the real exchange execution would actually be a resting
+   limit order, this is overcharging fees by 2x on entries -- would
+   partially offset the tight-stop fee fragility above. Needs checking
+   against how the live bot would actually place these orders before
+   changing the backtest assumption (don't fix the model to make the
+   backtest look better without fixing how the bot places orders too).
+3. **Real fill/slippage data**: paper-trade or replay against L2/trade-
+   tape data for XRP-USDT perp at the position sizes actually used here
+   ($17-280 notional) to replace the current zero-slippage assumption
+   with a measured one. This is the single highest-value thing that
+   would resolve Phase 6E's central open question.
+4. **Confidence-based filtering**: TrIct signals already carry a
+   confidence label (`high`/`medium`, set when both FVG+OB agree or the
+   pool source is a session/prior-day level). Untested whether
+   restricting to `high` confidence only changes the return/cost
+   profile -- cheap to test, no new code needed (label already exists).
+5. **New out-of-sample data**: the selection-bias caveat above can only
+   really be addressed by testing ETH+XRP TrIct against data that didn't
+   exist when the pair selection was made -- i.e. paper-trade forward or
+   wait for more history to accrue, not further backtesting on the
+   existing window.
+6. **Reversal-appropriate regime filter** (carried over from Phase 6D):
+   trend-gating hurt TrIct; a volatility- or liquidity-based regime
+   filter (e.g. only trade sweeps during elevated-but-not-extreme ATR
+   percentile) is still an open, unbuilt idea that might improve
+   consistency without the trend-filter's category mismatch.
