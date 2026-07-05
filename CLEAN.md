@@ -2143,3 +2143,59 @@ current zero-slippage assumption.
    filter (e.g. only trade sweeps during elevated-but-not-extreme ATR
    percentile) is still an open, unbuilt idea that might improve
    consistency without the trend-filter's category mismatch.
+
+### Phase 6F -- Improvement #1 (min-stop filter) built and tested; multi-target rejected; structural stop still open
+Built all three items the user asked for (`backtesting/crypto/strategies/ict.py`,
+9 new tests, 267 total passing):
+
+**`min_stop_pct` filter** (drops signals whose stop is tighter than X% of
+entry price). Tested on XRP's full ~13mo history, `min_stop_pct=0.25`
+vs. baseline:
+
+| | n | return | WR | worst trade | worst DD | %pos windows |
+|---|---|---|---|---|---|---|
+| baseline | 48 | +10.37% | 54% | -$0.481 | 2.47% | 63% |
+| min_stop=0.25 | 26 | **+12.94%** | **65%** | **-$0.350** | **1.86%** | **69%** |
+
+Every metric improves despite fewer trades -- exactly the audit's
+prediction (tight-stop trades were disproportionately fee/slippage-
+fragile; cutting them raises the average quality of what's left).
+**Adopted as the recommended setting for XRP.** BUT it does not
+generalize blindly: applied to ETH (already data-limited at 91 days,
+20 trades baseline), the same filter cuts to n=5 and the edge drops
+*below* the null baseline (33rd pctile, real -0.27% vs null mean
+-0.34%) -- ETH's trades skew tighter and the filter over-prunes an
+already-thin sample. **Verdict: `min_stop_pct` is a real, validated
+improvement, but per-pair, not a blanket default.** Recommended combined
+ETH+XRP config: ETH unfiltered, XRP at `min_stop_pct=0.25` -- 22 combined
+trades (90d shared window), med_ret +4.16%, 94% windows positive, worst
+DD 2.11%, comparable-or-better than the original combined baseline (33
+trades, +3.51%, 100%, 2.12%) despite fewer XRP trades landing in this
+particular 90-day slice.
+
+**Multi-target ladder + breakeven-after-TP1**: built (`multi_target`,
+`tp1_r`, `tp1_frac`, `tp2_frac` params; the engine already moves SL to
+breakeven on any TP1 partial-close, so this was mostly "actually use
+tp1/tp2/tp3" rather than new engine work). Tested on XRP full history:
+**return collapsed from +10.37% to +1.05%** (null test still shows real
+beating null at 100th pctile, but only because null itself cratered to
+-13.36% under the ladder -- the ladder structure itself is unprofitable
+regardless of direction skill). Root cause: TrIct's edge comes from
+winners running to the pool-based target; banking 40% of size at a
+quick 1R partial cuts into that, and each position now pays commission
+on up to 3 separate exit events instead of 1 -- on top of stops already
+being fee-fragile (Phase 6E), a 3-leg exit structure roughly triples the
+fee drag per full trade. **Rejected as-is.** Possible refinement not yet
+tried: larger `tp1_r` (closer to `min_rr`) and/or smaller `tp1_frac` to
+bank less, less often -- untested, would need its own null/split-half
+pass before adoption, not assumed to work just because the concept is
+sound in principle.
+
+**Structure-based early exit ("don't hold the loss")**: built
+(`should_close` -- exits early if an opposing BOS/ChoCH prints while the
+position is underwater). Confirmed via `exit_reason` counts that it
+**never fired** on XRP's trade set (all 48 exits are `tp1`/`sl`, zero
+`signal`) -- TrIct's holds are short (30min-2h at 30m bars), so the hard
+SL/TP usually resolves before a full opposing BOS could complete. Kept
+as harmless, architecturally-correct, currently-inert -- may matter more
+on a strategy/timeframe with longer holds, doesn't change anything here.

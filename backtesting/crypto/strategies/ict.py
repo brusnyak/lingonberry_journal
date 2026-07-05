@@ -63,11 +63,37 @@ class TrIct(Strategy):
         min_rr: float = 1.5,
         sessions_only: bool = True,
         swing_length: int = 1,
+        min_stop_pct: Optional[float] = None,
+        multi_target: bool = False,
+        tp1_r: float = 1.0,
+        tp1_frac: float = 0.4,
+        tp2_frac: float = 0.35,
     ):
         self.risk_pct = risk_pct
         self.min_rr = min_rr
         self.sessions_only = sessions_only
         self.swing_length = swing_length
+        # Audit finding (CLEAN.md Phase 6E): fees scale with notional, not
+        # risk, so a fixed dollar-risk trade with a very tight stop pays a
+        # disproportionate fee (and is far more slippage-exposed) relative
+        # to its intended risk. min_stop_pct drops trades whose stop is
+        # tighter than this % of entry price. None = no filter (old
+        # behavior). Informal check on XRP found stop>=0.25% held return
+        # while raising win rate 54%->64% -- not yet re-validated with a
+        # full null/split-half pass, treat as an experimental knob.
+        self.min_stop_pct = min_stop_pct
+        # Multi-target ladder + breakeven-after-TP1 (the engine already
+        # moves SL to entry on any TP1 partial-close -- see runner.py's
+        # `pos.sl = pos.entry_price` on exit_code==2 -- so enabling this
+        # just means TrIct actually uses tp1/tp2/tp3 instead of a single
+        # full-size exit). tp1 = tp1_r*R (quick partial, locks in profit
+        # and arms breakeven early); tp2 = the original pool-based target;
+        # tp3 = the next liquidity pool beyond tp2, or a 1R extension if
+        # none exists. Remaining frac (1 - tp1_frac - tp2_frac) rides tp3.
+        self.multi_target = multi_target
+        self.tp1_r = tp1_r
+        self.tp1_frac = tp1_frac
+        self.tp2_frac = tp2_frac
 
         # Set in init()
         self._df30: pd.DataFrame = None
@@ -282,16 +308,22 @@ class TrIct(Strategy):
             sl = max(sweep.pool.level,
                      matching_fvg.top if matching_fvg else entry) + shift_range
 
-        # TP via binary search on opposite pool
+        # TP via binary search on opposite pool. Also grab the NEXT pool
+        # beyond it (tp_ext) for the multi-target ladder's runner leg.
         tp = None
+        tp_ext = None
         if trade_dir == "long":
             idx = bisect.bisect_right(self._buy_pool_levels, entry)
             if idx < len(self._buy_pool_levels):
                 tp = self._buy_pool_levels[idx]
+                if idx + 1 < len(self._buy_pool_levels):
+                    tp_ext = self._buy_pool_levels[idx + 1]
         else:
             idx = bisect.bisect_left(self._sell_pool_levels, entry) - 1
             if idx >= 0:
                 tp = self._sell_pool_levels[idx]
+                if idx - 1 >= 0:
+                    tp_ext = self._sell_pool_levels[idx - 1]
 
         if tp is None:
             return None
@@ -304,6 +336,14 @@ class TrIct(Strategy):
         rr = reward_abs / risk_abs
         if rr < self.min_rr:
             return None
+
+        # Cost-fragility filter (Phase 6E audit): fees/slippage are a
+        # disproportionate share of intended risk on very tight stops.
+        if self.min_stop_pct is not None and (risk_abs / entry * 100) < self.min_stop_pct:
+            return None
+
+        if tp_ext is None:
+            tp_ext = tp + (tp - entry)  # 1R-of-the-move extension fallback
 
         # Confidence — same logic as batch generate_signals()
         confidence = "medium"
@@ -321,6 +361,7 @@ class TrIct(Strategy):
             "entry": entry,
             "sl": sl,
             "tp": tp,
+            "tp_ext": tp_ext,
             "signal_time": shift_ts,
             "confidence": confidence,
             "pool_source": sweep.pool.source,
@@ -398,8 +439,32 @@ class TrIct(Strategy):
 
             # ENTRY
             del self._pending[key]
+            direction = Direction.LONG if sig["direction"] == "long" else Direction.SHORT
+            label = f"ict_{sig['confidence']}_{sig['pool_source']}"
+
+            if self.multi_target:
+                risk_abs = abs(sig["entry"] - sig["sl"])
+                sign = 1.0 if sig["direction"] == "long" else -1.0
+                quick_tp = sig["entry"] + sign * self.tp1_r * risk_abs
+                # Keep the ladder monotonic: the quick partial must sit
+                # strictly before the pool-based target, or it isn't a
+                # meaningful partial (just skip straight past it).
+                pool_tp_is_further = (
+                    (sign > 0 and quick_tp < sig["tp"]) or (sign < 0 and quick_tp > sig["tp"])
+                )
+                if pool_tp_is_further:
+                    return Signal(
+                        direction=direction, entry=sig["entry"], sl=sig["sl"],
+                        tp1=quick_tp, tp2=sig["tp"], tp3=sig["tp_ext"],
+                        risk_pct=self.risk_pct,
+                        tp1_frac=self.tp1_frac, tp2_frac=self.tp2_frac,
+                        trail=False, label=label,
+                    )
+                # Fall through to single-target below if the pool is too
+                # close for a meaningful quick partial ahead of it.
+
             return Signal(
-                direction=Direction.LONG if sig["direction"] == "long" else Direction.SHORT,
+                direction=direction,
                 entry=sig["entry"],
                 sl=sig["sl"],
                 tp1=sig["tp"],
@@ -409,10 +474,36 @@ class TrIct(Strategy):
                 tp1_frac=1.0,
                 tp2_frac=0.0,
                 trail=False,
-                label=f"ict_{sig['confidence']}_{sig['pool_source']}",
+                label=label,
             )
 
         for k in expired_keys:
             self._pending.pop(k, None)
 
         return None
+
+    def should_close(self, position, bar: BarData, state: EngineState) -> bool:
+        """Exit early if the structural premise that justified this trade
+        has been invalidated -- an opposing BOS/ChoCH prints while the
+        position is still underwater.
+
+        This is the "don't hold the loss" rule: a fresh BOS/ChoCH against
+        the position means the sweep-reversal thesis this trade was based
+        on no longer holds, so there's no reason to keep waiting on the
+        hard SL. Only fires while the position is at a loss (bar.close
+        past entry against it) -- a winning trade that's already banked
+        R via TP1/breakeven shouldn't be cut just because of a
+        counter-structure wiggle; the hard SL/trail already protects it.
+        """
+        i = bar.index
+        if i >= self._n:
+            return False
+
+        if position.direction == Direction.LONG:
+            losing = bar.close < position.entry_price
+            invalidated = bool(self._bearish_choch[i] or self._bearish_bos[i])
+        else:
+            losing = bar.close > position.entry_price
+            invalidated = bool(self._bullish_choch[i] or self._bullish_bos[i])
+
+        return losing and invalidated
