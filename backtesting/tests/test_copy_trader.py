@@ -15,77 +15,59 @@ sys.path.insert(0, str(ROOT))
 
 import pandas as pd
 
-from infra.copy_trader import _calc_lots, _snapshot_positions, PosSnapshot, CopyTrader
+from infra.copy_trader import _calc_slave_lots, _snapshot_positions, PosSnapshot, CopyTrader
 
 
-# ── Test 1: Lot sizing — standard pair ───────────────────────────────────────
+# ── Test 1: Proportional sizing — 25K master -> 100K slave ───────────────────
 
-def test_calc_lots_standard():
-    """0.5% risk on $25k equity, 15-pip stop on EURUSD → correct lot size."""
-    equity = 25_000.0
-    stop_pips = 15
-    stop_distance = stop_pips * 0.0001  # 0.0015
-
-    lots = _calc_lots(equity, stop_distance, is_jpy=False)
-
-    # Risk amount = 25000 * 0.005 = $125
-    # pip_value_per_lot for standard = $10/pip
-    # lots = 125 / (15 * 10) = 0.833...
-    # floored to LOT_STEP=0.01 → 0.83
-    risk_amt = equity * 0.005
-    expected = risk_amt / (stop_pips * 10)
-    expected_floored = int(expected / 0.01) * 0.01
-    assert abs(lots - expected_floored) < 0.001, f"lots={lots} expected={expected_floored}"
-    print(f"PASS test_calc_lots_standard: {lots} lots (risk=${risk_amt:.0f}, {stop_pips}pip stop)")
+def test_calc_slave_lots_4x():
+    """$25K master with 0.36 lots -> $100K slave should get 1.44 lots."""
+    lots = _calc_slave_lots(master_lots=0.36, master_equity=25_000, slave_equity=100_000)
+    expected = 0.36 * 100_000 / 25_000  # exactly 1.44
+    expected = int(expected / 0.01) * 0.01
+    assert abs(lots - expected) < 0.001, f"lots={lots} expected={expected}"
+    print(f"PASS test_calc_slave_lots_4x: {lots} lots (expected {expected})")
 
 
-# ── Test 2: Lot sizing — JPY pair ────────────────────────────────────────────
+# ── Test 2: Proportional sizing — small master position ──────────────────────
 
-def test_calc_lots_jpy():
-    """JPY pair uses 1_000 multiplier, not 100_000."""
-    equity = 25_000.0
-    stop_distance = 0.15  # 15 pips for JPY (0.01 per pip)
-
-    lots = _calc_lots(equity, stop_distance, is_jpy=True)
-
-    # JPY: mult=1000, risk=$125, lots = 125 / (0.15 * 1000) = 0.833
-    risk_amt = equity * 0.005
-    expected = risk_amt / (stop_distance * 1000)
-    expected_floored = int(expected / 0.01) * 0.01
-    assert abs(lots - expected_floored) < 0.001, f"lots={lots} expected={expected_floored}"
-    print(f"PASS test_calc_lots_jpy: {lots} lots")
+def test_calc_slave_lots_small():
+    """$25K master with 0.09 lots -> $100K slave -> 0.36 lots."""
+    lots = _calc_slave_lots(master_lots=0.09, master_equity=25_000, slave_equity=100_000)
+    expected = int(0.09 * 100_000 / 25_000 / 0.01) * 0.01  # 0.36
+    assert abs(lots - expected) < 0.001, f"lots={lots} expected={expected}"
+    print(f"PASS test_calc_slave_lots_small: {lots} lots (expected {expected})")
 
 
-# ── Test 3: Lot sizing — capped at MAX_LOTS ──────────────────────────────────
+# ── Test 3: Capped at MAX_LOTS ───────────────────────────────────────────────
 
-def test_calc_lots_max_cap():
-    """Very tight stop with high equity should hit MAX_LOTS cap."""
-    lots = _calc_lots(equity=100_000, stop_distance=0.0001, is_jpy=False)
+def test_calc_slave_lots_max_cap():
+    """Very large master lots with high equity ratio should hit MAX_LOTS cap."""
+    lots = _calc_slave_lots(master_lots=10.0, master_equity=10_000, slave_equity=1_000_000)
     assert lots == 20.0, f"Expected MAX_LOTS=20.0, got {lots}"
-    print(f"PASS test_calc_lots_max_cap: {lots} lots")
+    print(f"PASS test_calc_slave_lots_max_cap: {lots} lots")
 
 
-# ── Test 4: Lot sizing — minimum LOT_STEP ────────────────────────────────────
+# ── Test 4: Minimum LOT_STEP floor ───────────────────────────────────────────
 
-def test_calc_lots_minimum():
-    """Wide stop with low equity should return minimum LOT_STEP."""
-    lots = _calc_lots(equity=1_000, stop_distance=0.05, is_jpy=False)
+def test_calc_slave_lots_minimum():
+    """Very small master lots or tiny slave equity should floor at LOT_STEP."""
+    lots = _calc_slave_lots(master_lots=0.01, master_equity=100_000, slave_equity=1_000)
     assert lots == 0.01, f"Expected LOT_STEP=0.01, got {lots}"
-    print(f"PASS test_calc_lots_minimum: {lots} lots")
+    print(f"PASS test_calc_slave_lots_minimum: {lots} lots")
 
 
-# ── Test 5: Lot sizing — slave (100K) produces ~4x master (25K) ──────────────
+# ── Test 5: Zero equity protection ───────────────────────────────────────────
 
-def test_calc_lots_proportional():
-    """Same risk%, same stop → 100K account should produce ~4x the lots of 25K."""
-    stop_distance = 0.0015  # 15 pips
+def test_calc_slave_lots_zero_equity():
+    """Zero master or slave equity returns minimum LOT_STEP."""
+    lots_a = _calc_slave_lots(master_lots=0.36, master_equity=0, slave_equity=98_000)
+    assert lots_a == 0.01, f"Expected LOT_STEP=0.01, got {lots_a}"
 
-    lots_25k = _calc_lots(25_000, stop_distance, is_jpy=False)
-    lots_100k = _calc_lots(100_000, stop_distance, is_jpy=False)
+    lots_b = _calc_slave_lots(master_lots=0.36, master_equity=24_000, slave_equity=0)
+    assert lots_b == 0.01, f"Expected LOT_STEP=0.01, got {lots_b}"
 
-    ratio = lots_100k / lots_25k if lots_25k > 0 else 0
-    assert 3.8 <= ratio <= 4.2, f"Expected ~4x ratio, got {ratio:.2f}x ({lots_25k} → {lots_100k})"
-    print(f"PASS test_calc_lots_proportional: 25K={lots_25k} → 100K={lots_100k} ({ratio:.1f}x)")
+    print("PASS test_calc_slave_lots_zero_equity: 0.01 lots on zero equity")
 
 
 # ── Test 6: Snapshot parsing ─────────────────────────────────────────────────
@@ -120,7 +102,7 @@ def test_snapshot_positions():
 # ── Test 7: Snapshot handles empty positions ─────────────────────────────────
 
 def test_snapshot_empty():
-    """Empty DataFrame → empty dict."""
+    """Empty DataFrame -> empty dict."""
     mock_tl = MagicMock()
     mock_tl.get_all_positions.return_value = pd.DataFrame()
     result = _snapshot_positions(mock_tl, {}, {})
@@ -131,7 +113,7 @@ def test_snapshot_empty():
 # ── Test 8: Snapshot handles None positions ──────────────────────────────────
 
 def test_snapshot_none():
-    """None from API → empty dict."""
+    """None from API -> empty dict."""
     mock_tl = MagicMock()
     mock_tl.get_all_positions.return_value = None
     result = _snapshot_positions(mock_tl, {}, {})
@@ -170,17 +152,17 @@ def test_prelink_existing():
             pass
 
         assert trader._master_to_slave == {1: 2}, f"Expected {{1: 2}}, got {trader._master_to_slave}"
-        print("PASS test_prelink_existing: master#1 → slave#2")
+        print("PASS test_prelink_existing: master#1 -> slave#2")
 
 
-# ── Runner ────────────────────────────────────────────────────────────────────
+# ── Runner ───────────────────────────────────────────────────────────────────
 
 TESTS = [
-    test_calc_lots_standard,
-    test_calc_lots_jpy,
-    test_calc_lots_max_cap,
-    test_calc_lots_minimum,
-    test_calc_lots_proportional,
+    test_calc_slave_lots_4x,
+    test_calc_slave_lots_small,
+    test_calc_slave_lots_max_cap,
+    test_calc_slave_lots_minimum,
+    test_calc_slave_lots_zero_equity,
     test_snapshot_positions,
     test_snapshot_empty,
     test_snapshot_none,

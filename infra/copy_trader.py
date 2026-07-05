@@ -52,9 +52,6 @@ LOT_STEP = float(os.getenv("COPY_LOT_STEP", "0.01"))
 MAX_LOTS = float(os.getenv("COPY_MAX_LOTS", "20.0"))
 DRY_RUN = os.getenv("COPY_DRY_RUN", "false").lower() == "true"
 
-# JPY pairs: 1 pip = 0.01 price, contract multiplier = 1_000 (not 100_000)
-_JPY_PAIRS = {"EURJPY", "GBPJPY", "AUDJPY", "CADJPY", "CHFJPY", "USDJPY", "NZDJPY"}
-
 # ── TLAPI instances ───────────────────────────────────────────────────────────
 
 
@@ -104,13 +101,21 @@ def _resolve_id(tl, symbol: str, cache: dict) -> int:
 # ── Lot sizing ────────────────────────────────────────────────────────────────
 
 
-def _calc_lots(equity: float, stop_distance: float, is_jpy: bool) -> float:
-    """Risk-based lot sizing. Same logic as mean_reversion_bot."""
-    mult = 1_000 if is_jpy else 100_000
-    risk_amt = equity * RISK_PCT
-    if stop_distance <= 0:
+def _calc_slave_lots(master_lots: float, master_equity: float, slave_equity: float) -> float:
+    """Scale master position size by account equity ratio.
+
+    The master's lot size already reflects the intended risk per trade
+    (risk_pct of master equity). We replicate the same risk exposure on
+    the slave by scaling lots proportionally to the slave's equity.
+
+    Slave lots = master_lots * (slave_equity / master_equity)
+
+    No instrument-specific multipliers needed — works for any asset class.
+    """
+    if master_equity <= 0 or slave_equity <= 0:
         return LOT_STEP
-    raw = (risk_amt / stop_distance) / mult
+    ratio = slave_equity / master_equity
+    raw = master_lots * ratio
     size = round(math.floor(raw / LOT_STEP) * LOT_STEP, 2)
     return max(min(size, MAX_LOTS), LOT_STEP)
 
@@ -132,7 +137,12 @@ class PosSnapshot:
 
 
 def _snapshot_positions(tl, instrument_cache: dict, symbol_cache: dict) -> dict[int, PosSnapshot]:
-    """Fetch all open positions and return {position_id: PosSnapshot}."""
+    """Fetch all open positions and return {position_id: PosSnapshot}.
+
+    SL/TP comes from the position row directly (TLAPI includes stopLoss/takeProfit
+    columns). No separate orders call needed — that halves API requests and avoids
+    rate-limit pressure on the demo environment.
+    """
     try:
         df = tl.get_all_positions()
     except Exception as exc:
@@ -141,29 +151,6 @@ def _snapshot_positions(tl, instrument_cache: dict, symbol_cache: dict) -> dict[
 
     if df is None or (hasattr(df, "empty") and df.empty):
         return {}
-
-    # Fetch orders to get SL/TP prices (positions only have stopLossId/takeProfitId)
-    sl_tp_by_position: dict[int, dict[str, float | None]] = {}
-    try:
-        orders_df = tl.get_all_orders()
-        if orders_df is not None and hasattr(orders_df, "columns"):
-            for _, o in orders_df.iterrows():
-                pid = int(o.get("positionId", 0))
-                if pid == 0:
-                    continue
-                if pid not in sl_tp_by_position:
-                    sl_tp_by_position[pid] = {"sl": None, "tp": None}
-                otype = str(o.get("type", "")).lower()
-                if otype == "stop":
-                    sp = float(o.get("stopPrice", 0))
-                    if sp > 0:
-                        sl_tp_by_position[pid]["sl"] = sp
-                elif otype == "limit":
-                    p = float(o.get("price", 0))
-                    if p > 0:
-                        sl_tp_by_position[pid]["tp"] = p
-    except Exception as exc:
-        log.warning("Failed to fetch orders for SL/TP resolution: %s", exc)
 
     result: dict[int, PosSnapshot] = {}
     for _, row in df.iterrows():
@@ -186,17 +173,11 @@ def _snapshot_positions(tl, instrument_cache: dict, symbol_cache: dict) -> dict[
             qty = float(row.get("qty", 0))
             avg_price = float(row.get("avgPrice", 0))
 
-            # Prefer linked orders, but some TLAPI responses include absolute
-            # stopLoss/takeProfit prices directly on the position row.
-            sl_tp = sl_tp_by_position.get(pid, {"sl": None, "tp": None})
-            sl = sl_tp["sl"]
-            tp = sl_tp["tp"]
-            if sl is None:
-                row_sl = float(row.get("stopLoss", 0) or 0)
-                sl = row_sl if row_sl > 0 else None
-            if tp is None:
-                row_tp = float(row.get("takeProfit", 0) or 0)
-                tp = row_tp if row_tp > 0 else None
+            # TLAPI includes absolute stopLoss/takeProfit on the position row
+            row_sl = float(row.get("stopLoss", 0) or 0)
+            sl = row_sl if row_sl > 0 else None
+            row_tp = float(row.get("takeProfit", 0) or 0)
+            tp = row_tp if row_tp > 0 else None
 
             result[pid] = PosSnapshot(
                 position_id=pid,
@@ -244,10 +225,30 @@ class CopyTrader:
         # Track SL/TP we've set on slave to detect master modifications
         self._slave_sl_tp: dict[int, tuple[float | None, float | None]] = {}
 
+        # Set of (symbol, side) that we've recently ordered to open on slave.
+        # Prevents re-opening same position if the link step fails after placing the order.
+        self._pending_opens: set[tuple[str, str]] = set()
+
+        # Rate-limit backoff counter: incremented on skipped polls, reset on success
+        self._backoff = 0
+
+    def _was_rate_limited(self, master_snap: dict, slave_snap: dict) -> bool:
+        """Check if either snapshot was rate-limited (empty while we had positions before)."""
+        if len(master_snap) == 0 and len(self._master_positions) > 0:
+            log.warning("Skip poll — master snapshot empty (likely rate-limited)")
+            return True
+        if len(slave_snap) == 0 and len(self._slave_positions) > 0:
+            log.warning("Skip poll — slave snapshot empty (likely rate-limited)")
+            return True
+        return False
+
     def poll(self):
         """One poll cycle: detect opens, closes, modifications."""
         new_master = _snapshot_positions(self.master, self._master_inst_cache, self._master_sym_cache)
         new_slave = _snapshot_positions(self.slave, self._slave_inst_cache, self._slave_sym_cache)
+
+        if self._was_rate_limited(new_master, new_slave):
+            return
 
         master_ids = set(new_master.keys())
         prev_master_ids = set(self._master_positions.keys())
@@ -259,11 +260,37 @@ class CopyTrader:
             log.info("NEW MASTER  #%s  %s %s %.2f lots @ %.5f  SL=%s TP=%s",
                      mid, pos.side.upper(), pos.symbol, pos.qty, pos.avg_price,
                      pos.stop_loss, pos.take_profit)
+
+            # Check 1: skip if we already have a pending open for this symbol+side
+            # (link step failed previously, but we already placed the order)
+            if (pos.symbol, pos.side) in self._pending_opens:
+                log.info("SKIP — pending open exists for %s %s (re-linking instead)",
+                         pos.side, pos.symbol)
+                self._relink_to_slave(mid, pos.symbol, pos.side, new_slave)
+                continue
+
+            # Check 2: don't open if slave already has an unlinked position for this symbol+side.
+            # This prevents duplicates when slave snapshot was missing the position on a prior
+            # cycle (e.g. due to 429).
+            already_on_slave = any(
+                spos.side == pos.side and spos.symbol == pos.symbol
+                and sid not in self._master_to_slave.values()
+                for sid, spos in new_slave.items()
+            )
+            if already_on_slave:
+                log.info("SKIP — slave already has open %s %s (re-linking)",
+                         pos.side, pos.symbol)
+                self._relink_to_slave(mid, pos.symbol, pos.side, new_slave)
+                continue
+
             self._open_on_slave(pos)
 
         # ── Detect closes on master ──
         closed = prev_master_ids - master_ids
         for mid in closed:
+            closed_pos = self._master_positions.get(mid)
+            if closed_pos:
+                self._pending_opens.discard((closed_pos.symbol, closed_pos.side))
             if mid in self._master_to_slave:
                 sid = self._master_to_slave.pop(mid)
                 log.info("CLOSE MASTER #%s → closing SLAVE #%s", mid, sid)
@@ -297,34 +324,51 @@ class CopyTrader:
         # ── Update state ──
         self._master_positions = new_master
         self._slave_positions = new_slave
+        self._backoff = 0  # successful poll resets rate-limit backoff
+
+    def _relink_to_slave(self, master_id: int, symbol: str, side: str, slave_snapshot: dict):
+        """Find a matching unlinked slave position and link it to master."""
+        for sid, spos in slave_snapshot.items():
+            if (
+                spos.symbol == symbol
+                and spos.side == side
+                and sid not in self._master_to_slave.values()
+            ):
+                self._master_to_slave[master_id] = sid
+                self._slave_sl_tp[sid] = (spos.stop_loss, spos.take_profit)
+                self._pending_opens.discard((symbol, side))
+                log.info("Re-linked master #%s → slave #%s  %s %s", master_id, sid, side, symbol)
+                return
+        log.warning("No unlinked slave position found for %s %s to re-link", side, symbol)
 
     def _open_on_slave(self, master_pos: PosSnapshot):
         """Open a proportionally-sized position on the slave account."""
+        # Mark as pending immediately so re-detection won't double-open.
+        self._pending_opens.add((master_pos.symbol, master_pos.side))
         try:
-            # Get slave equity
-            state = self.slave.get_account_state()
-            equity = float(state.get("balance", state.get("equity", 0)))
-            if equity <= 0:
+            # Get both account equities for proportional sizing
+            slave_state = self.slave.get_account_state()
+            slave_equity = float(slave_state.get("balance", slave_state.get("equity", 0)))
+            if slave_equity <= 0:
                 log.error("SLAVE equity is 0, cannot size")
                 return
 
-            # Calculate stop distance from master position
-            if master_pos.stop_loss is not None and master_pos.avg_price > 0:
-                stop_distance = abs(master_pos.avg_price - master_pos.stop_loss)
-            else:
-                # No SL on master — use a default 1.5% stop distance
-                stop_distance = master_pos.avg_price * 0.015
-                log.warning("No SL on master, using default 1.5%% stop distance (%.5f)", stop_distance)
+            master_state = self.master.get_account_state()
+            master_equity = float(master_state.get("balance", master_state.get("equity", 0)))
+            if master_equity <= 0:
+                log.error("MASTER equity is 0, cannot size")
+                return
 
-            is_jpy = master_pos.symbol.upper().replace(".X", "") in _JPY_PAIRS
-            lots = _calc_lots(equity, stop_distance, is_jpy)
+            # Scale master lots by equity ratio — same risk exposure on both accounts
+            lots = _calc_slave_lots(master_pos.qty, master_equity, slave_equity)
 
             # Resolve instrument on slave
             iid = _resolve_id(self.slave, master_pos.symbol, self._slave_inst_cache)
 
-            log.info("OPEN SLAVE  %s %s  lots=%.2f (master had %.2f)  equity=%.2f  risk=%.1f%%",
+            ratio = slave_equity / master_equity if master_equity > 0 else 0
+            log.info("OPEN SLAVE  %s %s  lots=%.2f (master %.2f)  equities %.0f→%.0f (%.2fx)",
                      master_pos.side.upper(), master_pos.symbol, lots, master_pos.qty,
-                     equity, RISK_PCT * 100)
+                     master_equity, slave_equity, ratio)
 
             if DRY_RUN:
                 log.info("[DRY RUN] would open %s %s %.2f lots", master_pos.side, master_pos.symbol, lots)
@@ -342,40 +386,12 @@ class CopyTrader:
             )
 
             if order_id:
-                log.info("SLAVE order placed  order_id=%s", order_id)
-                # Wait briefly for fill, then find the new position
-                time.sleep(1)
-                self._link_slave_position(master_pos, lots)
+                log.info("SLAVE order placed  order_id=%s  (link deferred to next poll)", order_id)
             else:
                 log.error("SLAVE create_order returned None for %s", master_pos.symbol)
 
         except Exception as exc:
             log.error("Failed to open on slave: %s", exc, exc_info=True)
-
-    def _link_slave_position(self, master_pos: PosSnapshot, expected_lots: float):
-        """After opening, find the new slave position and create mapping."""
-        try:
-            slave_poses = _snapshot_positions(self.slave, self._slave_inst_cache, self._slave_sym_cache)
-            for sid, spos in slave_poses.items():
-                if (
-                    sid not in self._slave_sl_tp.values()
-                    and spos.instrument_id == _resolve_id(self.slave, master_pos.symbol, self._slave_inst_cache)
-                    and spos.side == master_pos.side
-                    and abs(spos.qty - expected_lots) < expected_lots * 0.1
-                ):
-                    # Found it
-                    master_id = None
-                    for mid, pos in self._master_positions.items():
-                        if pos.instrument_id == master_pos.instrument_id and pos.side == master_pos.side:
-                            master_id = mid
-                            break
-                    if master_id is not None:
-                        self._master_to_slave[master_id] = sid
-                        self._slave_sl_tp[sid] = (spos.stop_loss, spos.take_profit)
-                        log.info("Linked master #%s → slave #%s", master_id, sid)
-                    break
-        except Exception as exc:
-            log.warning("Could not link slave position: %s", exc)
 
     def _close_on_slave(self, slave_position_id: int):
         """Close a position on the slave account."""
@@ -425,12 +441,27 @@ class CopyTrader:
                  os.getenv("TL_ACC_NUM_MASTER", "2165806"),
                  os.getenv("TL_ACC_NUM_SLAVE", "2165807"))
 
-        # Initial sync: snapshot current state without acting on it
+        # Initial sync: retry until we get a clean snapshot of both accounts.
+        # Without this, existing positions look "new" on first successful poll → duplicates.
         log.info("Syncing current positions...")
-        self._master_positions = _snapshot_positions(
-            self.master, self._master_inst_cache, self._master_sym_cache)
-        self._slave_positions = _snapshot_positions(
-            self.slave, self._slave_inst_cache, self._slave_sym_cache)
+        self._master_positions = {}
+        self._slave_positions = {}
+        for attempt in range(1, 11):
+            mp = _snapshot_positions(self.master, self._master_inst_cache, self._master_sym_cache)
+            sp = _snapshot_positions(self.slave, self._slave_inst_cache, self._slave_sym_cache)
+            if len(mp) > 0 and len(sp) > 0:
+                self._master_positions = mp
+                self._slave_positions = sp
+                break
+            log.warning("Initial sync attempt %d/10 — snapshots incomplete (master=%d, slave=%d), retrying...",
+                        attempt, len(mp), len(sp))
+            time.sleep(5)
+        else:
+            # After all retries, accept whatever we got
+            self._master_positions = mp
+            self._slave_positions = sp
+            log.warning("Initial sync exhausted retries — master=%d, slave=%d, continuing anyway",
+                        len(mp), len(sp))
 
         log.info("Master has %d open positions, Slave has %d open positions",
                  len(self._master_positions), len(self._slave_positions))
@@ -440,7 +471,9 @@ class CopyTrader:
 
         log.info("Entering poll loop (Ctrl+C to stop)...")
         while True:
-            time.sleep(POLL_INTERVAL)
+            # Exponential backoff: after a rate-limited poll, double the wait up to 5 min
+            backoff = POLL_INTERVAL * (2 ** min(self._backoff, 6))  # max 64x
+            time.sleep(min(backoff, 300))
             try:
                 self.poll()
             except KeyboardInterrupt:
