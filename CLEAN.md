@@ -1931,18 +1931,64 @@ overfitting concentration on a single asset per explicit user instruction:
   the exact overfitting pattern this project has flagged repeatedly. Not
   adopted, not to be cited as "found edge" without much stronger evidence.
 
-### Phase 6C -- TrIct, performance regression found
+### Phase 6C -- TrIct, performance regression found AND root-caused
 Confirmed roughly quadratic runtime scaling (30d=3.4s, 60d=12.2s,
 90d=27.6s -- 3x the bars taking 8x the time, not the O(n) the prior
-session's audit claimed). 240d testing wasn't tractable this session;
-cut to 90d. Results pending at time of writing -- see next session log
-entry for the actual Phase 6C findings and whatever the fix/non-fix
-decision on the scaling issue turns out to be.
+session's audit claimed). Root cause: `_detect_sweeps_at_bar` looped
+over ALL liquidity pools on every single bar; pool count grows linearly
+with history length (196/373/547 pools at 30/60/90d), so total work was
+O(bars * pools) = O(days^2). Worse, it had no persistent broken/active
+state per pool -- any pool price was still sitting past kept re-emitting
+a fresh "sweep" every bar, not just on genuine breach/reclaim/re-breach
+events, silently inflating trade count.
+
+**Fixed** with bisect-indexed active/broken pool lists per side (buy/sell),
+so each bar only touches pools whose level falls within that bar's actual
+price range, plus explicit state transitions (active -> broken on breach,
+broken -> active on reclaim) so a permanently-broken pool stops flooding
+fresh sweeps. Runtime now flat ~1s regardless of window length (was
+3.4/12.2/27.6s at 30/60/90d). 252 tests unaffected.
+
+This mattered for more than speed: the initial (buggy) Phase 6C read on
+ETHUSDT/90d/24-7 showed 43 trades / +24.68%, clearly beating a 3-seed
+null spot-check -- looked like the best lead of the three strategies.
+**Re-run on corrected code, same data: 19 trades / +2.97%.** The extra
+24 "trades" and ~22 points of return were sweep-detection noise, not
+signal. Full null test (30 seeds, both `sessions_only` settings, all 5
+pairs, 90d):
+
+| Pair | 24/7 pctile | sessions_only pctile | verdict |
+|---|---|---|---|
+| ETH | 97th (n=19, +2.97%) | 87th (n=10, +3.02%) | modest real edge |
+| XRP | 93rd (n=13, +4.40%) | 100th (n=6, +7.04%) | modest real edge |
+| DOGE | 97th but ret=-0.47%, %pos=45% | ret=-0.66%, %pos=50% | negative |
+| SOL | n=7, 1 window | n=3, 0 windows | too few trades to judge |
+| BNB | n=12, %pos=50% (coin flip) | n=5, %pos=9% (1 lucky trade) | not reliable |
+
+Same single-to-few-pair narrowing pattern as TSMOM (SOL) and
+FundingMeanRev (XRP): looks broad until you fix a bug or check pair-by-
+pair, then narrows to 1-2 pairs. **Not a confirmed multi-pair edge.**
+
+Also tested: wrapping TrIct in the now-fixed `RegimeGate`
+(`trend_up`/`trend_down` allowed) on ETH/XRP/DOGE. Made things *worse*,
+not better -- trade count collapsed further (ETH 19->3, XRP 13->2).
+Root cause: TrIct is a liquidity-sweep **reversal** strategy; its setups
+fire at range extremes, which a trend-only regime filter actively
+excludes. Confirms the "context/infrastructure" idea is directionally
+right but the specific filter has to match the strategy's shape -- a
+generic trend-regime gate bolted onto a reversal strategy is a category
+mismatch, not an improvement.
 
 ### Standing verdict after this round
 **No crypto strategy has a confirmed, robust, multi-pair edge yet.**
 TSMOM: coin-flip on rolling windows. FundingMeanRev: single-pair result
 that fails split-half stability and has no independent explanation.
-TrIct: untested at full scope due to a performance regression. This is
-the honest Phase 6 answer the plan doc's own decision gate exists to
-produce -- not a failure of this session's work.
+TrIct: real (null-beating) but narrow edge on ETH+XRP only, after fixing
+a real performance/correctness bug that had inflated its apparent
+breadth; trend-regime gating is the wrong filter for this strategy shape.
+This is the honest Phase 6 answer the plan doc's own decision gate exists
+to produce -- not a failure of this session's work. Next: either build a
+regime/context filter suited to reversal strategies (volatility or
+liquidity-based, not trend-directional) and re-test ETH+XRP only, or
+treat ETH+XRP TrIct as a small, capped-risk component of a future
+multi-strategy book rather than a standalone system.
