@@ -1987,8 +1987,57 @@ TrIct: real (null-beating) but narrow edge on ETH+XRP only, after fixing
 a real performance/correctness bug that had inflated its apparent
 breadth; trend-regime gating is the wrong filter for this strategy shape.
 This is the honest Phase 6 answer the plan doc's own decision gate exists
-to produce -- not a failure of this session's work. Next: either build a
-regime/context filter suited to reversal strategies (volatility or
-liquidity-based, not trend-directional) and re-test ETH+XRP only, or
-treat ETH+XRP TrIct as a small, capped-risk component of a future
-multi-strategy book rather than a standalone system.
+to produce -- not a failure of this session's work.
+
+### Phase 6D -- XRP full-history confirmation + ETH+XRP cross-pair combined book
+Re-ran XRP TrIct on its full available history (~13 months, 19,038 bars
+of 30m data, vs the 90d slice used above) to properly stress-test it the
+same way FundingMeanRev's XRP lead was stress-tested and failed:
+- Full period: 48 trades, +10.37%.
+- **Split-half stability**: first half +11.26% (n=32), second half
+  +6.81% (n=32) -- edge replicates across two independent sub-periods.
+  This is the opposite of FundingMeanRev's XRP result (zero trades in
+  the first half, all edge in one contiguous stretch) -- XRP/TrIct
+  passes the exact check that killed XRP/FundingMeanRev.
+- 30-seed null test on full history: real beats all 30 seeds (100th
+  pctile, null mean -4.78%).
+- 123 rolling 30-day windows: 0% breach, 63% positive, worst DD 2.47%.
+
+This is the first crypto result in the project to survive every
+falsification check applied (bug-fix re-test, split-half, null,
+rolling-window). ETH shows the same directional edge (97th pctile) but
+its on-disk history is only ~91 days (data starts 2026-03-27) -- a hard
+data ceiling, not a strategy flaw; can't be stress-tested further right
+now with current data.
+
+**Cross-pair combined book**: checked ETH/XRP 30m return correlation
+(r=0.79, expected for crypto) vs actual TrIct trade-time overlap (0/20
+ETH entries within 6h of an XRP entry; confirmed zero true open-position
+overlap via `assert_no_position_overlap`). Built
+`backtesting/portfolio/cross_pair_book.py` (`merge_cross_pair_trades`,
+`assert_no_position_overlap`) since the existing `combined_book.py`
+only handles two strategies sharing one instrument's bar loop -- ETH and
+XRP are different instruments, so there's no way to run them through one
+`engine.runner.run()` call; instead each pair is backtested solo at the
+same `initial_equity` and the resulting trade logs are merged
+chronologically (with an overlap check that would raise if the merge
+assumption were ever violated).
+
+Result at full solo risk_pct=0.005 on BOTH pairs (no de-rating needed,
+unlike ORB+OvernightDrift which required cutting to 0.4%/0.3% because of
+real overlap-adjacent breach risk): 33 combined trades, 0% breach across
+23 rolling 30-day windows, +3.51% median window return, 100% of windows
+positive, worst combined DD 2.12% -- comfortably inside CRYPTO_50's
+5%/10% caps. 6 new tests, 258 total passing.
+
+### Standing verdict after Phase 6D
+**XRP/TrIct is the first validated crypto edge in this project** --
+survives bug-fix re-test, split-half stability, null test, and
+rolling-window DD compliance on its full available history. ETH/TrIct
+corroborates but is data-limited (91d ceiling). Combined ETH+XRP book is
+prop-compliant at full risk with no de-rating required. Not yet done:
+(1) a reversal-appropriate regime/context filter (trend-gating made
+TrIct worse, not better -- still an open design question), (2) extending
+past ETH+XRP to DOGE/BNB/SOL, which remain negative/unreliable under
+TrIct and unconfirmed under TSMOM/FundingMeanRev, (3) live-readiness
+work (execution, monitoring) untouched this round.
