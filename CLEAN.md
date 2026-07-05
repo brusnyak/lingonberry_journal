@@ -1862,3 +1862,87 @@ Branch: `crypto-engine` (split from `hypothesis-engine`).
 ### Commit log
 - `cdd1030` — refactor(engine): remove OOS wall, update data paths for restructured market_data, fix commodity auto-detect
 - `16f9255` — fix(crypto): load OHLCV from legacy first for full history, enforce exchange market specs
+
+## 34. Audit continuation (2026-07-06) — RegimeGate bug found+fixed, pair-feasibility gap found+fixed, Phase 6 baselines run, no confirmed edge yet
+
+### RegimeGate cross-timeframe indexing bug (major, fixed)
+`RegimeGate` computed regime labels on `regime_tf` (default 240m) but
+indexed them by the entry loop's `bar.index`, which iterates a DIFFERENT
+timeframe (5m/15m in crypto sweeps). Once `bar.index` exceeded the much
+shorter 240m array (90d = 25,920 5m bars vs 540 240m bars), every later
+bar was silently blocked regardless of real regime -- and even in-range,
+position `i` in one series didn't correspond to position `i` in the
+other. This is the actual cause of the prior "regime filter blocks almost
+all trades... crypto rarely trends on 4h" finding -- reproduced the exact
+old behavior side by side: BTCUSDT 10→244 trades, ETHUSDT 9→210, DOGEUSDT
+2→176 once fixed. Fix: `RegimeGate` now takes an explicit `entry_tf` and
+aligns regime labels via timestamp forward-fill, same pattern
+`CryptoFundingMeanRev` already had right for funding-signal alignment.
+Commit `6f9ed0b`. Plan doc's Phase 5C/5D conclusions corrected in place
+(commit `720d4b3`) -- do not cite the old "crypto rarely trends" framing.
+
+### Pair feasibility at small account sizes (new gap found+fixed)
+Ran Phase 6A/6B sweeps at $50 starting equity (this session's actual
+target account size) and found BTCUSDT produced ZERO trades across every
+config while every other core pair traded. Root cause: BTC's exchange
+min_notional ($50) equals the ENTIRE account at 5x leverage --
+`CryptoCosts.calc_lots` silently returns 0 whenever the risk-based
+position size's notional falls below min_notional, which it always will
+for a $65k asset sized off a small ATR stop. Built
+`backtesting/crypto/pair_feasibility.py` (commit `2abefb4`) -- a simple
+go/no-go gate (`check_pair_feasibility`, `filter_feasible_pairs`),
+separate from `screener.py`'s ranking question. At $50/5x: BTC infeasible,
+all other 5 core pairs fine. Also built
+`backtesting/analysis/rolling_return_stats.py` (commit `0d916bc`) since
+`rolling_pass_rate.py` assumes a `target_pct` (always reports 0% pass
+rate for CRYPTO_50/CRYPTO_300, which have `target_pct=None`) -- the new
+tool reports the actual return/DD distribution across rolling 30-day
+windows, the metric that matters for an uncapped-return account.
+
+### Phase 6A -- TSMOM raw baseline, corrected expectations
+5m/15m entry, 2% risk (batch.py dev default): 0/96 configs beat PF 1.0 --
+clean negative, don't use these timeframes/risk level.
+60m entry, 0.5% risk, 90d: mixed, SOL looked like a standout (PF 1.02-1.24).
+**But rolling 30-day evaluation on SOL shows it's a coin flip**: median
+return ~0.0%, only 49% of 30-day windows positive (though DD stayed
+controlled, worst window -6.4%, zero breaches). The single-window number
+overstated it -- same "one split misleads" lesson as OvernightDrift's
+walk-forward correction (§31), now applied to crypto.
+
+### Phase 6B -- FundingMeanRev raw baseline, XRP lead does NOT survive scrutiny
+60m entry, 90d/240d: XRPUSDT stood out (PF 1.29-1.35, 93rd pctile vs
+null, 62% of rolling 30-day windows positive, low DD). Tested against
+overfitting concentration on a single asset per explicit user instruction:
+- **Split-half stability check (same fixed params, no retuning)**: ALL 54
+  trades came from the SECOND HALF of the 240-day window -- literally
+  zero trades in the first half. The "edge" has never been shown to
+  replicate across two independent sub-periods; it's concentrated in one
+  contiguous stretch, which is weaker evidence, not stronger.
+- **Objective funding-rate characteristic check** (mean/std/max funding
+  rate magnitude per pair, computed independently of any backtest result):
+  XRP is unremarkable -- SOLUSDT has the highest funding volatility,
+  BNBUSDT the lowest; XRP sits in the middle. No independent
+  characteristic predicts XRP as special.
+- Broader pair check: ETHUSDT/BNBUSDT weak-noise (67-70th pctile),
+  SOLUSDT/DOGEUSDT actually WORSE than random (27th/13th pctile) --
+  wrong-signed, not just no-edge.
+- **Verdict: XRP's FundingMeanRev result does not survive scrutiny.**
+  Single-pair, single-contiguous-period, no independent explanation --
+  the exact overfitting pattern this project has flagged repeatedly. Not
+  adopted, not to be cited as "found edge" without much stronger evidence.
+
+### Phase 6C -- TrIct, performance regression found
+Confirmed roughly quadratic runtime scaling (30d=3.4s, 60d=12.2s,
+90d=27.6s -- 3x the bars taking 8x the time, not the O(n) the prior
+session's audit claimed). 240d testing wasn't tractable this session;
+cut to 90d. Results pending at time of writing -- see next session log
+entry for the actual Phase 6C findings and whatever the fix/non-fix
+decision on the scaling issue turns out to be.
+
+### Standing verdict after this round
+**No crypto strategy has a confirmed, robust, multi-pair edge yet.**
+TSMOM: coin-flip on rolling windows. FundingMeanRev: single-pair result
+that fails split-half stability and has no independent explanation.
+TrIct: untested at full scope due to a performance regression. This is
+the honest Phase 6 answer the plan doc's own decision gate exists to
+produce -- not a failure of this session's work.
