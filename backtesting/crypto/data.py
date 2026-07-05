@@ -263,3 +263,28 @@ def load_funding_rate(symbol: str, exchange: Optional[str] = None) -> pd.DataFra
     if not pd.api.types.is_datetime64_any_dtype(df["ts"]):
         df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
     return df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+
+
+def load_market_specs(symbol: str, exchange: str) -> dict:
+    """Load latest exchange market specs (min_notional, min_qty, qty_step,
+    tick_size) for a pair. Moved here from batch.py (was private/duplicated
+    logic) so pair-feasibility checks and cost-model wiring share one
+    source instead of drifting apart.
+    """
+    spec_path = DATA_DIR / "crypto" / exchange.lower() / "market_specs.parquet"
+    if not spec_path.exists():
+        return {}
+    try:
+        specs = pd.read_parquet(spec_path)
+        pair_specs = specs[specs["id"] == symbol.upper()]
+        if pair_specs.empty:
+            return {}
+        latest = pair_specs.sort_values("ts").iloc[-1]
+        return {
+            "min_notional": float(latest.get("min_notional", 0) or 0),
+            "min_qty": float(latest.get("min_qty", 0) or 0),
+            "qty_step": float(latest.get("amount_precision", 0) or 0),
+            "tick_size": float(latest.get("price_precision", 0) or 0),
+        }
+    except Exception:
+        return {}

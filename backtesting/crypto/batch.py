@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backtesting.crypto.data import load_market_specs
 from backtesting.crypto.validation import RollingValidation, rolling_validate, print_validation_table
 from backtesting.engine.base import Strategy
 from backtesting.engine.costs import CryptoCosts
@@ -64,25 +65,9 @@ class CryptoRunConfig:
     regime_tf: str = "240"
 
 
-def _load_market_specs(pair: str, exchange: str) -> dict:
-    """Load latest market specs for a pair from exchange market_specs.parquet."""
-    spec_path = Path("data/market_data/crypto") / exchange.lower() / "market_specs.parquet"
-    if not spec_path.exists():
-        return {}
-    try:
-        specs = pd.read_parquet(spec_path)
-        pair_specs = specs[specs["id"] == pair.upper()]
-        if pair_specs.empty:
-            return {}
-        latest = pair_specs.sort_values("ts").iloc[-1]
-        return {
-            "min_notional": float(latest.get("min_notional", 0) or 0),
-            "min_qty": float(latest.get("min_qty", 0) or 0),
-            "qty_step": float(latest.get("amount_precision", 0) or 0),
-            "tick_size": float(latest.get("price_precision", 0) or 0),
-        }
-    except Exception:
-        return {}
+# _load_market_specs moved to backtesting.crypto.data.load_market_specs
+# (was duplicated here; kept as an alias for any external callers).
+_load_market_specs = load_market_specs
 
 
 def _run_one_crypto(strategy_cls: Type[Strategy], cfg: CryptoRunConfig) -> dict:
