@@ -113,17 +113,23 @@ class TrIctSweep(Strategy):
         self._swing_high = sh
         self._swing_low  = sl_arr
 
-        # HTF direction filter
-        self._htf_ts:  Optional[np.ndarray] = None
-        self._htf_dir: Optional[np.ndarray] = None
+        # HTF direction filter — precompute per-entry-bar direction once (not
+        # per-bar searchsorted in next(); 4H direction is constant for long
+        # stretches of entry-TF bars, so this is a one-time vectorized map).
+        self._htf_dir_per_bar: Optional[np.ndarray] = None
         if "240" in data and self.htf_agree:
             df4h = data["240"].copy()
             if "ts" in df4h.columns:
                 df4h = df4h.set_index("ts")
             df4h = df4h.sort_index()
             delta = df4h["close"] - df4h["close"].shift(self.htf_bars)
-            self._htf_ts  = df4h.index.to_numpy()
-            self._htf_dir = np.sign(delta).fillna(0).to_numpy()
+            htf_ts  = df4h.index.to_numpy()
+            htf_dir = np.sign(delta).fillna(0).to_numpy()
+            idx = np.searchsorted(htf_ts, df.index.to_numpy(), side="right") - 1
+            mapped = np.zeros(self._n, dtype=np.int64)
+            valid = idx >= 0
+            mapped[valid] = htf_dir[idx[valid]]
+            self._htf_dir_per_bar = mapped
 
         # State
         self._pending: Optional[_Pending] = None
@@ -135,13 +141,10 @@ class TrIctSweep(Strategy):
         if self.ml_predictor is not None:
             self._init_ml(data)
 
-    def _htf_dir_at(self, ts) -> int:
-        if self._htf_ts is None:
+    def _htf_dir_at_bar(self, i: int) -> int:
+        if self._htf_dir_per_bar is None:
             return 0
-        idx = int(np.searchsorted(self._htf_ts, ts, side="right")) - 1
-        if idx < 0:
-            return 0
-        return int(self._htf_dir[idx])
+        return int(self._htf_dir_per_bar[i])
 
     def _init_ml(self, data: dict) -> None:
         """Precompute ML features and build bar-index→feature-row mapping."""
@@ -287,7 +290,7 @@ class TrIctSweep(Strategy):
         if state.has_open_position:
             return None
 
-        htf = self._htf_dir_at(bar.ts)
+        htf = self._htf_dir_at_bar(i)
 
         # ── LONG setup: sweep of swing low → ChoCH above swing high → bear FVG ──
         if self.direction in ("bear", "both"):
