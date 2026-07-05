@@ -49,10 +49,48 @@ def merge_cross_pair_trades(*trade_logs: pd.DataFrame) -> pd.DataFrame:
     Each input must already be a solo `run(...).to_df()` result computed at
     the SAME `initial_equity` (the shared account's equity), so dollar pnl
     values scale consistently once combined. Raises via
-    `assert_no_position_overlap` if that combination isn't actually valid.
+    `assert_no_position_overlap` if that combination isn't actually valid --
+    use `resolve_overlapping_trades` first if you expect overlaps (common
+    once you're combining 3+ pairs; 2-pair books were often overlap-free by
+    luck, that doesn't generalize).
     """
     non_empty = [t for t in trade_logs if not t.empty]
     if not non_empty:
         return pd.DataFrame()
     assert_no_position_overlap(*trade_logs)
     return pd.concat(non_empty, ignore_index=True).sort_values("exit_time").reset_index(drop=True)
+
+
+def resolve_overlapping_trades(*trade_logs: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Merge trade logs from different pairs under a single-position-across-
+    the-whole-book rule: whichever trade is already open wins, a later
+    trade that would overlap it is dropped rather than double-counted.
+
+    This is the realistic assumption for a small account that can't post
+    margin for several simultaneous positions across different pairs at
+    once -- same one-position-at-a-time philosophy `engine.runner.run()`
+    already enforces within a single instrument (via
+    `state.has_open_position`), just applied across pairs post-hoc since
+    there's no single-engine-loop way to run multiple instruments together
+    (see module docstring).
+
+    First-come-first-served by entry_time, not by which pair "should" win
+    -- no pair gets priority. Returns (kept_trades_df, n_dropped).
+    """
+    non_empty = [t for t in trade_logs if not t.empty]
+    if not non_empty:
+        return pd.DataFrame(), 0
+
+    all_trades = pd.concat(non_empty, ignore_index=True).sort_values("entry_time").reset_index(drop=True)
+    kept_rows = []
+    dropped = 0
+    open_until = None
+    for _, t in all_trades.iterrows():
+        if open_until is not None and t["entry_time"] < open_until:
+            dropped += 1
+            continue
+        kept_rows.append(t)
+        open_until = t["exit_time"]
+
+    kept = pd.DataFrame(kept_rows).sort_values("exit_time").reset_index(drop=True) if kept_rows else pd.DataFrame()
+    return kept, dropped
