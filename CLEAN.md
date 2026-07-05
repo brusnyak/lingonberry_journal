@@ -2199,3 +2199,85 @@ position is underwater). Confirmed via `exit_reason` counts that it
 SL/TP usually resolves before a full opposing BOS could complete. Kept
 as harmless, architecturally-correct, currently-inert -- may matter more
 on a strategy/timeframe with longer holds, doesn't change anything here.
+
+### Phase 6G -- DOGE validated as a 3rd pair; 3-pair combined book hits <1% DD at reduced risk
+User set an open-ended target: multi-asset combined book, decent return,
+max DD under 1%, then either raise risk or look elsewhere for more 30d
+return. Re-tested DOGE/BNB/SOL with the now-validated `min_stop_pct=0.25`
+filter, since DOGE/SOL/BNB's earlier "negative/unreliable" verdicts (see
+Phase 6B/6C) predate understanding that tight-stop fee fragility was
+part of the problem.
+
+**DOGE**: transformed. `min_stop=None`: n=96, ret=+1.01%, wr=47%,
+%pos=51% (coin-flip, matches earlier verdict). `min_stop=0.25`: n=35,
+**ret=+10.75%**, wr=63%, 100th pctile vs 15-seed null (null_mean finally
+sane at +0.42%), 80% of rolling windows positive, worst DD 1.88%. Ran
+the same split-half stability check that validated XRP: first half
+n=14/+2.90%, second half n=25/+6.56% -- both halves positive, reasonable
+trade counts in each, no "all trades in one half" red flag. **DOGE is
+now validated to the same standard as XRP.**
+
+**SOL**: improved but stayed unconvincing. `min_stop=None`: n=48,
+ret=-5.37%, %pos=18% (genuinely bad). `min_stop=0.25`: n=12, ret=+4.43%,
+100th pctile, but null_mean still negative (-1.43%), med_ret=+0.00%,
+%pos=44% (below half). Not adopted -- too thin and too flat to trust.
+
+**BNB**: got *worse* under the filter, same failure mode as ETH (both
+are the ~91-day-history-limited pairs) -- over-pruned from n=12 to n=2,
+result drops below null (26.7th pctile). Confirms the min_stop_pct
+filter is validated for pairs with enough trade volume to spare (XRP,
+DOGE -- both ~400d history), not a blanket win.
+
+**3-pair combined book (ETH unfiltered + XRP/DOGE at min_stop=0.25)**:
+adding DOGE produced a genuine simultaneous ETH/DOGE position overlap on
+2026-04-09 -- the 2-pair ETH+XRP book being overlap-free doesn't
+generalize to 3 pairs. Built `resolve_overlapping_trades()`
+(`backtesting/portfolio/cross_pair_book.py`): first-come-first-served,
+single-position-across-the-whole-book (whichever trade opened first
+wins; only 1/40 candidate trades needed dropping here). 4 new tests, 272
+total passing.
+
+**Caught and corrected a repeat of an earlier documented bug before
+reporting it**: the first combined-book script hardcoded
+`initial_equity=50.0` inside a helper reused for both the CRYPTO_50 and
+CRYPTO_300 comparison loop, producing a spurious "0.35% DD at $300 vs
+2.07% at $50" result -- this is the exact "reused $50 dollar-pnl against
+a $300 baseline" mistake this project already hit and fixed once
+(Problem Solving log, pre-Phase-6). Re-verified: ETH/DOGE solo trade
+counts and % returns are IDENTICAL at $50 vs $300 (no real position-
+sizing quantization effect at these two equity levels), so the correctly
+recomputed result is equity-independent: **worst DD 2.07% at BOTH $50
+and $300**, not the fake 0.35%.
+
+**Corrected verdict**: at full solo risk_pct=0.005, 3-pair combined DD
+(2.07%) barely differs from the 2-pair ETH+XRP baseline (2.11%) --
+DOGE's diversification benefit was marginal at this risk level (only 1
+trade needed dropping for overlap, so overlap wasn't the limiting
+factor; more likely each pair's worst-drawdown window clusters in
+similar calendar time even without literal position overlap, e.g. a
+broad market selloff hitting correlated crypto assets around the same
+dates). **Adding a validated 3rd pair alone did not hit the <1% DD
+target.**
+
+**What did hit it: reducing risk_pct.** DD scales roughly linearly with
+risk_pct for a fixed trade set:
+
+| risk_pct | med_ret/30d | %pos windows | worst DD | median DD |
+|---|---|---|---|---|
+| 0.005 (validated solo risk) | +4.05% | 100% | 2.07% | 1.15% |
+| 0.0035 | +2.60% | 100% | 1.45% | 0.81% |
+| 0.0025 | +1.85% | 100% | 1.03% | 0.58% |
+| **0.002** | **+1.48%** | **100%** | **0.82%** | **0.47%** |
+
+**Target met at risk_pct=0.002**: 3-pair (ETH+XRP+DOGE) combined book,
+worst DD 0.82%, all 21 rolling 30-day windows positive, median return
++1.48%/window. This is a real milestone against the standing goal.
+
+**Standing caveat, unchanged by this result**: the Phase 6E slippage-
+sensitivity finding still applies at any risk_pct -- slippage cost
+scales with notional exactly like the intended risk does, so lowering
+risk_pct does not change the FRACTION of intended risk that slippage
+eats, only the absolute dollar stakes. This DD milestone is a real
+backtest result, not a green light for live capital; the open blocker
+(real fill/slippage data) from Phase 6E is exactly as unresolved as
+before.
