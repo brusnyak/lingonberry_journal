@@ -59,6 +59,9 @@ class CryptoRunConfig:
     days: Optional[int] = 30
     initial_equity: float = 20.0
     leverage: float = 50.0
+    # Regime filter: if set, wrap strategy with RegimeGate
+    regime_filter: Optional[list[str]] = None
+    regime_tf: str = "240"
 
 
 def _load_market_specs(pair: str, exchange: str) -> dict:
@@ -107,8 +110,23 @@ def _run_one_crypto(strategy_cls: Type[Strategy], cfg: CryptoRunConfig) -> dict:
             tick_size=specs.get("tick_size", 0.0),
         )
 
+        # ── Optional: expose regime labels to all strategies ──
+        from backtesting.engine.regime import MarketRegime
+        regime_tf = cfg.regime_tf or "240"
+        if regime_tf in data:
+            classifier = MarketRegime()
+            regime_labels, _ = classifier.compute(data[regime_tf])
+            data["regime"] = regime_labels
+
+        # ── Build strategy instance, optionally wrapped with RegimeGate ──
+        strat = strategy_cls(**cfg.params)
+        if cfg.regime_filter:
+            from backtesting.engine.regime_gate import RegimeGate
+            strat = RegimeGate(strat, allowed_regimes=set(cfg.regime_filter),
+                               regime_tf=regime_tf)
+
         result = run(
-            strategy_cls(**cfg.params),
+            strat,
             data,
             entry_tf=cfg.entry_tf,
             costs=costs,
@@ -338,6 +356,11 @@ def main():
                         help="Run tier-2 screener and keep top N pairs")
     parser.add_argument("--screener-days", type=int, default=14,
                         help="Days of data for the screener (default 14)")
+    parser.add_argument("--regime-filter", default=None,
+                        help="Comma-separated allowed regimes (e.g. trend_up,trend_down). "
+                             "When set, wraps strategy with RegimeGate.")
+    parser.add_argument("--regime-tf", default="240",
+                        help="TF for regime classification (default 240 = 4h)")
     args = parser.parse_args()
 
     pairs = [s.strip().upper() for s in args.pairs.split(",")]
@@ -369,11 +392,22 @@ def main():
 
     strategies_to_run = list(SWEEP_STRATEGIES.keys()) if args.sweep == "all" else [args.sweep]
 
+    # ── Parse regime filter once, apply per-strategy loop ──
+    regime_allowed: Optional[list[str]] = None
+    if args.regime_filter is not None:
+        regime_allowed = [r.strip() for r in args.regime_filter.split(",")]
+        invalid = [r for r in regime_allowed if r not in (
+            "trend_up", "trend_down", "ranging", "volatile", "low_vol")]
+        if invalid:
+            print(f"  WARNING: unknown regime labels: {invalid}")
+
     all_dfs = []
     for sname in strategies_to_run:
         cls = SWEEP_STRATEGIES[sname]
         print(f"\n{'#' * 80}")
         print(f"  Strategy: {sname}")
+        if regime_allowed:
+            print(f"  Regime filter: {args.regime_filter}  (tf={args.regime_tf})")
         print(f"{'#' * 80}")
 
         configs = make_crypto_configs(
@@ -384,6 +418,12 @@ def main():
         if not configs:
             print("  No configs (strategy has no spaces or no pairs)")
             continue
+
+        # ── Apply regime filter to all configs for this strategy ──
+        if regime_allowed is not None:
+            for cfg in configs:
+                cfg.regime_filter = regime_allowed
+                cfg.regime_tf = args.regime_tf or "240"
 
         t0 = time.time()
         df = run_crypto_sweep(cls, configs, workers=args.workers, min_trades=1)
@@ -403,6 +443,8 @@ def main():
                         exchange=row["exchange"], params=row.to_dict(),
                         days=args.days * 6,  # longer data for validation windows
                         initial_equity=args.equity, leverage=args.leverage,
+                        regime_filter=regime_allowed,
+                        regime_tf=args.regime_tf or "240",
                     )
                     try:
                         vt = _validate_one(cls, cfg, args.validate_window, args.validate_step)
@@ -450,8 +492,23 @@ def _validate_one(
         tick_size=specs.get("tick_size", 0.0),
     )
 
+    # ── Optional: expose regime labels ──
+    from backtesting.engine.regime import MarketRegime
+    regime_tf = cfg.regime_tf or "240"
+    if regime_tf in data:
+        classifier = MarketRegime()
+        regime_labels, _ = classifier.compute(data[regime_tf])
+        data["regime"] = regime_labels
+
+    # ── Build strategy, optionally wrapped ──
+    strat = strategy_cls(**cfg.params)
+    if cfg.regime_filter:
+        from backtesting.engine.regime_gate import RegimeGate
+        strat = RegimeGate(strat, allowed_regimes=set(cfg.regime_filter),
+                           regime_tf=regime_tf)
+
     result = run(
-        strategy_cls(**cfg.params),
+        strat,
         data,
         entry_tf=cfg.entry_tf,
         costs=costs,
