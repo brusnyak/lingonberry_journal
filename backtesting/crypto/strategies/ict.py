@@ -126,6 +126,20 @@ class TrIct(Strategy):
         self._buy_pool_levels = sorted([p.level for p in self._pools if p.side == "buy"])
         self._sell_pool_levels = sorted([p.level for p in self._pools if p.side == "sell"])
 
+        # Stateful active/broken pool tracking for O(log n) sweep detection
+        # (see _detect_sweeps_at_bar docstring for why this replaced a full
+        # per-bar scan over all pools).
+        buy_pools = sorted([p for p in self._pools if p.side == "buy"], key=lambda p: p.level)
+        sell_pools = sorted([p for p in self._pools if p.side == "sell"], key=lambda p: p.level)
+        self._buy_active_levels = [p.level for p in buy_pools]
+        self._buy_active_pools = buy_pools
+        self._buy_broken_levels: list[float] = []
+        self._buy_broken_pools: list[LiquidityPool] = []
+        self._sell_active_levels = [p.level for p in sell_pools]
+        self._sell_active_pools = sell_pools
+        self._sell_broken_levels: list[float] = []
+        self._sell_broken_pools: list[LiquidityPool] = []
+
         # Label arrays for fast access
         self._bullish_choch = labels["bullish_choch"].to_numpy(bool)
         self._bearish_choch = labels["bearish_choch"].to_numpy(bool)
@@ -135,37 +149,81 @@ class TrIct(Strategy):
     # ── Incremental sweep detection ─────────────────────────────────────────
 
     def _detect_sweeps_at_bar(self, i: int) -> list[Sweep]:
-        """Return ALL sweeps (pool breaks) at bar i.
+        """Return sweeps (new pool breaks) at bar i.
 
-        Multiple pools can be broken in a single bar.  Returns an entry
-        for each break, deduplicated by (level, side) so the same pool
-        isn't counted twice at the same bar.  The same pool CAN be
-        broken again at a later bar if price recovers and re-breaks.
+        Perf note: this used to loop over ALL pools on every bar
+        (O(bars * pools) = O(n^2) since pool count grows with history
+        length — confirmed empirically: 30d/60d/90d ran 3.4s/12.2s/27.6s,
+        an ~8x runtime increase for a 3x data increase). Fixed by tracking
+        each pool's active/broken state explicitly and using bisect on
+        sorted level arrays, so each bar only touches pools whose level
+        is within the current bar's actual price range — O(log n) typical,
+        O(k) worst case where k is the number of pools that change state.
+
+        A pool starts "active" (unbroken). It becomes "broken" the bar its
+        level is first breached (buy: hi > level; sell: lo < level) and
+        emits a Sweep. It becomes "active" again once price closes back
+        beyond the level (buy: close < level; sell: close > level), so it
+        can be re-swept later — matching the original re-sweep semantics
+        (a pool that stays broken forever no longer re-emits a Sweep every
+        single bar, which was the other bug in the old scan: it flooded
+        self._sweeps with a fresh "sweep" every bar for any pool price
+        happened to still be sitting past, not just on genuine breaches).
         """
         row = self._df30.iloc[i]
         hi, lo, cl = row["high"], row["low"], row["close"]
         ts = self._df30.index[i]
         found: list[Sweep] = []
-        seen_this_bar: set[tuple[float, str]] = set()
 
-        for pool in self._pools:
-            key = (pool.level, pool.side)
-            if key in seen_this_bar:
-                continue
-
-            if pool.side == "buy" and hi > pool.level:
-                seen_this_bar.add(key)
+        # ── Buy-side pools: broken when hi > level, reclaimed when cl < level ──
+        idx = bisect.bisect_left(self._buy_active_levels, hi)
+        if idx > 0:
+            newly_broken = self._buy_active_pools[:idx]
+            del self._buy_active_levels[:idx]
+            del self._buy_active_pools[:idx]
+            for pool in newly_broken:
                 found.append(Sweep(
                     pool=pool, sweep_time=ts,
                     direction="bearish", reclaim=False, wick_only=(cl <= pool.level),
                 ))
+                ins = bisect.bisect_left(self._buy_broken_levels, pool.level)
+                self._buy_broken_levels.insert(ins, pool.level)
+                self._buy_broken_pools.insert(ins, pool)
 
-            elif pool.side == "sell" and lo < pool.level:
-                seen_this_bar.add(key)
+        ridx = bisect.bisect_right(self._buy_broken_levels, cl)
+        if ridx < len(self._buy_broken_levels):
+            reclaimed = self._buy_broken_pools[ridx:]
+            del self._buy_broken_levels[ridx:]
+            del self._buy_broken_pools[ridx:]
+            for pool in reclaimed:
+                ins = bisect.bisect_left(self._buy_active_levels, pool.level)
+                self._buy_active_levels.insert(ins, pool.level)
+                self._buy_active_pools.insert(ins, pool)
+
+        # ── Sell-side pools: broken when lo < level, reclaimed when cl > level ──
+        idx = bisect.bisect_right(self._sell_active_levels, lo)
+        if idx < len(self._sell_active_levels):
+            newly_broken = self._sell_active_pools[idx:]
+            del self._sell_active_levels[idx:]
+            del self._sell_active_pools[idx:]
+            for pool in newly_broken:
                 found.append(Sweep(
                     pool=pool, sweep_time=ts,
                     direction="bullish", reclaim=False, wick_only=(cl >= pool.level),
                 ))
+                ins = bisect.bisect_left(self._sell_broken_levels, pool.level)
+                self._sell_broken_levels.insert(ins, pool.level)
+                self._sell_broken_pools.insert(ins, pool)
+
+        lidx = bisect.bisect_left(self._sell_broken_levels, cl)
+        if lidx > 0:
+            reclaimed = self._sell_broken_pools[:lidx]
+            del self._sell_broken_levels[:lidx]
+            del self._sell_broken_pools[:lidx]
+            for pool in reclaimed:
+                ins = bisect.bisect_left(self._sell_active_levels, pool.level)
+                self._sell_active_levels.insert(ins, pool.level)
+                self._sell_active_pools.insert(ins, pool)
 
         return found
 
