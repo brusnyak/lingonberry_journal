@@ -227,7 +227,6 @@ def regime_stratified_validate(
         # Strip insufficient_data — they pad the edges
         valid = ohlcv_in_window[ohlcv_in_window != "insufficient_data"]
         if valid.empty:
-            current += pd.Timedelta(days=step_days)
             # Assign to "insufficient_data" bucket
             regime_windows.setdefault("insufficient_data", []).append(ws)
             current += pd.Timedelta(days=step_days)
