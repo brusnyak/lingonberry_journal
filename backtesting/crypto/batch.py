@@ -334,11 +334,34 @@ def main():
                         help="Validation step days (default 14)")
     parser.add_argument("--output", default="backtesting/results/crypto_sweep.csv",
                         help="Output CSV path")
+    parser.add_argument("--screener-top-n", type=int, default=None,
+                        help="Run tier-2 screener and keep top N pairs")
+    parser.add_argument("--screener-days", type=int, default=14,
+                        help="Days of data for the screener (default 14)")
     args = parser.parse_args()
 
     pairs = [s.strip().upper() for s in args.pairs.split(",")]
     exchanges = [s.strip().lower() for s in args.exchanges.split(",")]
     tfs = [s.strip() for s in args.tfs.split(",")]
+
+    # ── Optional: filter pairs via tier-2 screener ──
+    if args.screener_top_n is not None:
+        from backtesting.crypto.screener import screen_pairs, rank_pairs
+        ex = exchanges[0] if exchanges else "binance"
+        print(f"\n  Running tier-2 screener (top {args.screener_top_n}, "
+              f"{args.screener_days}d, {ex})...")
+        screened = screen_pairs(days=args.screener_days, exchange=ex)
+        if not screened.empty:
+            ranked = rank_pairs(screened, top_n=args.screener_top_n)
+            screened_pairs = ranked["pair"].tolist()
+            # Intersect with user-specified pairs if not all defaults
+            if args.pairs != ",".join(CORE_PAIRS):
+                screened_pairs = [p for p in screened_pairs if p in pairs]
+            if screened_pairs:
+                print(f"  Screener selected: {', '.join(screened_pairs)}")
+                pairs = screened_pairs
+            else:
+                print("  Screener returned no matching pairs — using --pairs list")
 
     # Default risk: 2% for development sweeps. Keeps multiple trades alive without
     # destroying equity on a few losers. Override with --risk-pct for final validation.
