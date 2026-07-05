@@ -62,7 +62,6 @@ class DrawingEngine {
     this.canvas.style.width = rect.width + 'px';
     this.canvas.style.height = rect.height + 'px';
 
-    console.log('Canvas resized:', rect.width, 'x', rect.height);
     this.redraw();
   }
 
@@ -99,8 +98,6 @@ class DrawingEngine {
       return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
     };
     this.state.tradePanes = [];
-    console.log(`[setTradePanes] Processing ${trades?.length || 0} trades for ${symbolFilter || 'all symbols'}`);
-    
     (trades || []).forEach(trade => {
       if (symbolFilter && trade.symbol && trade.symbol !== symbolFilter) return;
       const entryTime = toEpoch(trade.ts_open);
@@ -126,7 +123,6 @@ class DrawingEngine {
         side: String(trade.direction || '').toUpperCase() === 'LONG' ? 'long' : 'short',
       });
     });
-    console.log(`[setTradePanes] Active panes successfully set: ${this.state.tradePanes.length}`);
     this.redraw();
   }
 
@@ -259,6 +255,27 @@ class DrawingEngine {
 
       if (this.state.currentTool === "hline") {
         this.addDrawing({ type: "hline", points: [p] });
+        this.setTool("cursor");
+        return;
+      }
+
+      if (["hh", "hl", "lh", "ll"].includes(this.state.currentTool)) {
+        const label = this.state.currentTool.toUpperCase();
+        const colors = {
+          hh: "#22c55e",
+          hl: "#86efac",
+          lh: "#fca5a5",
+          ll: "#ef4444",
+        };
+        this.addDrawing({
+          type: "text",
+          points: [p],
+          note: label,
+          label,
+          source: "structure-marker",
+          style: { stroke: colors[this.state.currentTool] },
+        });
+        this.dispatchEvent("drawing-added", { tool: this.state.currentTool, points: [p] });
         this.setTool("cursor");
         return;
       }
@@ -575,13 +592,13 @@ class DrawingEngine {
       style: partial.style || { stroke: "#00a3ff", fill: "rgba(0, 163, 255, 0.1)" },
       side: partial.side || null,
       label: partial.label || null,
+      note: partial.note || null,
       source: partial.source || null,
     };
     this.state.drawings.push(drawing);
     if (partial.select !== false && drawing.type === "riskreward") {
       this.setSelection([drawing.id], drawing.id);
     }
-    console.log('✏️ Drawing added:', drawing.type, 'Side:', drawing.side, 'Total drawings:', this.state.drawings.length);
     this.redraw();
     return drawing;
   }
@@ -666,7 +683,6 @@ class DrawingEngine {
 
     // ── Trade Pane Overlays ──────────────────────────────────────────────────
     if (this.state.tradePanes.length > 0) {
-      if (Math.random() < 0.05) console.log(`[redraw] Attempting to render ${this.state.tradePanes.length} trade panes...`);
       const vr = this.chart.timeScale().getVisibleRange();
       this.ctx.save();
 
@@ -747,18 +763,11 @@ class DrawingEngine {
       this.ctx.restore();
     }
 
-    // ── Diagnostic: Draw a bright red dot in the top-left to verify canvas visibility
-    this.ctx.fillStyle = "red";
-    this.ctx.beginPath();
-    this.ctx.arc(10, 10, 5, 0, Math.PI * 2);
-    this.ctx.fill();
-
     // Draw Drawings
 
     for (const d of this.state.drawings) {
       const pts = d.points.map(p => this.pointToXY(p)).filter(x => x);
     if (pts.length === 0 && d.type !== "riskreward") {
-      console.warn('Drawing has no valid points:', d.type);
       continue;
     }
 
