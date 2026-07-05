@@ -78,11 +78,11 @@ These are manual/alert-based, not automated for now.
 | 1.3 Default risk to 2% for development | DONE 2026-07-04 | batch.py, configs | 5% destroys equity too fast to measure signal quality |
 
 ### Phase 2 — DOGE investigation + tier-2 screener
-| Step | Scope | Why |
-|------|-------|-----|
-| 2.1 Why does TrBosFade work on DOGE? | analysis | Only real signal found so far |
-| 2.2 Build tier-2 screener | new module | Convert fixed pair list to dynamic filter |
-| 2.3 Test TrBosFade on other high-vol pairs | batch sweep | 1000PEPE, WLD, HYPE — same pattern? |
+| Step | Status | Scope | Why |
+|------|--------|-------|-----|
+| 2.1 Why does TrBosFade work on DOGE? | DONE 2026-07-04 | analysis | Edge is a 60-90 day regime artifact; PF drops to 1.00 on 180d. Not reliable. Decision: don't fix. |
+| 2.2 Build tier-2 screener | DONE 2026-07-04 | backtesting/crypto/screener.py | Rank all 24 pairs by volatility, volume, and ranging behavior. Flexible scorer, plug into batch.py. |
+| 2.3 Test TrBosFade on other high-vol pairs | CANCELLED | — | Strategy not reliable enough to test further. |
 
 ### Phase 3 — Signal expansion
 | Step | Scope | Why |
