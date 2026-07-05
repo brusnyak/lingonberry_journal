@@ -97,35 +97,62 @@ These are manual/alert-based, not automated for now.
 | 2.2 Build tier-2 screener | DONE 2026-07-04 | backtesting/crypto/screener.py | Rank all 24 pairs by volatility, volume, and ranging behavior. Flexible scorer, plug into batch.py. |
 | 2.3 Test TrBosFade on other high-vol pairs | CANCELLED | — | Strategy not reliable enough to test further. |
 
-### Phase 3 — Engine infrastructure (revised 2026-07-05)
-Before adding more strategies, build the pieces that make strategy discovery reliable.
+### Phase 3 — Engine infrastructure (DONE 2026-07-05 – 2026-07-06)
 
-| Step | Status | Scope | Why |
-|------|--------|-------|-----|
-| 3A Market regime module | **NEXT** | `backtesting/engine/regime.py` | Classify each pair as trend_up/trend_down/ranging/volatile/low_vol. Prerequisite for every valid test from here on. Uses ER, ATR%, BB width, funding rate level, BTC correlation. |
-| 3B Funding rate as signal engine | pending | `backtesting/engine/funding_signals.py` | Promote funding rate from cost vector to signal vector. Rolling percentiles, extreme entry triggers. Genuinely crypto-native edge — no forex analog. |
-| 3C Correlation matrix | pending | `backtesting/engine/correlation.py` | Rolling 60d correlation between active pairs. Without this, testing multiple strategies on multiple pairs doubles exposure unknowingly (crypto is >0.7 correlated across pairs). |
-| 3D Fix validation framework | pending | `backtesting/crypto/validation.py` | Regime-stratified windows, not calendar-based. Default 30d window (not 60/90), 7d step (not 14). Each result shows PF by regime type. |
+| Step | Scope | Tests | Note |
+|------|-------|-------|------|
+| 3A Market regime module | `backtesting/engine/regime.py` — `MarketRegime` class | 21 | ER + ATR% percentile → trend_up, trend_down, ranging, volatile, low_vol |
+| 3B Funding rate signal engine | `backtesting/engine/funding_signals.py` — `FundingSignalEngine` | 17 | Rolling percentile extremes → entry triggers |
+| 3C Correlation matrix | `backtesting/engine/correlation.py` — `CorrelationMatrix` + `portfolio_overlap` | 14 | Rolling 60d correlation, exposure overlap detection |
+| 3D Validation framework | `backtesting/engine/validation.py` + `backtesting/crypto/validation.py` | 20 | Regime-stratified windows, calendar-based rolling validation |
 
-### Phase 4 — Signal building (revised, was Phase 3)
-Only after infrastructure above is in place.
+All four modules exist, tested, and committed. Each was built independently — no module depends on another. This was the right call: infrastructure before signal discovery.
 
-| Step | Status | Scope | Why |
-|------|--------|-------|-----|
-| 4A TSMOM re-run with regime filter | pending | batch | Fixed spaces, but only valid with regime-aware testing. Momentum should only fire in trending regimes — without the filter, ranging-period noise dilutes the signal. |
-| 4B Funding rate standalone strategy | pending | new strategy | Extreme percentile mean-reversion. First crypto-native strategy built from the signal engine. |
-| 4C Screener integration in batch.py | pending | batch.py | Replace hardcoded pair lists with dynamic ranking from tier-2 screener. Makes every subsequent run better. |
-| 4D Data expansion (if viable) | pending | pipeline | On-chain metrics (exchange flows, whale tracking) or order book snapshots. Only if existing signals show edge that warrants deeper data. |
+### Phase 4 — Strategy building (DONE 2026-07-06)
 
-### Phase 5 — Portfolio and production (moved, was Phase 4)
-Deferred until at least two reliable signal sources exist.
+| Step | Scope | Tests | Note |
+|------|-------|-------|------|
+| 4A RegimeGate wrapper | `backtesting/engine/regime_gate.py` | 15 | Generic wrapper filters any strategy's entries by regime. Better than the original plan (TSMOM-only flag) — reusable across all strategies. |
+| 4B CryptoFundingMeanRev | `backtesting/crypto/strategies/funding_mean_rev.py` | 14 | Funding-rate mean reversion. First crypto-native strategy built from signal engine. |
+| 4C Screener integration | `backtesting/crypto/batch.py` — `--screener-top-n` flag | (in batch.py) | Tier-2 pair ranking integrated into CLI, filters pair list before sweep. |
+| 4D Data expansion | deferred | — | On-chain / orderbook data only if a confirmed signal warrants deeper investigation. No confirmed signal exists yet. |
 
-| Step | Scope | Why |
-|------|-------|-----|
-| 5.1 Combined risk budgeting | engine | Portfolio sizing across strategies |
-| 5.2 Cross-exchange execution modeling | engine | Multi-exchange routing for live |
-| 5.3 Prop firm challenge scaling | config | $20 → $25k/$100k scaling (forex only) |
-| 5.4 Live crypto deployment | infra | Paper → small → scaled |
+### Phase 5 — Integration layer (DONE 2026-07-06)
+
+Wires Phase 3-4 components into the sweep pipeline so they actually run together.
+
+| Step | Scope | Tests | Note |
+|------|-------|-------|------|
+| 5A RegimeGate in batch.py | `--regime-filter` + `--regime-tf` CLI args | (in batch.py) | Any strategy auto-wrapped with RegimeGate via CLI flag |
+| 5B Regime data exposed | `data["regime"]` in `_run_one_crypto` + `_validate_one` | (in batch.py) | All strategies can read per-bar regime labels |
+| 5C TSMOM baseline sweep | 6 core pairs, 30d, regime-filtered | — | Zero crashes. BTC/ETH/BNB correctly blocked (not trending). |
+| 5D FundingMeanRev baseline sweep | 6 core pairs, 30d, regime-filtered | — | Same pattern. But 30d windows produce <10 trades per config — can't evaluate. |
+
+**Key result from Phase 5 sweeps**: infrastructure works end-to-end (zero crashes across 144 configs). But 30-day windows with regime filters produce statistically meaningless sample sizes. The bottleneck is now data volume, not code correctness.
+
+### Phase 6 — Signal discovery (NEXT)
+
+Goal: find out whether any of our strategies produce real edge. If none do, we learn something. If one does, we expand it. **Do not tune engine components to improve results — that's overfitting the engine, not discovering signal.**
+
+**Rule for this phase**: the engine is frozen. Regime thresholds, signal thresholds, validation parameters — none change during signal discovery. If a strategy fails, the strategy changes, not the engine.
+
+| Step | Task | Method | Success criteria |
+|------|------|--------|-----------------|
+| 6A | **Baseline: TSMOM raw** | Sweep 6 core pairs, 90-180d, no regime filter, `{entry_len: [20,40], exit_len: [10], stop_atr_mult: [2,3], stop_mode: [atr, channel]}` | ≥500 total trades (all configs combined), PF visible above noise for ≥1 param combo on ≥3 pairs |
+| 6B | **Baseline: FundingMeanRev raw** | Sweep 6 core pairs, 90-180d, no regime filter, `{stop_atr_mult: [2,3], stop_mode: [atr, channel], entry_threshold: [0.8]}` | Same. Funding extremes are crypto-native — edge should exist irrespective of regime |
+| 6C | **Baseline: TrIct raw** | Sweep 6 core pairs, 90-180d, no regime filter | Same. Current TrIct is experimental (51 trades / 30d DOGE PF=2.28) — expand to core pairs |
+| 6D | **Regime impact analysis** | Re-run best configs from 6A-6C with `--regime-filter` variants (trend_only, range_only, no_volatile) | Compare with/without filter. A useful regime filter improves PF without halving trade count |
+| 6E | **Regime-stratified validation** | Run top configs through `--validate` with regime-stratified windows | ≤20% of windows can be negative per audit checklist |
+| 6F | **Correlation check** | Top configs across strategies: compute pair correlation + strategy correlation | Combined risk: if two strategies trade same pair in same direction, check they're not correlated >0.6 |
+| 6G | **Decision gate** | Review all results. If ≥2 strategies show edge on ≥3 core pairs → Phase 7 (portfolio). If none → stop adding strategies, investigate new signal sources | Stop condition: if after all 6 core pairs × 180 days no strategy shows edge, the problem is signal selection, not engine quality |
+
+### Phase 7 — Portfolio (deferred)
+Nothing here until Phase 6 produces confirmed signals. Same items as before:
+- Combined risk budgeting
+- Cross-exchange execution modeling
+- Live crypto deployment (paper → small → scaled)
+
+If Phase 6 produces zero confirmed edges, Phase 7 is cancelled for crypto and the engine serves as a research tool only.
 
 ## Audit Cadence
 
