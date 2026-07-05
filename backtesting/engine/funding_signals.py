@@ -28,6 +28,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from backtesting.engine._utils import rolling_percentile, rolling_zscore
+
 
 @dataclass
 class FundingSignalConfig:
@@ -113,8 +115,8 @@ class FundingSignalEngine:
         rates = funding_df["fundingRate"].to_numpy()
         n = len(rates)
 
-        percentiles = self._rolling_percentile(rates, self.config.lookback_bars)
-        z_scores = self._rolling_zscore(rates, self.config.lookback_bars)
+        percentiles = rolling_percentile(rates, self.config.lookback_bars)
+        z_scores = rolling_zscore(rates, self.config.lookback_bars)
         signals = self._compute_signals(rates, percentiles)
 
         return FundingSignalResult(
@@ -123,44 +125,6 @@ class FundingSignalEngine:
             z_scores=z_scores,
             raw=rates.copy(),
         )
-
-    def _rolling_percentile(
-        self, values: np.ndarray, window: int
-    ) -> np.ndarray:
-        """Causal rolling percentile rank of current vs prior ``window`` values.
-
-        Returns 0..1 float. First ``window`` bars are NaN (insufficient data).
-        Early division by valid (non-NaN) count avoids depressed percentiles.
-        """
-        n = len(values)
-        result = np.full(n, np.nan)
-        for i in range(window, n):
-            prior = values[i - window:i]
-            valid = prior[~np.isnan(prior)]
-            if len(valid) < 5:
-                continue
-            rank = float(np.sum(valid < values[i])) / len(valid)
-            result[i] = rank
-        return result
-
-    def _rolling_zscore(
-        self, values: np.ndarray, window: int
-    ) -> np.ndarray:
-        """Causal rolling z-score of current vs prior ``window`` values."""
-        n = len(values)
-        result = np.full(n, np.nan)
-        for i in range(window, n):
-            prior = values[i - window:i]
-            valid = prior[~np.isnan(prior)]
-            if len(valid) < 5:
-                continue
-            mu = float(np.mean(valid))
-            sd = float(np.std(valid, ddof=1))
-            if sd > 0:
-                result[i] = (values[i] - mu) / sd
-            else:
-                result[i] = 0.0
-        return result
 
     def _compute_signals(
         self,

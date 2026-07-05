@@ -31,6 +31,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from backtesting.engine._utils import rolling_percentile
+
 
 def efficiency_ratio(close: np.ndarray, period: int = 10) -> np.ndarray:
     """Kaufman's Efficiency Ratio — trend persistence vs. chop, causal.
@@ -89,25 +91,6 @@ def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
     return atr
 
 
-def _rolling_percentile(values: np.ndarray, window: int) -> np.ndarray:
-    """Causal rolling percentile rank of current value vs prior ``window``
-    values. Returns 0..1 float. First ``window`` bars are NaN.
-
-    Divides by the number of VALID (non-NaN) prior values so that early bars
-    with sparse data don't get depressed percentiles (which would incorrectly
-    trigger ``low_vol`` or block ``volatile``).
-    """
-    n = len(values)
-    result = np.full(n, np.nan)
-    for i in range(window, n):
-        prior = values[i - window:i]
-        valid = prior[~np.isnan(prior)]
-        if len(valid) < 5:
-            continue   # too few comparisons — leave as NaN
-        rank = float(np.sum(valid < values[i])) / len(valid)
-        result[i] = rank
-    return result
-
 
 REGIME_LABELS = frozenset({
     "volatile", "low_vol", "trend_up", "trend_down",
@@ -165,7 +148,7 @@ class MarketRegime:
         er = efficiency_ratio(close, self.config.er_period)
         atr = _atr(high, low, close, self.config.atr_period)
         atr_pct = atr / np.maximum(close, 1e-9)
-        atr_percentile = _rolling_percentile(
+        atr_percentile = rolling_percentile(
             atr_pct, self.config.atr_percentile_window,
         )
 

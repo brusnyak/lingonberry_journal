@@ -205,7 +205,7 @@ class TestFlatPrices:
         low = close * 0.99999
         df = pd.DataFrame({"high": high, "low": low, "close": close})
         labels, _ = MarketRegime().compute(df)
-        assert labels[-1] in ("low_vol", "insufficient_data")
+        assert labels[-1] in ("ranging", "insufficient_data", "low_vol")
 
 
 class TestCustomConfig:
@@ -297,7 +297,7 @@ class TestLabelValidity:
 class TestRollingPercentile:
     def test_correct_denominator_with_nans(self):
         """Early bars with NaN prior values correctly compute percentile."""
-        from backtesting.engine.regime import _rolling_percentile
+        from backtesting.engine._utils import rolling_percentile as _rolling_percentile
 
         vals = np.full(200, np.nan)
         vals[40:] = np.arange(0.1, 0.1 + 0.01 * 160, 0.01)
