@@ -77,8 +77,11 @@ def bullish_harami(
     close: np.ndarray,
 ) -> np.ndarray:
     """
-    Bullish harami: red bar followed by smaller green bar inside its range.
+    Bullish harami: red bar followed by smaller green bar inside its body.
     Possible reversal in downtrend.
+
+    Red bar body: close[0] (bottom) → open[0] (top).
+    Green bar is inside when its open > red's close AND its close < red's open.
     """
     if len(close) < 2:
         return np.zeros(len(close), dtype=np.int64)
@@ -87,7 +90,7 @@ def bullish_harami(
     for i in range(1, len(close)):
         prev_red = close[i - 1] < open[i - 1]
         curr_green = close[i] > open[i]
-        inside = open[i] > open[i - 1] and close[i] < close[i - 1]
+        inside = open[i] > close[i - 1] and close[i] < open[i - 1]
         if prev_red and curr_green and inside:
             signal[i] = 1
     return signal
@@ -101,8 +104,11 @@ def bearish_harami(
     close: np.ndarray,
 ) -> np.ndarray:
     """
-    Bearish harami: green bar followed by smaller red bar inside its range.
+    Bearish harami: green bar followed by smaller red bar inside its body.
     Possible reversal in uptrend.
+
+    Green bar body: open[0] (bottom) → close[0] (top).
+    Red bar is inside when its open < green's close AND its close > green's open.
     """
     if len(close) < 2:
         return np.zeros(len(close), dtype=np.int64)
@@ -111,7 +117,7 @@ def bearish_harami(
     for i in range(1, len(close)):
         prev_green = close[i - 1] > open[i - 1]
         curr_red = close[i] < open[i]
-        inside = open[i] < open[i - 1] and close[i] > close[i - 1]
+        inside = open[i] < close[i - 1] and close[i] > open[i - 1]
         if prev_green and curr_red and inside:
             signal[i] = -1
     return signal
@@ -181,8 +187,11 @@ def morning_star(
     """
     Morning star (bullish reversal, 3 bars):
     1. Red bar (downtrend)
-    2. Small body (doji-like), gaps down
+    2. Small body (doji-like), close below prior close (loss of sell momentum)
     3. Green bar closes above midpoint of bar 1
+
+    Forex-adapted: no literal price gap required (24/5 market has none intraday).
+    The doji bar must close below prior close, showing inability to rally.
     """
     if len(close) < 3:
         return np.zeros(len(close), dtype=np.int64)
@@ -191,10 +200,10 @@ def morning_star(
     for i in range(2, len(close)):
         b1_red = close[i - 2] < open[i - 2]
         b2_small = _body_pct(open[i - 1:i], high[i - 1:i], low[i - 1:i], close[i - 1:i])[0] < doji_threshold
-        b2_gap = high[i - 1] < close[i - 2]  # gaps down
+        b2_below = close[i - 1] < close[i - 2]  # doji close below prior close
         b3_green = close[i] > open[i]
         b3_close_above = close[i] > (open[i - 2] + close[i - 2]) / 2
-        if b1_red and b2_small and b2_gap and b3_green and b3_close_above:
+        if b1_red and b2_small and b2_below and b3_green and b3_close_above:
             signal[i] = 1
     return signal
 
@@ -210,8 +219,11 @@ def evening_star(
     """
     Evening star (bearish reversal, 3 bars):
     1. Green bar (uptrend)
-    2. Small body (doji-like), gaps up
+    2. Small body (doji-like), close above prior close (loss of buy momentum)
     3. Red bar closes below midpoint of bar 1
+
+    Forex-adapted: no literal price gap required (24/5 market has none intraday).
+    The doji bar must close above prior close, showing inability to sell off.
     """
     if len(close) < 3:
         return np.zeros(len(close), dtype=np.int64)
@@ -220,10 +232,10 @@ def evening_star(
     for i in range(2, len(close)):
         b1_green = close[i - 2] > open[i - 2]
         b2_small = _body_pct(open[i - 1:i], high[i - 1:i], low[i - 1:i], close[i - 1:i])[0] < doji_threshold
-        b2_gap = low[i - 1] > close[i - 2]  # gaps up
+        b2_above = close[i - 1] > close[i - 2]  # doji close above prior close
         b3_red = close[i] < open[i]
         b3_close_below = close[i] < (open[i - 2] + close[i - 2]) / 2
-        if b1_green and b2_small and b2_gap and b3_red and b3_close_below:
+        if b1_green and b2_small and b2_above and b3_red and b3_close_below:
             signal[i] = -1
     return signal
 
@@ -290,18 +302,24 @@ def inside_bar(
     close: np.ndarray,
 ) -> np.ndarray:
     """
-    Inside bar: current bar's entire range within previous bar's range.
-    Indicates consolidation. Direction = breakout direction (close > prev high = bullish).
-    """
-    if len(close) < 2:
-        return np.zeros(len(close), dtype=np.int64)
+    Inside bar breakout: bar[i] is consolidation, bar[i+1] breaks out.
 
-    signal = np.zeros(len(close), dtype=np.int64)
-    for i in range(1, len(close)):
-        inside = high[i] < high[i - 1] and low[i] > low[i - 1]
-        if inside:
-            if close[i] > high[i - 1]:
-                signal[i] = 1  # upside breakout
-            elif close[i] < low[i - 1]:
-                signal[i] = -1  # downside breakout
+    Signal fires on the breakout bar (i+1) when it closes beyond the
+    mother bar's (i) high/low. Bullish = close above mother's high,
+    bearish = close below mother's low.
+
+    Mother bar must be the immediately preceding bar.
+    """
+    n = len(close)
+    if n < 3:
+        return np.zeros(n, dtype=np.int64)
+
+    signal = np.zeros(n, dtype=np.int64)
+    for i in range(1, n - 1):
+        mother_inside = high[i] < high[i - 1] and low[i] > low[i - 1]
+        if mother_inside:
+            if close[i + 1] > high[i - 1]:
+                signal[i + 1] = 1  # upside breakout
+            elif close[i + 1] < low[i - 1]:
+                signal[i + 1] = -1  # downside breakout
     return signal

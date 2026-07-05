@@ -49,7 +49,7 @@ def scan_pattern(
                         f"Available: {registry.names}")
 
     symbols = symbols or _default_symbols()
-    timeframes = timeframes or ["M5", "M15", "H1", "H4", "D1"]
+    timeframes = timeframes or [5, 15, 60, 240, 1440]
     results: list[dict] = []
 
     for tf in timeframes:
@@ -69,15 +69,21 @@ def scan_pattern(
             if n_signals < 10:
                 continue
 
+            pip_size = _pip_size(sym)
+            cost_pips = 3.5  # round-trip: ~2 entry + ~1 exit + ~0.5 slip (costs.py)
             for horizon in (1, 5, 20, 50):
-                acc = _direction_accuracy(signals, c, horizon)
+                acc, net_acc, n_resolved = _direction_accuracy(
+                    signals, c, horizon, pip_size, cost_pips
+                )
                 results.append({
                     "symbol": sym,
                     "tf": tf,
                     "pattern": pattern_name,
                     "horizon": horizon,
                     "accuracy": round(float(acc), 4),
+                    "net_accuracy": round(float(net_acc), 4),
                     "n_signals": n_signals,
+                    "n_resolved": n_resolved,
                     "n_bullish": int(np.sum(signals == 1)),
                     "n_bearish": int(np.sum(signals == -1)),
                 })
@@ -85,18 +91,35 @@ def scan_pattern(
     return results
 
 
+def _pip_size(symbol: str) -> float:
+    """Forex pip size: 0.01 for JPY pairs, 0.0001 otherwise."""
+    return 0.01 if "JPY" in symbol else 0.0001
+
+
 def _direction_accuracy(
     signals: np.ndarray,
     close: np.ndarray,
     horizon: int,
-) -> float:
-    """Fraction of signals where price moved in predicted direction after horizon bars."""
+    pip_size: float,
+    cost_pips: float,
+) -> tuple[float, float, int]:
+    """
+    Direction accuracy, raw and cost-net.
+
+    Raw: fraction of signals where price moved in predicted direction.
+    Net: same, but only counting signals whose move exceeds round-trip cost
+    (cost_pips). Signals that don't clear cost are excluded from net_accuracy's
+    denominator — they're "noise" trades that would lose to spread either way.
+    """
     n = len(close)
     if n < horizon + 2:
-        return 0.5
+        return 0.5, 0.5, 0
 
+    cost_price = cost_pips * pip_size
     correct = 0
     total = 0
+    net_correct = 0
+    net_total = 0
     for i in range(n - horizon):
         if signals[i] == 0:
             continue
@@ -106,7 +129,14 @@ def _direction_accuracy(
             correct += 1
         total += 1
 
-    return correct / total if total > 0 else 0.5
+        if abs(ret) > cost_price:
+            net_total += 1
+            if correct_dir:
+                net_correct += 1
+
+    acc = correct / total if total > 0 else 0.5
+    net_acc = net_correct / net_total if net_total > 0 else 0.5
+    return acc, net_acc, net_total
 
 
 def _default_symbols() -> list[str]:

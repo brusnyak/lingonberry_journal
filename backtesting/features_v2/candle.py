@@ -23,10 +23,10 @@ def _body(open: np.ndarray, close: np.ndarray) -> np.ndarray:
 
 
 def _body_pct(open: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
-    """Body size as fraction of the bar's total range."""
+    """Body size as fraction of the bar's total range. NaN-safe."""
     body = _body(open, close)
     rng = _range(high, low)
-    return np.where(rng > 0, body / rng, 0.0)
+    return np.divide(body, rng, out=np.zeros_like(body), where=rng > 0)
 
 
 def _upper_wick(open: np.ndarray, high: np.ndarray, close: np.ndarray) -> np.ndarray:
