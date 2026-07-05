@@ -125,10 +125,37 @@ Wires Phase 3-4 components into the sweep pipeline so they actually run together
 |------|-------|-------|------|
 | 5A RegimeGate in batch.py | `--regime-filter` + `--regime-tf` CLI args | (in batch.py) | Any strategy auto-wrapped with RegimeGate via CLI flag |
 | 5B Regime data exposed | `data["regime"]` in `_run_one_crypto` + `_validate_one` | (in batch.py) | All strategies can read per-bar regime labels |
-| 5C TSMOM baseline sweep | 6 core pairs, 30d, regime-filtered | — | Zero crashes. BTC/ETH/BNB correctly blocked (not trending). |
-| 5D FundingMeanRev baseline sweep | 6 core pairs, 30d, regime-filtered | — | Same pattern. But 30d windows produce <10 trades per config — can't evaluate. |
+| 5C TSMOM baseline sweep | 6 core pairs, 30d, regime-filtered | — | Zero crashes. ~~BTC/ETH/BNB correctly blocked (not trending).~~ **INVALID, see correction below.** |
+| 5D FundingMeanRev baseline sweep | 6 core pairs, 30d, regime-filtered | — | Same pattern. ~~30d windows produce <10 trades per config — can't evaluate.~~ **Same bug, see below.** |
 
-**Key result from Phase 5 sweeps**: infrastructure works end-to-end (zero crashes across 144 configs). But 30-day windows with regime filters produce statistically meaningless sample sizes. The bottleneck is now data volume, not code correctness.
+**CORRECTION (2026-07-06): the "sample too small" conclusion above was a bug, not a data problem.**
+`RegimeGate` computed regime labels on `regime_tf` (default 240m) but
+indexed them directly by the entry loop's `bar.index`, which iterates a
+DIFFERENT timeframe (5m/15m). Two failure modes stacked: (1) once
+`bar.index` exceeded the much-shorter 240m label array (90d = 25,920 5m
+bars vs 540 240m bars — labels ran out ~4-5 days in), every later bar was
+silently treated as unlabeled/blocked for the rest of the window
+regardless of real regime; (2) even in-range, position `i` in one series
+doesn't correspond to position `i` in the other. This is the actual cause
+of the ab94c3b sweep's "regime filter blocks almost all trades... BTC
+gets zero" and this section's "<10 trades per config" -- not evidence
+that crypto rarely trends on 4h TF or that 30d is too short. Reproduced
+side-by-side on real 90d data: BTCUSDT 10→244 trades, ETHUSDT 9→210,
+DOGEUSDT 2→176, once fixed. Fixed in `backtesting/engine/regime_gate.py`
+(commit 6f9ed0b) -- `RegimeGate` now takes an explicit `entry_tf` and
+aligns regime labels onto the entry series via timestamp forward-fill,
+the same pattern `CryptoFundingMeanRev` already used correctly for
+funding-signal alignment (that strategy was never affected by this bug).
+**Phase 5C/5D and the ab94c3b sweep must be re-run before any Phase 6
+conclusion is trusted** -- everything downstream of them in this document
+was written against the bugged tool.
+
+**Key result from Phase 5 sweeps, corrected**: infrastructure had a real
+cross-timeframe alignment bug, now fixed and covered by regression tests
+(`test_regime_gate.py`). The "bottleneck is data volume, not code
+correctness" framing was itself wrong -- it WAS a code-correctness issue,
+now closed. Re-run 5C/5D/6A-6D fresh before drawing any regime-related
+conclusion.
 
 ### Phase 6 — Signal discovery (NEXT)
 
