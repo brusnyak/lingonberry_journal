@@ -123,7 +123,7 @@ def _run_one_crypto(strategy_cls: Type[Strategy], cfg: CryptoRunConfig) -> dict:
         if cfg.regime_filter:
             from backtesting.engine.regime_gate import RegimeGate
             strat = RegimeGate(strat, allowed_regimes=set(cfg.regime_filter),
-                               regime_tf=regime_tf)
+                               regime_tf=regime_tf, entry_tf=cfg.entry_tf)
 
         result = run(
             strat,

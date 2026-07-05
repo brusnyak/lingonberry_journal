@@ -221,32 +221,80 @@ class TestRegimeGateEdgeCases:
         assert signal is None
 
 
+def _make_cross_tf_data(n_entry: int = 400, n_regime: int = 100, seed: int = 10):
+    """Entry TF '60' (hourly) + regime TF '240' (4-hourly), same underlying
+    drift so both series describe the same trend, but at very different
+    bar counts -- the exact shape that exposed the alignment bug (a 4x
+    ratio here, a 414x ratio for 5m-vs-240m in real crypto data)."""
+    rng = np.random.default_rng(seed)
+    close_60 = 100.0 + np.cumsum(rng.normal(0.02, 0.3, n_entry))
+    close_60 = np.maximum(close_60, 1.0)
+    ts_60 = pd.date_range("2026-01-01", periods=n_entry, freq="1h", tz="UTC")
+    df_60 = pd.DataFrame({"ts": ts_60, "open": close_60, "high": close_60 * 1.002,
+                          "low": close_60 * 0.998, "close": close_60, "volume": 1000.0})
+
+    rng2 = np.random.default_rng(seed)
+    close_240 = 100.0 + np.cumsum(rng2.normal(0.02, 0.3, n_regime))
+    close_240 = np.maximum(close_240, 1.0)
+    ts_240 = pd.date_range("2026-01-01", periods=n_regime, freq="4h", tz="UTC")
+    df_240 = pd.DataFrame({"ts": ts_240, "open": close_240, "high": close_240 * 1.002,
+                           "low": close_240 * 0.998, "close": close_240, "volume": 1000.0})
+    return {"60": df_60, "240": df_240}
+
+
 class TestRegimeGateDifferentTF:
     def test_regime_tf_different_from_entry(self):
         """Can specify a different TF key for regime computation."""
         inner = _AlwaysSignal()
-        gate = RegimeGate(inner, regime_tf="240")
-        # Data with both entry TF and regime TF
-        rng = np.random.default_rng(10)
-        close_60 = 100.0 + np.cumsum(rng.normal(0.02, 0.3, 400))
-        close_60 = np.maximum(close_60, 1.0)
-        ts_60 = pd.date_range("2026-01-01", periods=400, freq="1h", tz="UTC")
-        df_60 = pd.DataFrame({"ts": ts_60, "open": close_60, "high": close_60 * 1.002,
-                              "low": close_60 * 0.998, "close": close_60, "volume": 1000.0})
-
-        rng2 = np.random.default_rng(10)
-        close_240 = 100.0 + np.cumsum(rng2.normal(0.02, 0.3, 100))
-        close_240 = np.maximum(close_240, 1.0)
-        ts_240 = pd.date_range("2026-01-01", periods=100, freq="4h", tz="UTC")
-        df_240 = pd.DataFrame({"ts": ts_240, "open": close_240, "high": close_240 * 1.002,
-                               "low": close_240 * 0.998, "close": close_240, "volume": 1000.0})
-
-        data = {"60": df_60, "240": df_240}
+        gate = RegimeGate(inner, regime_tf="240", entry_tf="60")
+        data = _make_cross_tf_data(n_entry=400, n_regime=100, seed=10)
         gate.init(data)
-        # Should not crash — validates the TF key is used
         signal = gate.next(_make_bar(index=300), _make_state())
-        # May or may not be allowed depending on regime at that bar
         assert signal is None or signal.label == "test_signal"
+
+    def test_labels_length_matches_entry_tf_not_regime_tf(self):
+        """Bug fix regression: label array must be as long as the ENTRY
+        series (400 hourly bars), not the regime series (100 4h bars) --
+        this is what made every bar past index ~100 silently blocked."""
+        inner = _AlwaysSignal()
+        gate = RegimeGate(inner, regime_tf="240", entry_tf="60")
+        data = _make_cross_tf_data(n_entry=400, n_regime=100, seed=10)
+        gate.init(data)
+        assert len(gate._labels) == 400
+
+    def test_late_entry_bar_not_silently_blocked_by_short_regime_array(self):
+        """Before the fix: bar.index=300 > len(regime_labels)=100 meant
+        every bar past ~100 was unconditionally suppressed regardless of
+        real regime. After the fix, late bars still get a real regime
+        label (not just 'insufficient_data' from running off the end)."""
+        inner = _AlwaysSignal()
+        gate = RegimeGate(inner, regime_tf="240", entry_tf="60",
+                           allowed_regimes={"trend_up", "trend_down", "ranging", "volatile", "low_vol"})
+        data = _make_cross_tf_data(n_entry=400, n_regime=100, seed=10)
+        gate.init(data)
+        # With all real regimes allowed, a late bar should pass -- it would
+        # NOT have, pre-fix, because bar.index (300) >= old label length (100).
+        signal = gate.next(_make_bar(index=300), _make_state())
+        assert signal is not None
+
+    def test_alignment_uses_most_recent_regime_bar_not_same_position(self):
+        """The regime label for entry bar i must come from whichever 240m
+        bar was most recently CLOSED by that entry bar's timestamp (ffill
+        by real time), not from regime_labels[i] at the same integer
+        position -- those refer to completely different points in time
+        when the two series have different bar counts."""
+        inner = _AlwaysSignal()
+        gate = RegimeGate(inner, regime_tf="240", entry_tf="60",
+                           allowed_regimes={"trend_up", "trend_down", "ranging", "volatile", "low_vol"})
+        data = _make_cross_tf_data(n_entry=400, n_regime=100, seed=10)
+        gate.init(data)
+        # Entry bar 40 (hour 40, i.e. 2026-01-02 16:00) should carry the
+        # regime of the 240m bar covering that timestamp (240m bar index
+        # 40*60/240 = 10), NOT regime_labels_raw[40] (which would be a
+        # bar ~6.7 days later in the 240m series -- out of range here).
+        from backtesting.engine.regime import MarketRegime
+        raw_labels, _ = MarketRegime().compute(data["240"])
+        assert gate._labels[40] == raw_labels[10]
 
     def test_nonexistent_regime_tf_fallback(self):
         """If regime_tf key is missing, falls back to first data key."""
