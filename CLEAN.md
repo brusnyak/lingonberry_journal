@@ -2443,3 +2443,115 @@ Merged `SESSION_34.md` (a standalone file documenting the ICT look-ahead
 fix + DOGE TrBosFade investigation + tier-2 screener, dated 2026-07-04,
 that had never been filed into this log) into §33B above, then deleted
 the standalone file.
+
+## Phase 9 -- Real cost research overturns the blanket 2% assumption
+
+User pushback on Phase 7's methodology (2026-07-12, correct): a fixed
+2%-of-price worst case, applied uniformly as the DEFAULT validation bar
+rather than an occasional stress check, was not grounded in anything
+real. Directive: research actual costs on Kraken, BingX, Binance, and
+TradeLocker, then re-check the audit against real numbers.
+
+### Research findings (sourced, not guessed)
+
+**Crypto futures fees -- consistent across all three platforms, verified
+via official fee pages**:
+- Binance USDT-M Futures: 0.02% maker / 0.05% taker, base tier (no VIP,
+  no BNB discount -- what a $50-300 account actually sits at).
+  [Binance fee page](https://www.binance.com/en/fee/futureFee),
+  [Binance blog](https://www.binance.com/en/blog/futures/421499824684902239)
+- BingX Perpetual Futures: 0.02% maker / 0.05% taker, base tier --
+  identical to Binance. Funding 3x/day (00:00, 08:00, 16:00 UTC).
+  [BingX fee schedule](https://bingx.com/en/support/articles/360046487573-perpetual-futures-fee-schedule)
+- Kraken Futures: 0.02% maker / 0.05% taker at base tier, improving with
+  30-day volume (irrelevant at this account size).
+  [Kraken fee schedule](https://www.kraken.com/features/fee-schedule)
+- **Conclusion**: crypto exchange fees are small, precise, and already
+  correctly modeled in `CryptoCosts` (minor correction: taker_fee should
+  be 0.0005 not 0.0004 to match the verified 0.05% real rate -- not yet
+  applied, flagged here).
+
+**Crypto slippage -- no exact published number exists (inherently
+market-condition-dependent), but a credible estimate**: retail market
+orders into thin liquidity commonly slip 0.1-0.5%; liquid majors
+(BTC/ETH/XRP on Binance/BingX) at small notional ($20-400, this
+account's actual size) should sit toward the low end, though this has
+NOT been confirmed against real fills -- that gap is unchanged by this
+research, only narrowed from "no idea" to "probably 0.1-0.3% for this
+account's actual trade sizes on these specific pairs."
+
+**TradeLocker/GFT (forex/index)**: $5 per round lot commission on forex
+and metals, **$0 commission on indices, crypto CFDs, and commodities**
+(cost is 100% embedded in spread for those). Spreads described as "raw"
+and live-market-driven; TradeLocker itself doesn't set fees (broker-
+dependent, confirmed via TradeLocker's own glossary page -- "fees are
+usually determined by your broker or prop firm, not by the trading
+platform itself"). No official published spread-in-points number found
+for GFT specifically on NAS100/US30; some trader complaints found about
+wide spreads on forex/gold, none specifically about the indices this
+project trades. This remains a real gap for the forex side -- unlike
+crypto, no verified fee/spread table exists for GFT specifically, only
+category-level statements.
+
+### Corrected breakeven analysis -- the 2% default was an overcorrection
+
+Ran a fine-grained round_trip_pct sweep (not the coarse 0/0.05/0.1/0.2%
+check from Phase 6E, nor the single 2% point from Phase 7) on XRP/TrIct
+(min_stop_pct=0.25) and SOL/TSMOM (known coin-flip, included as a
+no-real-edge control):
+
+| round-trip cost | XRP/TrIct | SOL/TSMOM (control) |
+|---|---|---|
+| 0.00% | +12.44% | +8.22% |
+| 0.10% | +8.74% | +4.27% |
+| 0.20% | +5.17% | +0.47% |
+| 0.30% | +1.70% | -3.20% |
+| **~0.35% (interpolated breakeven)** | **~0** | already negative |
+| 0.50% | -4.90% | -10.15% |
+| 2.00% (Phase 7's blanket default) | -42.86% | -48.66% |
+
+XRP/TrIct's real breakeven is **~0.35% round-trip** -- right at the edge
+of the researched realistic range (0.1-0.5%), not deep inside a
+"definitely dead" zone. SOL/TSMOM (no real signal, confirmed by earlier
+null-testing) breaks even a bit lower (~0.25%), which is useful as a
+control: it confirms ~0.2-0.35% is roughly the general kill-zone for
+this strategy shape regardless of whether real edge exists, so TrIct's
+result at that threshold isn't meaningless -- it's specifically the
+signal, not just cost structure, keeping it positive up to ~0.3%.
+
+**Verdict: Phase 7's "abandon 30m/1h tight-stop strategies entirely,
+redesign at 4h/1d" conclusion was an overcorrection.** Applying a 2%
+round-trip cost as the blanket default validation bar (~6x the credible
+realistic ceiling) made every 30m/1h strategy fail regardless of merit,
+including the one strategy (XRP/TrIct) that had passed every other
+validation check this project runs (null test, split-half stability,
+rolling-window DD). The strategy isn't confirmed safe either -- its
+breakeven sits inside the uncertain part of the realistic slippage
+range, meaning realized execution could land on either side of zero.
+That's a genuinely different, more actionable finding than "definitely
+dead, start over."
+
+**Revised methodology** (`backtesting/engine/costs.py`,
+`WorstCaseCryptoCosts` docstring updated, default value unchanged
+pending explicit confirmation): use `round_trip_pct` for two different
+questions, not one blanket number --
+1. **Typical-case validation** (does this have real edge worth
+   pursuing?): ~0.002-0.003 (0.2-0.3%), informed by the research above.
+2. **Stress test** (does it survive a bad day -- illiquid alt, news
+   spike, thin book?): 0.02 (2%), kept as an occasional ceiling check,
+   not the everyday bar.
+
+### Still open
+- Real fill/slippage data remains the one thing that would actually
+  resolve the uncertainty (Phase 6E's original ask) -- the research here
+  narrows the plausible range, it doesn't replace a measurement.
+- TradeLocker/GFT spread data for NAS100/US30/SPX500 specifically is
+  still unverified -- only category-level ("raw spreads," "$0 commission
+  on indices") statements found, no point-spread numbers.
+- `CryptoCosts.taker_fee` default (0.0004) vs. the verified real rate
+  (0.0005) -- flagged, not yet corrected.
+- Whether to re-adopt XRP/TrIct (min_stop_pct=0.25) as a live candidate
+  given its ~0.35% breakeven sits inside, not outside, the realistic
+  cost range -- needs either real fill data or a conservative decision
+  from the user on how much margin above breakeven is required before
+  risking capital.

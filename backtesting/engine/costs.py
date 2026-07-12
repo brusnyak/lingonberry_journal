@@ -250,28 +250,46 @@ class CryptoCosts(CostModel):
 @dataclass
 class WorstCaseCryptoCosts(CryptoCosts):
     """
-    Stress-test cost model: applies a fixed, deliberately punishing adverse
-    slippage on every fill, on top of normal fees/funding.
+    Adverse-slippage cost model: applies a fixed round-trip slippage
+    assumption on every fill, on top of normal fees/funding. `round_trip_pct`
+    is configurable per-use; there is no single "right" value -- pick based
+    on what question you're asking (see below).
 
-    Why this exists: chasing real fill/slippage data from live/testnet
-    trading is slow and depends on infrastructure this project doesn't have
-    yet. Rather than block strategy development on that, or ignore
-    execution cost entirely, `round_trip_pct` bakes in a fixed worst-case
-    assumption up front -- a strategy has to be designed to survive it BY
-    CONSTRUCTION (wide-enough stops, high-enough R:R, good win rate), not
-    validated against it after the fact. Use this as the DEFAULT cost model
-    for new strategy development, not an occasional sensitivity check.
+    Real research, 2026-07-12 (see CLEAN.md Phase 9 for full sourcing):
+    fees are well-established and small -- Binance USDT-M, BingX Perpetual
+    Futures, and Kraken Futures all confirmed at 0.02% maker / 0.05% taker
+    at base tier (no VIP, which is what a $50-300 account actually sits
+    at) -- consistent across all three, verified via official fee pages.
+    Slippage has no single published number (inherently market-condition-
+    dependent) but a credible estimate for retail market orders into thin
+    liquidity is 0.1-0.5%; liquid majors (BTC/ETH/XRP on Binance/BingX) at
+    the small notional sizes this account trades ($20-400) should sit
+    toward the low end of that range, though this has NOT been confirmed
+    against real fills.
 
-    round_trip_pct=0.02 (the default, and the number this project has
-    settled on 2026-07-06): total adverse slippage across entry + exit
-    combined is 2% of price -- split evenly, so each fill gets
-    round_trip_pct/2 adverse movement on top of normal fees. This is
-    brutal on purpose: TrIct's median stop (0.26% of price) is roughly
-    8x smaller than this cost alone, meaning any strategy with stops that
-    tight cannot survive this model regardless of directional skill --
-    that's the point. A strategy has to have structural (not tight
-    scalp-buffer) stops, wide enough that a 2%-of-price tax is a small
-    fraction of the risk being taken, to pass this bar at all.
+    **Use round_trip_pct in two different ways depending on the question:**
+    - **Typical-case validation** (does this strategy have real edge worth
+      pursuing?): use something in the researched realistic range, e.g.
+      0.002-0.003 (0.2-0.3%). This is the number that should gate whether
+      a strategy is worth further work.
+    - **Stress test** (does this strategy survive a bad day -- illiquid alt,
+      news spike, thin book?): use round_trip_pct=0.02 (2%), the number
+      this project used as a blanket DEFAULT on 2026-07-06. That was later
+      found to be an overcorrection when used as the everyday validation
+      bar rather than an occasional ceiling check: applied uniformly to
+      every trade, it made TrIct/XRP (the one strategy that passed every
+      other validation check) look catastrophically dead (-42.86%) when
+      its ACTUAL breakeven is ~0.35% round-trip -- right at the edge of
+      the realistic range, not deep inside the "definitely dead" zone. A
+      2% blanket assumption is ~6x the credible realistic ceiling; treat
+      it as a tail-risk check on an already-promising strategy, not the
+      first-pass filter for whether a strategy has edge at all.
+
+    Default kept at 0.02 (2026-07-06 value) pending an explicit decision
+    on whether to change it (2026-07-12: flagged as likely too harsh for
+    everyday validation, not yet changed) -- pass round_trip_pct
+    explicitly rather than relying on the default for either use case
+    above, since which one you want depends on the question being asked.
 
     Applies adversely on BOTH TP and SL exits (not just stop-outs) --
     real slippage doesn't spare winners, and a genuine worst-case
