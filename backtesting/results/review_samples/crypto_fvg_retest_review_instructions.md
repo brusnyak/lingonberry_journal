@@ -1,5 +1,57 @@
 # Crypto FVG Retest UI Review
 
+## Portfolio Candidate Packet
+
+New focused sample file:
+
+- `backtesting/results/review_samples/crypto_portfolio_candidate_review_samples.csv`
+
+Use the `/review` page, select one of the crypto symbols below, and click
+`LOAD PORTFOLIO CANDIDATE REVIEW`.
+
+This packet is the current best bucket plus rejects:
+
+- accepted winners;
+- accepted losers;
+- rejected stale retests;
+- rejected no-confirmation setups;
+- rejected portfolio-throttle setups.
+
+Current best bucket:
+
+- entry: `structure_confirmed_fvg_top_retest`;
+- target: `fixed_1_5r`;
+- management: `partial_1r_be`.
+
+Review goal:
+
+1. Check if accepted winners are genuinely valid before outcome.
+2. Check if accepted losers are acceptable variance or structural mistakes.
+3. Check if stale retest rejects should stay rejected.
+4. Check if no-confirmation rejects are truly missing structure.
+5. Check if portfolio-throttle rejects are redundant clustered trades or trades
+   worth overriding.
+
+Suggested labels:
+
+- `good`: accepted trade or rejection decision is structurally correct.
+- `bad`: accepted trade should have been rejected, or rejected trade should have
+  been accepted.
+- `skip`: ambiguous/hindsight-contaminated.
+
+Useful note tags:
+
+- `[accept_valid]`
+- `[accept_bad_direction]`
+- `[accept_bad_entry]`
+- `[reject_correct]`
+- `[reject_wrong]`
+- `[stale_valid]`
+- `[no_confirmation_valid]`
+- `[portfolio_override]`
+
+## Older Retest Packet
+
 Sample file:
 
 - `backtesting/results/review_samples/crypto_fvg_retest_review_samples.csv`
