@@ -138,8 +138,6 @@ def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) 
                 continue
             # Merge: legacy has older data, exchange has newer data
             df = pd.concat([df, exch_df], ignore_index=True)
-            df = df.drop_duplicates(subset=["ts"], keep="last")
-            df = df.sort_values("ts").reset_index(drop=True)
         except Exception:
             continue
 
@@ -151,6 +149,19 @@ def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) 
                 df = pd.read_parquet(old_path)
             except Exception:
                 pass
+
+    # Dedup/sort unconditionally -- NOT just as a side effect of merging in an
+    # exchange-scoped file above. Bug found 2026-07-12: when no exchange file
+    # exists for a symbol/TF (e.g. XRPUSDT30 has no binance/bybit-scoped file,
+    # only legacy), this used to skip entirely, so duplicate timestamps already
+    # present WITHIN the legacy file (42 found in XRPUSDT30 around 2022-05-13,
+    # a real data-source glitch, not caused by the merge) passed straight
+    # through unfiltered -- eventually crashing TrIct's `next()` since
+    # `df.index.get_loc(ts)` returns a slice instead of a scalar int when the
+    # index has duplicate values, and `next()` assumes a scalar.
+    if not df.empty:
+        df = df.drop_duplicates(subset=["ts"], keep="last")
+        df = df.sort_values("ts").reset_index(drop=True)
 
     return df
 
