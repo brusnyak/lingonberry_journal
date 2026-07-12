@@ -2555,3 +2555,80 @@ questions, not one blanket number --
   cost range -- needs either real fill data or a conservative decision
   from the user on how much margin above breakeven is required before
   risking capital.
+
+## Phase 10 -- Margin-of-safety re-audit on TRUE full history: unanimous fail, reverses Phase 6-9's "validated" call
+
+User rejected near-breakeven as a deployment bar (correct) and set concrete targets
+instead: `worst_max_dd_pct` < 2% and `median_return_pct` >= ~6% per 30-day window at
+typical cost (~0.25% round-trip), survive-without-ruin at 2% stress, and healthy
+per-trade R:R rather than edge from pure high-win-rate-on-small-wins. Plan approved
+(`/Users/yegor/.claude/plans/spicy-spinning-patterson.md`), workstream A executed:
+re-run XRP/DOGE/ETH TrIct at `window_days=30` and `60`, both cost levels, using
+`rolling_window_return_stats`.
+
+### A real data bug found and fixed first
+First attempt crashed: `TypeError: unsupported operand type(s) for -: 'int' and
+'slice'` in `ict.py`'s `next()`, from `self._df30.index.get_loc(sweep_time)` -- caused
+by 42 duplicate-timestamp rows in XRPUSDT's legacy 30m parquet (a real glitch around
+2022-05-13, not caused by our merge logic). Root cause: `_load_from_crypto_dir`
+(`backtesting/crypto/data.py`) only called `drop_duplicates` as a side effect of the
+legacy+exchange merge loop -- when no exchange-scoped file exists for a symbol/TF
+(true for XRPUSDT30: no binance/bybit-scoped file, only legacy), the loop body never
+ran, so the legacy file's own internal duplicates passed straight through unfiltered.
+Fixed: dedup now runs unconditionally after all three load steps. Verified zero
+duplicate timestamps across all 6 core pairs. 280 tests passing. Committed `6bf4555`.
+
+### The results, on TRUE full history (not the ~13-month slice used in Phase 6-9)
+
+| Config | Bars | Span | typical @30d: mean_R / med_ret / %pos / worst_dd | typical @60d | stress(2%) @30d |
+|---|---|---|---|---|---|
+| XRP (min_stop=0.25) | 99,965 | 2020-02 to 2026-06 (~6.4y) | -0.12 / +0.00% / **10%** / 3.78% | -0.12 / +0.00% / 14% / 4.39% | wr=4%, breach=2%, dd=19.80% |
+| DOGE (min_stop=0.25) | 100,000 | 2020-08 to 2026-07 (~5.9y) | -0.04 / +0.00% / **36%** / 4.28% | -0.04 / +0.00% / 46% / 4.28% | wr=3%, breach=2%, dd=11.86% |
+| ETH (min_stop=0.25) | 155,248 | 2017-08 to 2026-07 (~8.9y) | -0.20 / +0.00% / **3%** / 2.05% | -0.20 / +0.00% / 6% / 2.15% | (run stalled, see perf bug below) |
+
+**Unanimous, decisive fail against every part of the bar, for all three pairs:**
+- `median_return_pct` is ~0.00% at typical cost for all three -- nowhere near the
+  ≥6%/30d target.
+- `mean_R` is **negative** for all three (-0.12, -0.04, -0.20) -- the average trade
+  loses money net of typical costs, over the true full history. Not marginal.
+- `pct_windows_positive` is 3-46% -- meaning most 30-60 day stretches would be flat or
+  losing, the opposite of "decent, reliable" return.
+- `worst_max_dd_pct` already exceeds the 2% cap at typical cost for XRP and DOGE
+  (3.78%, 4.28%) before even reaching the stress test.
+- At 2% stress cost, all three go deeply negative with real breach rates (2-5%) --
+  fails the survive-without-ruin check too, not just the return target.
+
+### This reverses Phase 6-9's "XRP/DOGE validated" call -- and explains why
+Phase 6D/6G's split-half stability checks and null tests were run on `days=400`
+(~13 months), which I had been calling "full history" -- it wasn't; XRP/DOGE actually
+have 6+ years on disk. The apparent edge in that recent 13-month slice does not
+generalize to the true 6-9 year span (negative mean R-multiple, 3-46% window-positive
+rate). This is the exact same failure pattern this project has already caught twice
+before on other strategies (TSMOM/SOL, FundingMeanRev/XRP: looks real on a short/recent
+window, dies on the full history) -- except this time it happened to the one result
+that had passed every other check. The lesson generalizes: **"full history" claims
+must be checked against the actual on-disk date range, not assumed from a `days=N`
+parameter that happened to be smaller than what's available.**
+
+### A second, separate performance bug found (real, unfixed)
+The ETH run stalled before completing the stress-cost test or the unfiltered variant.
+Profiled at `days=730` (48.7s total): `swing_points()` (`structure_lib/swing.py`)
+alone consumes 16.3s of `init()`'s 25s, and `next()`'s per-bar calls
+(`_build_signal`, `_detect_sweeps_at_bar`) show heavy pandas `.iloc`/`__getitem__`
+overhead (hundreds of thousands of individual row-accessor calls) rather than
+pre-extracted numpy arrays. Empirical scaling: 365d=9.5s, 730d=30.6s (3.2x for 2x
+data), 1460d=73.5s (2.4x for 2x data again) -- confirmed worse-than-linear, and
+different from the O(n²) sweep-detection bug already fixed earlier this session (that
+fix addressed `next()`'s per-bar pool-scanning; this is `swing_points()` itself plus
+inefficient row access elsewhere). Not fixed yet -- flagged, since it blocked
+completing the ETH stress/unfiltered runs and would matter again for any future 30m
+full-history work, though it matters much less for a 4h/1d pivot (a 9-year span is
+~19,700 4h bars or ~3,285 daily bars, vs. 155,248 30m bars -- an 8-47x reduction in
+bar count alone).
+
+### Verdict and next step (per the approved plan)
+No current crypto candidate clears the bar. Per the plan, this does NOT trigger
+workstream D (nothing to combine) -- it's the trigger condition for workstream F
+(contingent 4h/1d signal research), which the plan explicitly flags as a real time
+investment needing an explicit user go-ahead before starting, not something to launch
+into automatically off this result.
