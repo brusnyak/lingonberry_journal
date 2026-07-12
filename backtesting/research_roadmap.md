@@ -108,6 +108,8 @@ Known gaps:
   solve target/expiry quality by itself.
 - The first decent target/risk bucket exists, but still needs portfolio
   throttling and walk-forward validation before strategy promotion.
+- The first portfolio-throttled candidate survived, but live/funded deployment
+  is still blocked by execution walk-forward and demo/paper validation.
 
 ## Event Atlas
 
@@ -253,6 +255,36 @@ Target/risk execution checkpoint on 2026-07-12:
 - Verdict: first decent candidate. Not deployable yet. Use `0.10%-0.15%`
   risk/trade for low-DD research; `0.25%` is too aggressive for the stated
   drawdown target.
+
+Portfolio-layer checkpoint on 2026-07-12:
+
+- Bucket tested:
+  - entry: `structure_confirmed_fvg_top_retest`;
+  - target: `fixed_1_5r`;
+  - management: `partial_1r_be`;
+  - candidates: `185`.
+- Conservative setting:
+  - risk/trade: `0.15%`;
+  - max open: `3`;
+  - max open per symbol: `1`;
+  - daily loss cap: `0.75%`;
+  - accepted trades: `78`;
+  - return: `+4.17%`;
+  - max DD: `0.65%`;
+  - daily max DD: `0.59%`;
+  - PF: `2.50`.
+- Better research setting under `2%` DD:
+  - risk/trade: `0.20%`;
+  - max open: `6` or uncapped after symbol cap;
+  - max open per symbol: `1`;
+  - daily loss cap: `0.50%`;
+  - accepted trades: `96-98`;
+  - return: about `+7.7%` to `+8.2%`;
+  - max DD: about `1.26%`;
+  - PF: about `2.8-2.9`.
+- Verdict: candidate survives portfolio throttling. It is now worth manual
+  review plus execution walk-forward. It is still not ready for live cTrader or
+  funded-account deployment.
 
 Full active crypto universe validation on 2026-07-12:
 
