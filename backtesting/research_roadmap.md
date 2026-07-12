@@ -286,6 +286,25 @@ Portfolio-layer checkpoint on 2026-07-12:
   review plus execution walk-forward. It is still not ready for live cTrader or
   funded-account deployment.
 
+Manual portfolio-candidate review checkpoint on 2026-07-12:
+
+- Reviewed labels so far: `17` across `LINKUSDT` and `XRPUSDT`.
+- Labels: `9` good, `4` bad, `1` skip, `3` note-only.
+- Accepted winners reviewed so far are visually credible: `4/4` good.
+- Rejected no-confirmation examples are correctly rejected so far: `3/3` bad.
+- Stale-retest filter is too blunt: several stale rejects were marked good or
+  note-only.
+- Portfolio throttle is also blunt: `2` reviewed throttle rejects were marked
+  good.
+- Accepted losers show the next missing layer:
+  - some are real direction/confirmation failures;
+  - some need better management once price has moved about `50%` toward target.
+- Screenshot/review finding: large displacement or price shock must become an
+  explicit market-state feature. The engine must not treat violent moves as if
+  normal FVG retest logic still applies unchanged.
+- Next priority: implement causal displacement/follow-through state, then test
+  BE-after-`0.5R` / runner management variants before ML.
+
 Full active crypto universe validation on 2026-07-12:
 
 - Scope: 14 symbols, Binance+Bybit, `15m`, `60d`.
