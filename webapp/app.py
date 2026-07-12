@@ -1669,7 +1669,7 @@ def _review_asset_type(symbol: str) -> str:
         return "commodity"
     if symbol in ("NAS100", "US100", "USATECHIDXUSD"):
         return "index"
-    if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT", "ETHUSDT", "DOGEUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT"):
+    if symbol.endswith("USDT") or symbol in ("BTCUSD", "ETHUSD"):
         return "crypto"
     return "forex"
 
@@ -2679,19 +2679,23 @@ def api_review_ict_events():
             event_ts = pd.Timestamp(row["ts"])
             candle_i = int((df["ts"] - event_ts).abs().idxmin())
             candle = df.iloc[candle_i]
-            entry = float(candle["close"])
+            entry = float(row.get("entry_price") if "entry_price" in row and pd.notna(row.get("entry_price")) else candle["close"])
             risk = float(row.get("risk_price") or 0.0)
             if risk <= 0:
                 continue
             is_long = str(row.get("direction", direction)).lower() == "long"
-            sl = entry - risk if is_long else entry + risk
-            tp = entry + target_r * risk if is_long else entry - target_r * risk
+            sl = float(row.get("sl") if "sl" in row and pd.notna(row.get("sl")) else (entry - risk if is_long else entry + risk))
+            tp = float(row.get("tp1") if "tp1" in row and pd.notna(row.get("tp1")) else (entry + target_r * risk if is_long else entry - target_r * risk))
             exit_ts = event_ts + pd.Timedelta(minutes=int(tf) * 24 if tf.isdigit() else 120)
             outcome = float(row.get(outcome_col, 0.0))
             hit = bool(row.get(hit_col, False))
             label_bits = [str(row.get("predictor", predictor)), str(row.get("session", session))]
             if "review_bucket" in row and pd.notna(row.get("review_bucket")):
                 label_bits.insert(0, str(row.get("review_bucket")))
+            if "entry_model" in row and pd.notna(row.get("entry_model")):
+                label_bits.append(str(row.get("entry_model")))
+            if "management_model" in row and pd.notna(row.get("management_model")):
+                label_bits.append(str(row.get("management_model")))
             trades_json.append(
                 {
                     "id": idx + 1,

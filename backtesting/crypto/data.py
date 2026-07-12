@@ -102,26 +102,44 @@ def _slice_days(df: pd.DataFrame, days: int) -> pd.DataFrame:
 # ── Loaders ───────────────────────────────────────────────────────────────────
 
 
-def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) -> pd.DataFrame:
+def _load_from_crypto_dir(
+    symbol: str,
+    tf: str,
+    exchange: Optional[str] = None,
+    source: str = "merged",
+) -> pd.DataFrame:
     """
-    Merge legacy + exchange-scoped OHLCV for maximum history.
+    Load crypto OHLCV from exchange-scoped, legacy, or merged storage.
 
-    Legacy has the deepest history (5+ years for most pairs). Exchange-scoped
-    files may have more recent bars. We load both and merge (dedup by ts),
-    which gives a single DataFrame with the full span: deep past from legacy +
-    latest bars from exchange.
+    source:
+      - "exchange": only data/market_data/crypto/{exchange}/...
+      - "legacy": only data/market_data/crypto/legacy/...
+      - "merged": legacy + exchange-scoped data, deduplicated by timestamp.
+
+    Use "exchange" for exchange-comparison research. Use "merged" only for
+    broad historical exploration where provenance mixing is acceptable.
     """
+    if source not in {"exchange", "legacy", "merged"}:
+        raise ValueError(f"Unknown crypto source: {source}")
+
     df = pd.DataFrame()
 
-    # 1. Legacy first — deepest history
-    legacy_path = DATA_DIR / "crypto" / "legacy" / f"{symbol}{tf}.parquet"
-    if legacy_path.exists():
-        try:
-            df = pd.read_parquet(legacy_path)
-        except Exception:
-            pass
+    # 1. Legacy first when requested -- deepest history.
+    if source in {"legacy", "merged"}:
+        legacy_path = DATA_DIR / "crypto" / "legacy" / f"{symbol}{tf}.parquet"
+        if legacy_path.exists():
+            try:
+                df = pd.read_parquet(legacy_path)
+            except Exception:
+                pass
 
-    # 2. Exchange-scoped — may have more recent bars
+    if source == "legacy":
+        if not df.empty:
+            df = df.drop_duplicates(subset=["ts"], keep="last")
+            df = df.sort_values("ts").reset_index(drop=True)
+        return df
+
+    # 2. Exchange-scoped.
     exchange_paths: list[Path] = []
     if exchange:
         exchange_paths.append(DATA_DIR / "crypto" / exchange.lower() / f"{symbol}{tf}.parquet")
@@ -136,13 +154,15 @@ def _load_from_crypto_dir(symbol: str, tf: str, exchange: Optional[str] = None) 
             exch_df = pd.read_parquet(path)
             if exch_df.empty:
                 continue
-            # Merge: legacy has older data, exchange has newer data
+            if source == "exchange":
+                df = exch_df
+                break
             df = pd.concat([df, exch_df], ignore_index=True)
         except Exception:
             continue
 
-    # 3. data/parquet/crypto fallback (BTCUSD, ETHUSD, etc.)
-    if df.empty:
+    # 3. data/parquet/crypto fallback (BTCUSD, ETHUSD, etc.) for merged mode.
+    if df.empty and source == "merged":
         old_path = PARQUET_DIR / "crypto" / f"{symbol}{tf}.parquet"
         if old_path.exists():
             try:
@@ -227,6 +247,7 @@ def load_crypto(
     start: Optional[str | datetime] = None,
     end: Optional[str | datetime] = None,
     exchange: Optional[str] = None,
+    source: Optional[str] = None,
     resample: bool = True,
 ) -> pd.DataFrame:
     """
@@ -239,12 +260,15 @@ def load_crypto(
     days : int      — recent N days (0 = all)
     start / end     — date range override
     exchange        — 'binance', 'bybit', or None to try both
+    source          — 'exchange', 'legacy', or 'merged'. Defaults to
+                      'exchange' when exchange is explicit, otherwise 'merged'.
     resample        — fall back to resampling from 1m if exact TF missing
     """
     symbol = symbol.upper()
-    df = _load_from_crypto_dir(symbol, tf, exchange=exchange)
+    source = source or ("exchange" if exchange else "merged")
+    df = _load_from_crypto_dir(symbol, tf, exchange=exchange, source=source)
     if df.empty and resample:
-        df_1m = _load_from_crypto_dir(symbol, "1", exchange=exchange)
+        df_1m = _load_from_crypto_dir(symbol, "1", exchange=exchange, source=source)
         if not df_1m.empty:
             df = _resample_to_tf(df_1m, tf)
 

@@ -22,6 +22,7 @@ import numpy as np
 from backtesting.engine.costs import CryptoCosts
 from backtesting.engine.data import load_data, load_funding_rate
 from backtesting.engine.runner import run
+from backtesting.crypto.data_quality import require_funding_coverage
 
 # ── Strategies (only clean ones for audit) ──
 from backtesting.crypto.strategies.bos_fade import TrBosFade
@@ -59,7 +60,8 @@ def _load_market_specs(pair: str, exchange: str = "binance") -> dict:
 
 
 def run_one(strategy_cls, pair: str, entry_tf: str, support_tfs: list[str],
-            days: int, params: dict, equity: float = 20.0, leverage: float = 50.0) -> dict:
+            days: int, params: dict, equity: float = 20.0, leverage: float = 50.0,
+            allow_stale_funding: bool = False) -> dict:
     try:
         tfs = list(dict.fromkeys([entry_tf] + support_tfs))
         data = {}
@@ -71,6 +73,8 @@ def run_one(strategy_cls, pair: str, entry_tf: str, support_tfs: list[str],
             data[tf] = df
 
         funding_df = load_funding_rate(pair, exchange="binance")
+        if not allow_stale_funding:
+            require_funding_coverage(data, funding_df)
         specs = _load_market_specs(pair)
         costs = CryptoCosts(
             leverage=leverage,
@@ -120,8 +124,9 @@ def run_nonoverlapping(strategy_cls, name: str, strategy_params: dict,
                 days = start_offset  # use the full span for data loading
                 result = run_one(
                     strategy_cls, pair, entry_tf, support_tfs,
-                    days=days, params=strategy_params,
-                    equity=equity, leverage=leverage,
+                        days=days, params=strategy_params,
+                        equity=equity, leverage=leverage,
+                        allow_stale_funding=False,
                 )
                 result["window"] = label
                 result["window_start_ago"] = start_offset

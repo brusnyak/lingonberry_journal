@@ -123,6 +123,14 @@
         <option value="BTCUSDT">BTCUSDT</option>
         <option value="SOLUSDT">SOLUSDT</option>
         <option value="BNBUSDT">BNBUSDT</option>
+        <option value="LINKUSDT">LINKUSDT</option>
+        <option value="AAVEUSDT">AAVEUSDT</option>
+        <option value="SUIUSDT">SUIUSDT</option>
+        <option value="AVAXUSDT">AVAXUSDT</option>
+        <option value="WLDUSDT">WLDUSDT</option>
+        <option value="NEARUSDT">NEARUSDT</option>
+        <option value="1000PEPEUSDT">1000PEPEUSDT</option>
+        <option value="HYPEUSDT">HYPEUSDT</option>
       </select>
     </div>
     <div>
@@ -202,6 +210,7 @@
     </div>
     <button id="run-btn" onclick="runBacktest()">▶ RUN BACKTEST</button>
     <button id="gold-events-btn" onclick="loadGoldEvents()">LOAD GOLD ICT EVENTS</button>
+    <button id="crypto-events-btn" onclick="loadCryptoRetestEvents()" style="grid-column:1/-1;background:#047857;color:#fff;border:none;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">LOAD CRYPTO RETEST EVENTS</button>
   </div>
 
   <div id="stats"></div>
@@ -462,6 +471,58 @@ async function loadGoldEvents() {
         direction: 'short',
         target: '1.5r',
         limit: 50,
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) { alert(data.error + '\n' + (data.trace||'')); return; }
+
+    trades = data.trades || [];
+    allCandles = data.candles || [];
+    structureData = data.structure || { pivots: [], bos_events: [] };
+    userLabels = {};
+    if (drawingEngine) drawingEngine.setCandles(allCandles);
+    renderStats(data.report);
+    renderTradeList();
+    if (trades.length > 0) showTrade(0);
+  } catch(e) {
+    alert('Fetch error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    hideLoading();
+  }
+}
+
+async function loadCryptoRetestEvents() {
+  const btn = document.getElementById('crypto-events-btn');
+  btn.disabled = true;
+  const symbol = document.getElementById('cfg-symbol').value || 'LINKUSDT';
+  showLoading('Loading crypto FVG retest events…');
+
+  currentSymbol = symbol;
+  currentTf = '15';
+  currentStrategy = 'CryptoFvgRetestReview';
+  currentParams = {
+    source: 'crypto_fvg_retest_review_samples',
+    predictor: 'bearish_fvg_top_retest_partial_1r_be',
+    session: 'late_us',
+    direction: 'short',
+    target: '2r',
+  };
+  document.getElementById('cfg-tf').value = '15';
+
+  try {
+    const resp = await fetch('/api/review/ict-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol,
+        tf: '15',
+        predictor: 'bearish_fvg_top_retest_partial_1r_be',
+        session: 'late_us',
+        direction: 'short',
+        target: '2r',
+        limit: 12,
+        events_path: 'backtesting/results/review_samples/crypto_fvg_retest_review_samples.csv',
       }),
     });
     const data = await resp.json();

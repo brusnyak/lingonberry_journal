@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backtesting.crypto.data import load_market_specs
+from backtesting.crypto.data_quality import require_funding_coverage
 from backtesting.crypto.validation import RollingValidation, rolling_validate, print_validation_table
 from backtesting.engine.base import Strategy
 from backtesting.engine.costs import CryptoCosts
@@ -60,6 +61,7 @@ class CryptoRunConfig:
     days: Optional[int] = 30
     initial_equity: float = 20.0
     leverage: float = 50.0
+    allow_stale_funding: bool = False
     # Regime filter: if set, wrap strategy with RegimeGate
     regime_filter: Optional[list[str]] = None
     regime_tf: str = "240"
@@ -83,6 +85,8 @@ def _run_one_crypto(strategy_cls: Type[Strategy], cfg: CryptoRunConfig) -> dict:
 
         # Build CryptoCosts with funding rates + exchange market specs
         funding_df = load_funding_rate(cfg.pair, exchange=cfg.exchange)
+        if not cfg.allow_stale_funding:
+            require_funding_coverage(data, funding_df)
         if funding_df is not None and not funding_df.empty:
             data["funding"] = funding_df  # expose to strategies
         specs = _load_market_specs(cfg.pair, cfg.exchange)
@@ -160,6 +164,7 @@ def make_crypto_configs(
     initial_equity: float = 20.0,
     leverage: float = 50.0,
     default_risk_pct: float | None = None,
+    allow_stale_funding: bool = False,
 ) -> list[CryptoRunConfig]:
     if entry_tfs is None:
         entry_tfs = ["5", "15"]
@@ -189,6 +194,7 @@ def make_crypto_configs(
             days=days,
             initial_equity=initial_equity,
             leverage=leverage,
+            allow_stale_funding=allow_stale_funding,
         ))
     return configs
 
@@ -254,6 +260,10 @@ def run_crypto_sweep(
     df = pd.DataFrame(rows)
     if df.empty:
         return df
+
+    for col in ("trades", "profit_factor"):
+        if col not in df.columns:
+            df[col] = 0
 
     # Sort: errors last, then by profit_factor descending
     has_edge = df["error"].isna() & (df.get("trades", 0) >= min_trades)
@@ -329,6 +339,8 @@ def main():
                         help="Leverage")
     parser.add_argument("--risk-pct", type=float, default=None,
                         help="Override risk_pct for all strategies (e.g. 0.05 for 5%%, scaling_plan default)")
+    parser.add_argument("--allow-stale-funding", action="store_true",
+                        help="Allow crypto runs when funding does not cover the OHLCV window")
     parser.add_argument("--validate", action="store_true",
                         help="Run rolling window validation on top results")
     parser.add_argument("--validate-window", type=int, default=60,
@@ -399,6 +411,7 @@ def main():
             cls, pairs=pairs, entry_tfs=tfs, exchanges=exchanges,
             days=args.days, initial_equity=args.equity, leverage=args.leverage,
             default_risk_pct=default_risk,
+            allow_stale_funding=args.allow_stale_funding,
         )
         if not configs:
             print("  No configs (strategy has no spaces or no pairs)")
@@ -428,6 +441,7 @@ def main():
                         exchange=row["exchange"], params=row.to_dict(),
                         days=args.days * 6,  # longer data for validation windows
                         initial_equity=args.equity, leverage=args.leverage,
+                        allow_stale_funding=args.allow_stale_funding,
                         regime_filter=regime_allowed,
                         regime_tf=args.regime_tf or "240",
                     )
@@ -467,6 +481,8 @@ def _validate_one(
         data[tf] = df
 
     funding_df = load_funding_rate(cfg.pair, exchange=cfg.exchange)
+    if not cfg.allow_stale_funding:
+        require_funding_coverage(data, funding_df)
     specs = _load_market_specs(cfg.pair, cfg.exchange)
     costs = CryptoCosts(
         leverage=cfg.leverage,

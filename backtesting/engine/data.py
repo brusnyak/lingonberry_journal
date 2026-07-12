@@ -286,6 +286,7 @@ def load_data(
     end: Optional[str | datetime] = None,
     asset_type: Optional[str] = None,
     exchange: Optional[str] = None,
+    crypto_source: Optional[str] = None,
     resample: bool = True,
     allow_oos: bool = False,
 ) -> pd.DataFrame:
@@ -310,6 +311,9 @@ def load_data(
     exchange : str, optional
         Crypto exchange namespace ('binance' or 'bybit'). If omitted, loader
         checks exchange-scoped crypto data first, then legacy flat crypto files.
+    crypto_source : str, optional
+        Crypto source policy: 'exchange', 'legacy', or 'merged'. Defaults to
+        'exchange' when exchange is explicit, otherwise 'merged'.
     resample : bool
         If True and exact TF not available, resample from lower TF.
 
@@ -321,12 +325,13 @@ def load_data(
 
     # ── Load from best available source ──
     df = pd.DataFrame()
+    crypto_source = crypto_source or ("exchange" if exchange else "merged")
 
     if asset_type == "crypto":
-        df = _load_from_crypto_dir(symbol, tf, exchange=exchange)
+        df = _load_from_crypto_dir(symbol, tf, exchange=exchange, source=crypto_source)
         if df.empty:
             # Try resampling from 1m
-            df_1m = _load_from_crypto_dir(symbol, "1", exchange=exchange)
+            df_1m = _load_from_crypto_dir(symbol, "1", exchange=exchange, source=crypto_source)
             if not df_1m.empty and resample:
                 df = _resample_to_tf(df_1m, tf)
     elif asset_type == "forex":
@@ -363,7 +368,7 @@ def load_data(
         # Auto-detect: try each source in order
         for loader in [
             lambda: _load_from_flat_parquet(symbol, tf),
-            lambda: _load_from_crypto_dir(symbol, tf, exchange=exchange),
+            lambda: _load_from_crypto_dir(symbol, tf, exchange=exchange, source=crypto_source),
             lambda: _load_from_forex_dir(symbol, tf),
             lambda: _load_from_index_dir(symbol, tf),
             lambda: _load_from_commodity_dir(symbol, tf),
@@ -377,7 +382,7 @@ def load_data(
             for lower_tf in ["1", "5"]:
                 for loader in [
                     lambda: _load_from_flat_parquet(symbol, lower_tf),
-                    lambda: _load_from_crypto_dir(symbol, lower_tf, exchange=exchange),
+                    lambda: _load_from_crypto_dir(symbol, lower_tf, exchange=exchange, source=crypto_source),
                     lambda: _load_from_commodity_dir(symbol, lower_tf),
                 ]:
                     df_lower = loader()
@@ -423,26 +428,33 @@ def list_pairs(asset_type: Optional[str] = None) -> list[str]:
             if f.name.endswith("_funding.parquet") or f.name == "market_specs.parquet":
                 continue
             name = f.stem
-            while name and name[-1].isdigit():
-                name = name[:-1]
-            if len(name) >= 3:
-                found.add(name)
+            for tf in ("1440", "240", "60", "30", "15", "5", "3", "1"):
+                if name.endswith(tf):
+                    symbol = name[: -len(tf)]
+                    if len(symbol) >= 3:
+                        found.add(symbol)
+                    break
         return found
 
-    # Forex
-    pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "forex" / "parquet")
+    asset_type = asset_type.lower() if asset_type else None
+    if asset_type in {"indices", "indexes"}:
+        asset_type = "index"
+    if asset_type not in {None, "forex", "crypto", "index", "commodity"}:
+        raise ValueError(f"Unknown asset_type: {asset_type}")
 
-    # Crypto — exchange-scoped + legacy
-    if (DATA_DIR / "crypto").exists():
+    if asset_type in {None, "forex"}:
+        pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "forex" / "parquet")
+
+    if asset_type in {None, "crypto"} and (DATA_DIR / "crypto").exists():
         for ex in CRYPTO_EXCHANGES:
             pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "crypto" / ex)
         pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "crypto" / "legacy")
 
-    # Indices
-    pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "index" / "parquet")
+    if asset_type in {None, "index"}:
+        pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "index" / "parquet")
 
-    # Commodities
-    pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "commodity" / "parquet")
+    if asset_type in {None, "commodity"}:
+        pairs |= _extract_pairs_from_parquet_dir(DATA_DIR / "commodity" / "parquet")
 
     return sorted(pairs)
 
