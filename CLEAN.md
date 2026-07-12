@@ -2640,3 +2640,76 @@ workstream D (nothing to combine) -- it's the trigger condition for workstream F
 (contingent 4h/1d signal research), which the plan explicitly flags as a real time
 investment needing an explicit user go-ahead before starting, not something to launch
 into automatically off this result.
+
+## Phase 11 -- Workstream F: daily-timeframe research, real academic grounding, mostly debunked by null test
+
+User approved workstream F. Researched first rather than reused/reinvented (matching
+this project's own ORB precedent -- evidence-based, not intuition-based): time-series
+momentum / trend-following in crypto has genuine academic support (arxiv 2009.12155,
+"A Decade of Evidence of Trend Following Investing in Cryptocurrencies"; an AUT paper
+on time-series vs. cross-sectional crypto momentum), and daily/4h timeframes are
+consistently recommended specifically because they permit the wider stops crypto's
+volatility needs -- directly aligned with Phase 10's "need several-%-of-price stops"
+finding. Flagged one red flag explicitly: a "255% annualized" figure from one source
+had no stated cost/slippage adjustment -- not trusted at face value, consistent with
+this project's standing skepticism of unadjusted backtest claims.
+
+**Reused existing code rather than building new**: `CryptoTsmomBreakout`
+(Donchian/Turtle-style breakout, already in `backtesting/crypto/strategies/
+tsmom_breakout.py`) tested at DAILY timeframe (previously only tested hourly, where it
+was found to be a coin-flip on SOL) with much wider ATR stops (`stop_atr_mult=3.0-4.0`
+vs. the hourly test's 2.0). Needed the same data-gap fix as before: BTC/ETH/BNB had no
+legacy 1440m file (~1yr only from the exchange-scoped file); resampled from the deep
+legacy 60m data (2017-2026) the same way the 30m gap was closed in Phase 8. All 6 core
+pairs now have 8-9 years of daily history. 280 tests still passing (no engine code
+changed, only new legacy parquet files, gitignored).
+
+### The screen looked universally positive -- misleadingly
+`entry_len=20, stop_atr_mult=3.0`, typical cost (~0.25% round-trip), all 6 pairs:
+every single pair showed positive mean R-multiple (+0.35 to +0.77) and positive total
+return (13-37%), with genuinely wide stops (13-21% of price -- cost-fragility is a
+non-issue at this width) and low worst DD (1.0-2.0%, comfortably under the 2% target).
+But `median_return_pct` was flat at 0.00% with only 24-30% of rolling 30-day windows
+positive on every pair -- the classic trend-following signature: low win rate, most
+periods flat or slightly negative, profit concentrated in rare large trend moves. This
+alone is a real tension with "decent return in any given 30-day window," independent
+of whether the edge is even real.
+
+### The null test mostly debunks it
+30-seed random-direction null test (`make_random_dir_null`), same entry timing/exit
+structure, only direction randomized:
+
+| Pair | Real return | Null mean | Percentile |
+|---|---|---|---|
+| DOGE | +17.99% | +7.27% | **93rd** |
+| BTC | +36.88% | +30.43% | 83rd |
+| SOL | +23.99% | +18.24% | 80th |
+| ETH | +18.75% | +16.89% | 63rd |
+| XRP | +13.33% | +13.29% | **50th (exactly random)** |
+| BNB | +36.76% | +35.67% | **47th (below random)** |
+
+Most of the apparent "universal positive edge" from the screen is a structural
+artifact, not directional skill: the null itself is strongly positive on several pairs
+(BTC null mean +30%, BNB +36%) -- a wide-trailing-stop breakout structure with
+*either* direction tends to ride crypto's multi-year uptrend and capture volatility,
+regardless of whether the direction call itself has any skill. This is the same
+narrowing pattern that has killed nearly every promising-looking crypto lead in this
+project (TSMOM/SOL, FundingMeanRev/XRP, and now Phase 10's TrIct/XRP+DOGE on true full
+history): broad and positive on a raw screen, narrows to at most 1-2 pairs once
+properly null-tested.
+
+**Only DOGE (93rd percentile) shows a genuinely elevated result**; BTC/SOL are
+moderate (80-83rd, not compelling on their own); ETH/XRP/BNB show no real edge at all
+(XRP is exactly at the null median by construction; BNB is below it).
+
+### Standing verdict
+Not a validated cross-pair edge -- 1 pair out of 6 showing promise, after two
+strategies (TrIct, TSMOM/breakout) and two timeframe regimes (30m, daily) have now
+both narrowed to "at most 1-2 pairs, unconfirmed" rather than a broad, robust signal.
+DOGE alone is worth a split-half stability check before trusting it further (the same
+check applied to XRP/DOGE in Phase 6) -- but given Phase 10 just showed DOGE's earlier
+30m "validated" result did NOT survive a true full-history re-test, the prior on any
+single-pair result holding up under further scrutiny should be set low, not high.
+Flagging this explicitly rather than silently deciding: worth pursuing DOGE's
+split-half check, or is this the point to step back and reconsider whether crypto's
+viable universe for this specific margin-of-safety bar is simply narrower than hoped?
