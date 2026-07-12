@@ -1669,7 +1669,7 @@ def _review_asset_type(symbol: str) -> str:
         return "commodity"
     if symbol in ("NAS100", "US100", "USATECHIDXUSD"):
         return "index"
-    if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
+    if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT", "ETHUSDT", "DOGEUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT"):
         return "crypto"
     return "forex"
 
@@ -2309,12 +2309,12 @@ def api_review_run():
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from backtesting.engine.data import load_data
         from backtesting.engine.runner import run as bt_run
-        from backtesting.engine.costs import ForexCosts
+        from backtesting.engine.costs import ForexCosts, CryptoCosts
 
         load_kw = {}
         if symbol in ("XAUUSD", "XAGUSD"):
             load_kw["asset_type"] = "commodity"
-        if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
+        if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT", "ETHUSDT", "DOGEUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT"):
             load_kw["asset_type"] = "crypto"
 
         load_start = start
@@ -2359,8 +2359,18 @@ def api_review_run():
             from backtesting.crypto.strategies.ict import TrIct
             risk_pct = float(params.get("risk_pct", 0.005))
             min_rr   = float(params.get("min_rr", 1.5))
-            strat = TrIct(risk_pct=risk_pct, min_rr=min_rr, sessions_only=True)
-            costs = ForexCosts()
+            min_stop_pct = params.get("min_stop_pct")
+            # sessions_only=False and CryptoCosts (not ForexCosts -- pip-based
+            # spread is the wrong unit for a crypto price like $0.20 DOGE):
+            # this endpoint used to default both wrong. sessions_only=True is
+            # a forex-hours convention this project never validated as
+            # helpful for 24/7 crypto (see CLEAN.md); fixed 2026-07-12 while
+            # wiring this up for a real logic review, not a leftover default.
+            strat = TrIct(
+                risk_pct=risk_pct, min_rr=min_rr, sessions_only=False,
+                min_stop_pct=float(min_stop_pct) if min_stop_pct not in (None, "") else None,
+            )
+            costs = CryptoCosts(leverage=5.0)
         elif strategy == "Lvl1Trend":
             import numpy as np
             from backtesting.lvl1_trend.htf_ema_vwap import HtfEmaVwap
@@ -2752,7 +2762,7 @@ def api_review_candles():
         from backtesting.engine.data import load_data
 
         load_kw = {}
-        if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT"):
+        if symbol in ("BTCUSD", "ETHUSD", "ADAUSDT", "XRPUSDT", "ETHUSDT", "DOGEUSDT", "BTCUSDT", "SOLUSDT", "BNBUSDT"):
             load_kw["asset_type"] = "crypto"
 
         # Load a wide window, then slice around center
