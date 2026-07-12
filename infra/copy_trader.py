@@ -136,8 +136,11 @@ class PosSnapshot:
     take_profit: float | None = None
 
 
-def _snapshot_positions(tl, instrument_cache: dict, symbol_cache: dict) -> dict[int, PosSnapshot]:
+def _snapshot_positions(tl, instrument_cache: dict, symbol_cache: dict) -> dict[int, PosSnapshot] | None:
     """Fetch all open positions and return {position_id: PosSnapshot}.
+
+    Returns None if the API call failed (rate-limited). Returns {} if the
+    call succeeded but there are no positions. Callers must distinguish these.
 
     SL/TP comes from the position row directly (TLAPI includes stopLoss/takeProfit
     columns). No separate orders call needed — that halves API requests and avoids
@@ -147,10 +150,10 @@ def _snapshot_positions(tl, instrument_cache: dict, symbol_cache: dict) -> dict[
         df = tl.get_all_positions()
     except Exception as exc:
         log.error("get_all_positions failed: %s", exc)
-        return {}
+        return None  # None = API error (rate-limited)
 
     if df is None or (hasattr(df, "empty") and df.empty):
-        return {}
+        return {}  # empty dict = success, no positions
 
     result: dict[int, PosSnapshot] = {}
     for _, row in df.iterrows():
@@ -232,23 +235,38 @@ class CopyTrader:
         # Rate-limit backoff counter: incremented on skipped polls, reset on success
         self._backoff = 0
 
-    def _was_rate_limited(self, master_snap: dict, slave_snap: dict) -> bool:
-        """Check if either snapshot was rate-limited (empty while we had positions before)."""
-        if len(master_snap) == 0 and len(self._master_positions) > 0:
-            log.warning("Skip poll — master snapshot empty (likely rate-limited)")
-            return True
-        if len(slave_snap) == 0 and len(self._slave_positions) > 0:
-            log.warning("Skip poll — slave snapshot empty (likely rate-limited)")
-            return True
-        return False
 
     def poll(self):
-        """One poll cycle: detect opens, closes, modifications."""
+        """One poll cycle: detect opens, closes, modifications.
+
+        Uses get_account_state() as a canary (not rate-limited) to detect new
+        positions even when get_all_positions() is rate-limited.
+        """
+        # ── Check account state first — not rate-limited ──
+        m_cnt = s_cnt = 0
+        try:
+            m_state = self.master.get_account_state()
+            s_state = self.slave.get_account_state()
+            m_cnt = m_state.get("positionsCount", 0)
+            s_cnt = s_state.get("positionsCount", 0)
+        except Exception:
+            log.warning("Account state fetch failed, skipping poll")
+            self._backoff += 1
+            return
+
         new_master = _snapshot_positions(self.master, self._master_inst_cache, self._master_sym_cache)
         new_slave = _snapshot_positions(self.slave, self._slave_inst_cache, self._slave_sym_cache)
 
-        if self._was_rate_limited(new_master, new_slave):
+        # None = API call failed (rate-limited). Back off, try again later.
+        if new_master is None or new_slave is None:
+            log.warning("Rate-limited: master=%s slave=%s (positionsCount=%d/%d)",
+                        "FAIL" if new_master is None else "ok",
+                        "FAIL" if new_slave is None else "ok",
+                        m_cnt, s_cnt)
+            self._backoff += 1
             return
+
+        # Both snapshots succeeded (may be empty or have data) — proceed
 
         master_ids = set(new_master.keys())
         prev_master_ids = set(self._master_positions.keys())
@@ -320,6 +338,14 @@ class CopyTrader:
                 log.info("MODIFY MASTER #%s  SL: %s→%s  TP: %s→%s",
                          mid, prev.stop_loss, pos.stop_loss, prev.take_profit, pos.take_profit)
                 self._modify_on_slave(sid, pos.stop_loss, pos.take_profit)
+
+        # ── Resolve pending opens (link after deferred link step) ──
+        # Runs every cycle, retrying until the slave position is found.
+        if self._pending_opens:
+            for mid, mpos in list(self._master_positions.items()):
+                key = (mpos.symbol, mpos.side)
+                if key in self._pending_opens and mid not in self._master_to_slave:
+                    self._relink_to_slave(mid, mpos.symbol, mpos.side, new_slave)
 
         # ── Update state ──
         self._master_positions = new_master
@@ -443,25 +469,58 @@ class CopyTrader:
 
         # Initial sync: retry until we get a clean snapshot of both accounts.
         # Without this, existing positions look "new" on first successful poll → duplicates.
+        # Use get_account_state() first (not rate-limited) to check positionsCount.
+        # If both accounts are empty, we're done. If non-empty but get_all_positions
+        # is rate-limited (returns {}), back off and retry.
         log.info("Syncing current positions...")
         self._master_positions = {}
         self._slave_positions = {}
-        for attempt in range(1, 11):
+        initial_backoff = 0
+        while True:
+            try:
+                m_state = self.master.get_account_state()
+                s_state = self.slave.get_account_state()
+            except Exception:
+                # Account state failed — auth/connectivity issue, retry
+                initial_backoff += 1
+                delay = min(15 * (2 ** initial_backoff), 300)
+                log.warning("Account state fetch failed, retry in %ds...", delay)
+                time.sleep(delay)
+                continue
+
+            m_cnt = m_state.get("positionsCount", 0)
+            s_cnt = s_state.get("positionsCount", 0)
+
+            # Both empty — done
+            if m_cnt == 0 and s_cnt == 0:
+                log.info("Both accounts have 0 open positions")
+                break
+
+            # Positions exist — try to get their details
             mp = _snapshot_positions(self.master, self._master_inst_cache, self._master_sym_cache)
             sp = _snapshot_positions(self.slave, self._slave_inst_cache, self._slave_sym_cache)
+
+            # None = API rate-limited
+            if mp is None or sp is None:
+                initial_backoff += 1
+                delay = min(15 * (2 ** initial_backoff), 300)
+                log.warning("Initial sync retry in %ds — rate-limited", delay)
+                time.sleep(delay)
+                continue
+
+            # Got position details for both accounts
             if len(mp) > 0 and len(sp) > 0:
                 self._master_positions = mp
                 self._slave_positions = sp
                 break
-            log.warning("Initial sync attempt %d/10 — snapshots incomplete (master=%d, slave=%d), retrying...",
-                        attempt, len(mp), len(sp))
-            time.sleep(5)
-        else:
-            # After all retries, accept whatever we got
-            self._master_positions = mp
-            self._slave_positions = sp
-            log.warning("Initial sync exhausted retries — master=%d, slave=%d, continuing anyway",
-                        len(mp), len(sp))
+
+            # Snapshots returned empty despite positionsCount > 0 — race condition
+            # (position closed between account state check and positions call), retry.
+            initial_backoff += 1
+            delay = min(15 * (2 ** initial_backoff), 300)
+            log.warning("Initial sync retry in %ds — snapshots empty (master: %d, slave: %d)",
+                        delay, m_cnt, s_cnt)
+            time.sleep(delay)
 
         log.info("Master has %d open positions, Slave has %d open positions",
                  len(self._master_positions), len(self._slave_positions))
@@ -481,7 +540,7 @@ class CopyTrader:
                 break
             except Exception as exc:
                 log.error("Poll error: %s", exc, exc_info=True)
-                time.sleep(5)
+            time.sleep(15)
 
     def _prelink_existing(self):
         """Link master↔slave positions that already exist on startup."""

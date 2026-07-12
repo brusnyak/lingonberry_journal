@@ -141,9 +141,16 @@ def test_prelink_existing():
         slave_pos = {
             2: PosSnapshot(2, 200, "EURUSD", "buy", 0.40, 1.1000, 1.0950, 1.1050),
         }
-        # First two calls: initial sync in run(). Then KeyboardInterrupt to break loop.
+        # First two calls to snap: initial sync. Need to let the initial
+        # 60s cooldown sleep pass, then raise KeyboardInterrupt on poll-loop sleep.
         mock_snap.side_effect = [master_pos, slave_pos]
-        mock_time.sleep.side_effect = KeyboardInterrupt()
+        sleep_count = 0
+        def _on_sleep(*_):
+            nonlocal sleep_count
+            sleep_count += 1
+            if sleep_count > 1:  # 1st=cooldown, 2nd+ = poll loop → exit
+                raise KeyboardInterrupt()
+        mock_time.sleep.side_effect = _on_sleep
 
         trader = CopyTrader()
         try:
