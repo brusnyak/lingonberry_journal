@@ -1863,6 +1863,68 @@ Branch: `crypto-engine` (split from `hypothesis-engine`).
 - `cdd1030` — refactor(engine): remove OOS wall, update data paths for restructured market_data, fix commodity auto-detect
 - `16f9255` — fix(crypto): load OHLCV from legacy first for full history, enforce exchange market specs
 
+## 33B. ICT look-ahead fix, DOGE TrBosFade investigation, tier-2 screener (2026-07-04)
+
+(Merged in from a standalone `SESSION_34.md` file that was never filed into this
+log -- its own "Session 34" numbering was a different counter than this
+document's section numbers, purely coincidental collision. Deleted after
+merging; this is the complete original content, chronologically between
+§33 and §34.)
+
+### Phase 1 -- Foundation cleanup (100% delivered, audited)
+
+**ICT look-ahead fix**: `detect_sweeps()` checked `i+1..i+3` for reclaim
+(future bars), `generate_signals()` iterated `sweep_idx..sweep_idx+5` for
+structure shift -- both real look-ahead bugs. Rewrote TrIct with
+incremental causal signal generation: `init()` pre-computes static
+structure (swings, labels, FVGs, OBs, pools) with shift(1) windowing;
+`next()` calls `_detect_sweeps_at_bar(i)` for only the current bar, no
+forward scanning; structure shift at bar i walks sweeps backward (most
+recent first); `_build_signal()` works one sweep+shift pair at a time.
+Results at the time (DOGE 30m, 30d): 51 trades, WR=60.8%, PF=2.28, max
+DD=3.0%, 2.4s runtime (was 3+ min -- also fixed the O(n²) sweep loop by
+changing a `continue` to `break` in the reversed iteration, a different
+fix than the bisect-indexed active/broken-pool rewrite done later in
+§34's Phase 6C, which addressed a *different* O(n²) source found after
+this one). Audit verdict at the time: causally correct, no future-data
+leakage, all 133 tests passing.
+
+Also added: `_signal_source` convention + `_check_lookahead_risk()`
+heuristic to base `Strategy` (called in `runner.py` after `init()`) --
+levels `"next"` (safe), `"init_precomputed"` (safe with shift(1)),
+`"init_signals"` (high risk, triggers warning). And changed `batch.py`'s
+default dev risk from 0.05 to 0.02 (individual strategy defaults stay at
+0.005).
+
+### Phase 2 -- DOGE TrBosFade investigation + tier-2 screener
+
+**TrBosFade root cause**: pip-based SL buffer doesn't scale across price
+levels -- DOGE ($0.07): 0.001 buffer = 6.5% of daily ATR (meaningful);
+BTC ($59K): 0.0005 buffer = 8e-7% of ATR (negligible). Tested fixed
+params across time windows:
+
+| Days | Trades | PF | Ret | DD |
+|------|--------|----|-----|-----|
+| 30 | 66 | 1.16 | +2.3% | 4.5% |
+| 60 | 144 | 1.31 | +10.2% | 4.8% |
+| 90 | 205 | 1.26 | +12.6% | 9.6% |
+| 180 | 559 | **1.00** | **-0.1%** | **22.0%** |
+
+**Verdict: not reliable.** PF decays to 1.00 on 180d -- the edge is a
+60-90 day regime artifact, not a real signal. Decision: don't deploy,
+don't fix the pip-ATR scaling (this is the same TrBosFade later
+reconfirmed dead in the crypto-engine strategy-status notes: "regime
+artifact, PF=1.00 on 180d").
+
+**Tier-2 screener** (`backtesting/crypto/screener.py`): `screen_pairs(tf,
+days, exchange)` loads 1h data for all 24 USDT perp pairs and computes
+volatility (ATR%), avg_daily_volume, avg_daily_range_pct,
+directional_ratio, skew, bars, days. `rank_pairs(df, weights, top_n)`
+min-max normalizes then applies a weighted score (default: vol 0.35 +
+volume 0.35 - directionality 0.30, favoring high-movement ranging
+pairs). 11 tests. Never wired into `batch.py` for dynamic pair
+selection -- still a manual/fixed pair list as of §34 onward.
+
 ## 34. Audit continuation (2026-07-06) — RegimeGate bug found+fixed, pair-feasibility gap found+fixed, Phase 6 baselines run, no confirmed edge yet
 
 ### RegimeGate cross-timeframe indexing bug (major, fixed)
@@ -2333,3 +2395,51 @@ above under zero-cost `CryptoCosts` terms -- none of them are retroactively
 "live-ready," they were never claimed to be past the zero-cost backtest
 stage, and this phase doesn't change that, it replaces the open
 slippage-data blocker with a concrete, actionable design constraint.
+
+### Phase 8 -- Repo audit (2026-07-12): branch alignment, data gap closed
+User asked for a full audit of `crypto-engine` vs. `hypothesis-engine`
+(forex) before continuing -- file state, dataset state, alignment.
+
+**Branch relationship**: clean. `crypto-engine` is a strict descendant of
+`hypothesis-engine` (44 commits ahead, zero divergence, confirmed via
+`git merge-base --is-ancestor`). All shared-engine-file changes
+(`data.py`, `costs.py`, `regime.py`, `prop/rules.py`, etc.) reviewed --
+additive or documented fixes only (the OOS-wall removal is B10, a
+deliberate root-cause fix, not an accidental regression). No import
+coupling from current `backtesting/` code into the frozen
+`hypothesis_engine/` package. 280 tests passing.
+
+**Verified live** (not just unit tests): both validated forex strategies
+run cleanly on current code. `OrbNyWideStop` (60d NAS100): 38 trades,
++3.32%. `OvernightDrift`: 28 trades, +7.98%. (First attempt crashed --
+turned out to be a self-inflicted test bug, using EURUSD-calibrated
+`ForexCosts` defaults on an index; the real validated config passes
+`pip_size=1.0, pip_value_per_lot=1.0` for NAS100/US30/SPX500. Flagged as
+a minor gap: no sanity check currently catches an obviously-mismatched
+cost-model/instrument pairing.)
+
+**Real finding, now fixed -- BTC/ETH/BNB were missing 30m history
+entirely**: `load_data`'s 1m-resample fallback couldn't help because the
+1m legacy files for these three are ALSO only the recent ~91-day window
+(2026-03-27 onward) -- but the 5m and 60m legacy files go back to 2017.
+Resampled the deep 5m legacy data straight to 30m
+(`backtesting.crypto.data._resample_to_tf`, already-existing code, no
+new logic needed) and wrote `BTCUSDT30.parquet`, `ETHUSDT30.parquet`,
+`BNBUSDT30.parquet` into `data/market_data/crypto/legacy/`. Verified via
+`load_data`: all three now return ~155k/151k 30m bars, 2017-08 (BTC/ETH)
+/ 2017-11 (BNB) through present, instead of the previous 4,368-bar/91-day
+cap. This directly explains why ETH kept showing up "data-limited" all
+through Phase 6 -- **worth a fresh ETH validation pass on the newly
+available multi-year history**, since everything tested on ETH so far
+used a data window an order of magnitude shorter than what XRP/SOL/DOGE
+got. (`data/` is gitignored, no commit needed for the new parquet files
+themselves.)
+
+**Housekeeping**: committed the pre-existing uncommitted
+`infra/copy_trader.py` fix (rate-limit vs. genuinely-empty-positions
+disambiguation in the TradeLocker copy-trader, unrelated to crypto work,
+was just sitting uncommitted since before this session started).
+Merged `SESSION_34.md` (a standalone file documenting the ICT look-ahead
+fix + DOGE TrBosFade investigation + tier-2 screener, dated 2026-07-04,
+that had never been filed into this log) into §33B above, then deleted
+the standalone file.
