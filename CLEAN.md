@@ -2584,7 +2584,15 @@ duplicate timestamps across all 6 core pairs. 280 tests passing. Committed `6bf4
 |---|---|---|---|---|---|
 | XRP (min_stop=0.25) | 99,965 | 2020-02 to 2026-06 (~6.4y) | -0.12 / +0.00% / **10%** / 3.78% | -0.12 / +0.00% / 14% / 4.39% | wr=4%, breach=2%, dd=19.80% |
 | DOGE (min_stop=0.25) | 100,000 | 2020-08 to 2026-07 (~5.9y) | -0.04 / +0.00% / **36%** / 4.28% | -0.04 / +0.00% / 46% / 4.28% | wr=3%, breach=2%, dd=11.86% |
-| ETH (min_stop=0.25) | 155,248 | 2017-08 to 2026-07 (~8.9y) | -0.20 / +0.00% / **3%** / 2.05% | -0.20 / +0.00% / 6% / 2.15% | (run stalled, see perf bug below) |
+| ETH (min_stop=0.25) | 155,248 | 2017-08 to 2026-07 (~8.9y) | -0.20 / +0.00% / **3%** / 2.05% | -0.20 / +0.00% / 6% / 2.15% | wr=8%, breach=2%, dd=11.19% |
+| ETH (unfiltered) | 155,248 | 2017-08 to 2026-07 (~8.9y) | -0.85 / +0.00% / **2%** / 4.53% | -0.85 / +0.00% / 4% / 4.77% | (run died before completing) |
+
+(Update: the background run that produced this table was thought to have stalled/died
+early -- it turned out still be running, invisible to a fresh `ps aux` check from a
+new shell, the same visibility quirk hit earlier this session. It actually completed
+ETH's stress test and most of the unfiltered variant before dying; table updated with
+the full numbers above once found. ETH unfiltered is even worse than filtered
+(mean_R -0.85 vs -0.20) -- consistent with min_stop_pct helping, just not enough.)
 
 **Unanimous, decisive fail against every part of the bar, for all three pairs:**
 - `median_return_pct` is ~0.00% at typical cost for all three -- nowhere near the
