@@ -3009,3 +3009,44 @@ price-correlated, not independent trials -- do not multiply the evidence by 6. N
 walk-forward/rolling stability check yet, no cost/stop/target realism -- this measures
 direction only, symmetric 1:1 R. Full detail: `crypto_mtf_cascade_direction_report.md`.
 No stops/targets touched. 374 tests passing.
+
+## Phase 16 -- Entry tier dropped, rolling stability confirms the signal isn't a one-window fluke
+
+User direction: (1) 1m entry-tier hurt more than helped as a 4th independent vote --
+drop it, keep the 3-tier global(240m)+local(30m)+mini(5m) cascade; (2) before touching
+real stop/target design, run a proper rolling/walk-forward stability check on the
+current direction signal -- symmetric 1:1 R was flagged as too simplistic for a final
+answer, but appropriate for checking whether the direction call itself holds up over
+time.
+
+Refactored `mtf_cascade_direction.py`: `TIERS`/`DEFAULT_TF_MAP` now `(global, local,
+mini)` only; entry-tier code removed rather than left dead (documented in the module
+docstring for future reference, not silently deleted). Added `rolling_stability()` --
+rolling 30-day windows, 7-day step, over the full 400-day span, reusing the same
+combo-direction array `run_cascade` evaluates (so window slices and the full-history
+number are computed from the same array, not two divergent code paths).
+
+**Result, 6 pairs, 53 rolling 30-day windows each (318 total):**
+
+| Symbol | % windows > 50% | Median acc | Worst | Best |
+|---|---|---|---|---|
+| BTCUSDT | 67.9% | 52.5% | 29.4% | 70.9% |
+| ETHUSDT | 90.4% | 56.5% | 40.6% | 70.9% |
+| SOLUSDT | 77.4% | 55.1% | 40.0% | 63.6% |
+| XRPUSDT | 81.1% | 55.1% | 45.0% | 66.3% |
+| DOGEUSDT | 79.2% | 55.4% | 43.3% | 63.4% |
+| BNBUSDT | 73.6% | 55.2% | 41.6% | 67.8% |
+| **pooled** | **78.2%** | **55.2%** | | |
+
+Median per-window accuracy (55.1-56.5%) matches the full-window aggregate (55.2%)
+closely -- the signal is the typical window, not a lucky concentration. 78.2% of 318
+rolling windows land above 50%, a real step up in evidence quality from the
+"foundation" layer's earlier n=3-7 window checks (Phase 12). Worst windows still dip
+well below 50% (29.4% on BTC) -- not universally positive, a real but modest and noisy
+edge, not a guarantee. Full detail: `crypto_mtf_cascade_rolling_stability_report.md`.
+
+**Standing, explicit**: still direction-only, symmetric 1:1 R, no costs -- this
+confirms the direction call is stable across time, not that a tradeable strategy
+exists. Next: structural stop/target design (not symmetric ATR), per user instruction,
+since risk:reward shape changes what "accuracy" should mean here -- not yet started.
+375 tests passing. No stops/targets touched.

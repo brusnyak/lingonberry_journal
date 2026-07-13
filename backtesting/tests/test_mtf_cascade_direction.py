@@ -4,9 +4,11 @@ import numpy as np
 import pandas as pd
 
 from backtesting.crypto.mtf_cascade_direction import (
+    CascadeConfig,
     asof_direction,
     ema_only_direction,
     evaluate_direction_series,
+    rolling_stability,
     structure_ema_direction,
     vec_ema_state,
 )
@@ -63,3 +65,23 @@ def test_global_local_cascade_shows_no_edge_on_random_walk():
     result = evaluate_direction_series(ohlcv30.reset_index(drop=True), combo)
     assert result["decided"] > 100
     assert 0.40 < result["direction_accuracy"] < 0.60, result
+
+
+def test_rolling_stability_returns_one_row_per_window_with_no_gaps():
+    from unittest.mock import patch
+
+    ohlcv30 = make_staircase_series("up", bars=30000, tf_minutes=30, seed=5)
+    ohlcv240 = _resample(ohlcv30, 240)
+    ohlcv5 = make_staircase_series("up", bars=30000 * 6, tf_minutes=5, seed=5)
+
+    def fake_load_crypto(symbol, tf, days, exchange, source):
+        return {"240": ohlcv240, "30": ohlcv30, "5": ohlcv5}[tf]
+
+    with patch("backtesting.crypto.mtf_cascade_direction.load_crypto", fake_load_crypto):
+        result = rolling_stability("SYNTH", window_days=30, step_days=15, config=CascadeConfig())
+
+    assert not result.empty
+    assert (result["window_end"] - result["window_start"]).dt.days.eq(30).all()
+    # windows should tile forward without gaps between consecutive starts
+    starts = result["window_start"].sort_values().reset_index(drop=True)
+    assert (starts.diff().dropna().dt.days == 15).all()
