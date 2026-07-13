@@ -47,6 +47,8 @@ Done or implemented:
     including UI review packet generation and exchange-specific review loading.
 14. First single-exchange trend/session matrix for crypto `15m`, separating
     raw event frequency from execution-filter scarcity.
+15. First executable FVG session matrix for crypto `15m`, testing actual retest
+    entries/exits across all sessions instead of raw event drift.
 
 Still needed:
 
@@ -518,6 +520,75 @@ Matrix interpretation:
   1. late-US short countertrend, kept as benchmark;
   2. Asia short with middle/local bearish EMA;
   3. London long with middle/local bullish EMA.
+
+Executable FVG session matrix checkpoint on 2026-07-13:
+
+- Scope: Binance only, reviewed `11`-symbol crypto basket, `15m`, `60d`.
+- Execution rows: `226,356`.
+- Unique executable signals: `10,311`.
+- Unique executable signal frequency:
+  - about `15.6` executable signals per symbol over `60d`;
+  - about `0.26` executable signals per symbol per day before final quality
+    filters.
+- Conclusion: the engine does not lack executable FVG retests. The scarcity is
+  created by final strategy filters.
+
+Top executable session/direction aggregates:
+
+| Session | Direction | Trend state | Rows | Weighted avg R | Weighted stop | Max avg R | Max PF |
+|---|---|---|---:|---:|---:|---:|---:|
+| late US | short | counter global/structure | 1,524 | +0.294 | 18.6% | +0.473 | 3.67 |
+| late US | short | global+middle bearish EMA | 3,186 | +0.262 | 18.5% | +0.533 | 3.04 |
+| London | long | middle+local bullish EMA | 3,180 | +0.196 | 25.2% | +0.297 | 2.14 |
+| Asia | short | middle+local bearish EMA | 960 | +0.168 | 21.1% | +0.216 | 1.82 |
+| London | long | full trend | 3,990 | +0.127 | 32.1% | +0.290 | 1.65 |
+
+Best non-late-US executable bucket:
+
+- session: `London`;
+- direction: `long`;
+- context: `4H bull`;
+- trend helper: `1H+15m bullish EMA`, global/4H EMA mixed;
+- entry: `structure_confirmed_next_open`;
+- confirmation: `latest_bull_regime`;
+- target: `fixed_2r`;
+- management: `be_after_half_target`;
+- events: `134`;
+- symbols: `10`;
+- frequency: `0.262` events per symbol per day;
+- avg R: `+0.297`;
+- PF: `2.14`;
+- target rate: `16.4%`;
+- stop rate: `20.1%`;
+- expiry rate: `54.5%`.
+
+Best Asia candidate:
+
+- session: `Asia`;
+- direction: `short`;
+- context: `4H bull`;
+- trend helper: `1H+15m bearish EMA`;
+- entry: `FVG CE retest` or `next open`;
+- events: `60-100`;
+- symbols: `11`;
+- avg R: `+0.18R` to `+0.22R`;
+- PF: `1.5-1.8`;
+- verdict: weaker than London long and late-US short, but not dead.
+
+Executable matrix interpretation:
+
+- The current late-US short module remains the strongest executable bucket.
+- Daytime is not dead. London long with middle/local EMA alignment is the first
+  credible daytime module.
+- Asia short is a secondary candidate, but lower edge and lower frequency.
+- Full 4H/1H/15m trend alignment is not automatically best. The useful helper
+  remains middle/local EMA alignment plus structure context.
+- If the goal is one tradeable engine per asset per day, a single setup will not
+  do it. The engine should become a module stack:
+  - late-US short countertrend/flush module;
+  - London long trend-continuation module;
+  - optional Asia short pullback/flush module;
+  - later, non-FVG event families if they survive execution testing.
 
 Execution-path review:
 
