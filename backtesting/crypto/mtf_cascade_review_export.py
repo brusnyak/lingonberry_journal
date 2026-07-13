@@ -92,7 +92,18 @@ def build_cascade_review_packet(
     config: CascadeConfig | None = None,
     min_rr: float = 1.5,
     exchange: str = "binance",
+    max_rows_per_symbol: int = 75,
 ) -> pd.DataFrame:
+    """max_rows_per_symbol must stay below the review UI's default fetch limit
+    (80, webapp/templates/review.html). The UI sorts by review_bucket (best
+    before worst) then truncates to that limit -- if a symbol has more real
+    winners than the limit (every pair here does: 128-170 wins out of
+    300-350 signals), truncation silently drops every loser and displays a
+    fake ~100% win rate. Capping the export below the UI's limit means
+    nothing gets truncated, so the true win rate (40-52% per symbol, matches
+    the Phase 17 backtest exactly) is what actually renders. Thinning is
+    systematic (evenly spaced through time), not outcome-filtered, so it
+    preserves both the time spread and the real win/loss ratio."""
     cfg = config or CascadeConfig()
     rows: list[dict] = []
     for symbol in symbols:
@@ -111,6 +122,7 @@ def build_cascade_review_packet(
         combo_s = pd.Series(combo)
         changed = combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"])
 
+        symbol_rows: list[dict] = []
         for i in np.where(changed.to_numpy())[0]:
             if i >= len(bars_local) - 1:
                 continue
@@ -134,7 +146,7 @@ def build_cascade_review_packet(
             if not outcome:
                 continue
             ts = pd.Timestamp(bars_local["ts"].iat[i])
-            rows.append({
+            symbol_rows.append({
                 "ts": ts.isoformat(),
                 "symbol": symbol,
                 "exchange": exchange,
@@ -151,9 +163,14 @@ def build_cascade_review_packet(
                 "mfe_r": outcome["mfe_r"],
                 "mae_r": outcome["mae_r"],
                 "exit_reason": "target" if outcome["hit_1.5r"] else "stop",
-                "review_bucket": "best" if outcome["outcome_1.5r"] > 0 else "worst",
+                "review_bucket": "sample",  # neutral -- must NOT correlate with win/loss, see docstring
                 "notes_hint": "Global(240m)+local(30m) structure+EMA agreement, structural SL/target (reused from PropFirmStructureV1) -- verify the direction call visually, not just the R outcome.",
             })
+
+        if len(symbol_rows) > max_rows_per_symbol:
+            step = len(symbol_rows) / max_rows_per_symbol
+            symbol_rows = [symbol_rows[int(i * step)] for i in range(max_rows_per_symbol)]
+        rows.extend(symbol_rows)
 
     return pd.DataFrame(rows)
 
