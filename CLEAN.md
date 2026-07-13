@@ -2713,3 +2713,113 @@ single-pair result holding up under further scrutiny should be set low, not high
 Flagging this explicitly rather than silently deciding: worth pursuing DOGE's
 split-half check, or is this the point to step back and reconsider whether crypto's
 viable universe for this specific margin-of-safety bar is simply narrower than hoped?
+
+## Phase 12 -- Repo-truth audit of the "foundation" layer (2026-07-13): promising numbers, unproven on the sample they were built from
+
+Between Phase 11 and this audit, 25 commits of new work landed (`c22f952`..`b5d1eff`,
+none referenced above -- CLEAN.md had gone stale) building a session/setup-based 15m
+crypto engine: FVG event/retest matrix, canonical setup selection, MTF structure
+regime journal, trade forensics with cost stress and rolling validation. Audited
+against repo truth, not the narrative in `foundation_layer_audit_2026-07-13.md`,
+which was itself taken as a claim to verify, not a fact.
+
+**Verified, not assumed**: 364/364 tests pass. `structure_at()`
+(`backtesting/crypto/direction_layer.py:31`) is causally correct -- filters
+`known_after_ts <= decision_ts` before selecting the latest known row, confirmed by
+direct read. No look-ahead bug found in the sampled code.
+
+### Layer by layer
+
+**Structure** -- `data/features/structure/L2_R2` (the precomputed causal structure
+cache everything else joins against) covers **2026-05-26 to 2026-07-12 only -- 47
+days**, confirmed via direct parquet read (224 files, all same range). This is not a
+raw-data limit: BTC/ETH have 8-9 years of OHLCV on disk at 30m/60m/1440m (Phase 8), and
+15m specifically goes back only 107 days for BTC/ETH, 14 months for XRP -- the L2_R2
+cache was never backfilled past ~7 weeks regardless. Every downstream number in this
+phase inherits this ceiling.
+
+**Direction** -- `foundation_direction_audit.csv`: direction_accuracy sits at
+**0.35-0.56 across nearly every bucket** (`all_physical` rows), i.e. barely-to-not
+above a coin flip. The MTF regime journal's own best bucket
+(`london_long_middle_local_retest`, trend_aligned) posts direction_accuracy 0.556 on 81
+trades -- real but thin margin over 50%. This matches this project's standing prior
+from the forex side (causal direction accuracy ~50%, memory: `direction_accuracy_causal`)
+and is the same shape as Phase 11's TSMOM null result: a wide-RR/trailing structure can
+show a positive-looking PF off near-50% direction if it rode a favorable 7-week window.
+
+**Consolidation / regime tagging** -- correctly implemented (5-state MTF label:
+trend_aligned / pullback_in_uptrend / range_or_transition / countertrend / conflict),
+and the journal's own finding is real and useful: London-long pullback-in-uptrend has a
+65.7% bad-entry rate and should not be traded as-is. That's a legitimate, falsifiable
+result *within the 47-day sample* -- the open question is whether it holds outside it.
+
+**Entry** -- canonical setup selection (dedup of raw/confirmed/retest variants into one
+physical execution per signal) is a real, verified bug fix (`a75b558`) -- prevented
+double-counting the same trade as 2-3 rows. Good engineering, not signal.
+
+**Target** -- the 1.5R-vs-2R A/B in `foundation_layer_audit_2026-07-13.md` is
+methodologically sound (controlled, only target changed) and its own conclusion
+(2R for strong 15m setups, 1.5R for noisier 5m, target should be setup-specific, not a
+global ideology) is a reasonable, non-overreaching read of the data it has. **Per your
+instruction, not touching either value.**
+
+**Management** -- BE-after-half and partial-1R-then-BE exist as options but per the
+audit's own admission have no direct A/B validation yet ("Low-medium confidence").
+Untested, not wrong.
+
+### Signal edge -- the actual numbers, and why they don't clear a validation bar yet
+
+"Strict candidates" (the promoted, de-duplicated, MTF-aligned basket), 15m, `0.20%`
+risk/trade, max 6 open / 1 per symbol, `0.50%` daily loss cap:
+
+| Window | Trades | Events/day | Events/symbol/week | Return | Max DD | PF | WR |
+|---|---|---|---|---|---|---|---|
+| 60d | 113 | 1.91 | 0.95 | +12.67% | 0.76% | 3.25 | 67.0% |
+| 30d | 87 | 2.94 | 1.47 | +11.60% | 0.76% | 4.03 | 70.9% |
+
+Rolling-window "pass rate" (the deployment-readiness check the project actually
+trusts): **n=5 windows at 30d, n=3 windows at 45d, n=7 at 14d, all overlapping by a
+7-day step inside a single 47-59 day span** -- these are not 5/3/7 independent trials,
+they're 3-7 heavily-correlated slices of the same ~2 months. A "100% pass rate" here is
+not the same claim as the 482-window rolling-validation this project already trusts for
+`OrbNyWideStop` on the forex side. At punitive (40bps) and nightmare (60bps) cost
+stress, pass rate collapses to 0-40% even on this tiny sample -- the strategy is not
+robust to bad execution, only to good execution in a good 2-month stretch.
+
+No null test (`make_random_dir_null`, the tool already used to falsify TSMOM and
+FundingMeanRev this project) has been run against this basket. Given direction accuracy
+sits at 45-56%, this is the single most informative missing check -- Phase 11 already
+showed a wide-RR structure can look positive off near-50% direction purely from riding
+a trend window.
+
+Bucket tables (`foundation_direction_audit.csv`, MTF hour-buckets) slice down to n=5-7
+trades with PF quoted as `inf` or 25-93 -- textbook multiple-comparisons artifacts. The
+audit doc's own "Overfit Risk: medium-high" self-rating is correct and should be taken
+at face value, not softened by the headline PF/WR numbers above it.
+
+**Verdict: promising basket, not a validated edge.** Same failure mode this project
+already paid for once this cycle (Phase 10: 13-month "full history" claim on
+TrIct/XRP+DOGE reversed hard on the true 6-9yr span). The fix is identical and already
+sitting on disk: backfill `L2_R2` structure across the multi-year OHLCV history already
+available (Phase 8's data-gap fix), rerun the same forensics/rolling-validation
+pipeline on the full span, and run a direction-randomized null test before promoting
+anything past "strict candidate" to "validated."
+
+### Risk model
+Position-sizing configs (`micro_risk_tight` 0.10% / `conservative` 0.15% / `base`
+0.20% / `prop_strict` 0.25% / `aggressive` 0.30%, all with a max-open-trades cap,
+1-per-symbol cap, and daily-loss lockout) are reasonable in shape and the audit
+correctly demoted `prop_strict` and `aggressive` after seeing they fail more rolling
+gates than `base`/`conservative` -- that's the right instinct, not overfitting the
+risk knob to the headline number. **Gap**: none of these configs have been run through
+`backtesting/prop/rules.py::check_prop_compliance` against an actual `PropAccount`
+(GFT-style or CRYPTO_50/300) -- the tool this project already built and uses on the
+forex side. Worth wiring before this basket is treated as more than a research
+artifact.
+
+### Deployment readiness: not ready, correctly not claimed to be
+No live wiring exists for any of this. The foundation audit doc's own running verdict
+("not deployment-ready... still need walk-forward/holdout and UI review") is accurate
+and consistent with what's actually in the repo. Nothing here contradicts that; this
+audit adds the two concrete gates required before it can change: (1) backfill and
+re-test on deep history, (2) null-test the direction call.
