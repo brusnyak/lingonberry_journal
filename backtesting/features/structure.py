@@ -68,6 +68,12 @@ def build_structure_index(df: pd.DataFrame, config: StructureConfig | None = Non
         swing_price = np.nan
         swing_ts = pd.NaT
         structure_label = ""
+        bos_up = False
+        bos_down = False
+        choch_up = False
+        choch_down = False
+        bos_level = np.nan
+        choch_level = np.nan
 
         for event in events_by_confirm.get(i, []):
             swing_type = event["swing_type"]
@@ -82,6 +88,11 @@ def build_structure_index(df: pd.DataFrame, config: StructureConfig | None = Non
                     last_hh = swing_price
                     last_hh_ts = swing_ts
                     broken_hh = False
+                    if regime == "bear":
+                        choch_up = True
+                        choch_level = swing_price
+                        broken_lh = True
+                        regime = "neutral"
                 else:
                     structure_label = "LH"
                     last_lh = swing_price
@@ -103,23 +114,21 @@ def build_structure_index(df: pd.DataFrame, config: StructureConfig | None = Non
                     last_ll = swing_price
                     last_ll_ts = swing_ts
                     broken_ll = False
+                    if regime == "bull":
+                        choch_down = True
+                        choch_level = swing_price
+                        broken_hl = True
+                        regime = "neutral"
                 last_swing_low = swing_price
                 last_swing_low_ts = swing_ts
 
             # Regime only transitions from neutral, or via CHOCH (above).
             # This prevents bull→bear or bear→bull flips without a structure break.
             if regime == "neutral":
-                if not np.isnan(last_hh) and not np.isnan(last_hl):
+                if structure_label == "HL" and not np.isnan(last_hh):
                     regime = "bull"
-                elif not np.isnan(last_lh) and not np.isnan(last_ll):
+                elif structure_label == "LH" and not np.isnan(last_ll):
                     regime = "bear"
-
-        bos_up = False
-        bos_down = False
-        choch_up = False
-        choch_down = False
-        bos_level = np.nan
-        choch_level = np.nan
 
         if not broken_hh and not np.isnan(last_hh) and close[i] > last_hh:
             bos_up = True
