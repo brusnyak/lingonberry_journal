@@ -2971,3 +2971,41 @@ prior on architecture (TF ratios, dual-confirmation logic), not as validated edg
 **Not yet done, next step**: full global/local/mini-trend cascade (3 timeframes, not
 just single-TF combination) is the user's actual design ask -- deferred pending TF
 assignment confirmation. No stops/targets touched. 370 tests passing.
+
+## Phase 15 -- Global/local/mini/entry cascade built, synthetic-gated, first result where every pair lands above 50%
+
+User confirmed: global=240m, local=30m, mini=5m, entry=1m; strict AND (all tiers must
+agree); EMA-slope alone for now (no ADX yet). Built
+`backtesting/crypto/mtf_cascade_direction.py` (global/local = structure+EMA agreement,
+mini/entry = EMA-slope alone), gated on synthetic ground truth before trusting real
+numbers, per standing instruction.
+
+**Synthetic gate (passed)**: known uptrend -> 81.2% (n=1716); random walk -> 52.8%
+(n=1652). Cascade methodology detects real trend, doesn't manufacture false edge on
+noise.
+
+**Real data, 6 pairs, 400d (1m capped ~106d, no deeper legacy exists):**
+
+| Symbol | global+local acc (n) | +mini acc (n) | +entry acc (n) |
+|---|---|---|---|
+| BTCUSDT | 53.2% (312) | 54.3% (1361) | 53.3% (1168) |
+| ETHUSDT | 60.9% (312) | 57.4% (1400) | 56.0% (1173) |
+| SOLUSDT | 55.2% (330) | 54.4% (1502) | 53.5% (1347) |
+| XRPUSDT | 52.3% (348) | 55.5% (1566) | 55.9% (1239) |
+| DOGEUSDT | 55.6% (351) | 55.1% (1439) | 53.9% (1109) |
+| BNBUSDT | 53.1% (322) | 54.5% (1410) | 50.5% (1139) |
+| **mean** | **55.0%** | **55.2%** | **53.8%** |
+
+**First result in this entire crypto foundation-layer audit where all 6 pairs land
+above 50%** (structure alone: 46.9% mean; EMA alone: 52.5% mean; single-TF combo:
+54.6% mean). Adding the 5m mini tier ~5x's sample size at the same effect size (good
+sign). Adding the 1m entry tier slightly lowers accuracy and shrinks history to
+~106d -- tentative read: entry-tier may work better as within-window timing than a
+4th independent direction vote, untested, flagged not assumed.
+
+**Caveats, stated plainly**: n~300-350 at the global+local stage means single-pair
+significance is marginal (most pairs ~1.8 SE above 50%, ETH ~3.8 SE); 6 pairs are
+price-correlated, not independent trials -- do not multiply the evidence by 6. No
+walk-forward/rolling stability check yet, no cost/stop/target realism -- this measures
+direction only, symmetric 1:1 R. Full detail: `crypto_mtf_cascade_direction_report.md`.
+No stops/targets touched. 374 tests passing.
