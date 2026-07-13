@@ -397,12 +397,16 @@ def evaluate_real_sltp_series(
     *,
     require_sweep: bool | None = None,
     sweep_lookback: int = 20,
+    stop_pct_range: tuple[float, float] | None = None,
 ) -> dict:
     """Same signal points as evaluate_direction_series, but real asymmetric
     structural SL/TP instead of symmetric ATR R -- CLEAN.md Phase 17/20.
     require_sweep=True: only entries preceded by a liquidity sweep (Phase 24).
     require_sweep=False: only entries NOT preceded by one (the control group).
-    require_sweep=None: no filter (all entries, the Phase 17/20 baseline)."""
+    require_sweep=None: no filter (all entries, the Phase 17/20 baseline).
+    stop_pct_range=(lo, hi): only entries whose stop distance (% of entry
+    price) falls in [lo, hi] -- Phase 25's "sweet spot" hypothesis, tested
+    directly rather than assumed from the cross-sectional correlation."""
     combo_s = pd.Series(combo)
     changed = combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"])
     r_multiples: list[float] = []
@@ -418,6 +422,10 @@ def evaluate_real_sltp_series(
         sl, tp = structural_stop_target(structure.iloc[i], direction, entry, min_rr)
         if not np.isfinite(sl):
             continue
+        if stop_pct_range is not None:
+            stop_pct = abs(entry - sl) / entry * 100
+            if not (stop_pct_range[0] <= stop_pct <= stop_pct_range[1]):
+                continue
         outcome = walk_structural_outcome(bars, i, direction, sl, tp, horizon)
         if outcome is not None:
             r_multiples.append(outcome["r_multiple"])
@@ -475,6 +483,7 @@ def null_test_real_sltp(
     n_seeds: int = 20,
     require_sweep: bool | None = None,
     sweep_lookback: int = 20,
+    stop_pct_range: tuple[float, float] | None = None,
 ) -> dict:
     """Randomize direction on the same signal timestamps, same real structural
     SL/TP mechanism -- tells apart a real directional edge from an R:R
@@ -482,10 +491,11 @@ def null_test_real_sltp(
     check that found symmetric-looking positive PF wasn't real for most
     pairs; Phase 20: the same check confirmed 4/6 pairs ARE real). Previously
     only ever run as a one-off inline script -- this is that logic, reusable.
-    require_sweep filters WHICH timestamps qualify (checked against the real
-    direction, same entry set for both real and null legs, Phase 24) --
-    only the outcome walk's direction is randomized for the null leg."""
-    real = evaluate_real_sltp_series(bars, structure, combo, min_rr, horizon, require_sweep=require_sweep, sweep_lookback=sweep_lookback)
+    require_sweep / stop_pct_range filter WHICH timestamps qualify (checked
+    against the real direction, same entry set for both real and null legs,
+    Phase 24/25) -- only the outcome walk's direction is randomized for the
+    null leg."""
+    real = evaluate_real_sltp_series(bars, structure, combo, min_rr, horizon, require_sweep=require_sweep, sweep_lookback=sweep_lookback, stop_pct_range=stop_pct_range)
     combo_s = pd.Series(combo)
     changed = combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"])
     idxs = np.where(changed.to_numpy())[0]
@@ -494,6 +504,18 @@ def null_test_real_sltp(
             i for i in idxs
             if sweep_preceded(structure, i, "long" if combo_s.iat[i] == "bull" else "short", sweep_lookback) == require_sweep
         ])
+    if stop_pct_range is not None:
+        kept = []
+        for i in idxs:
+            direction = "long" if combo_s.iat[i] == "bull" else "short"
+            entry = float(bars["close"].iat[i])
+            sl, _ = structural_stop_target(structure.iloc[i], direction, entry, min_rr)
+            if not np.isfinite(sl):
+                continue
+            stop_pct = abs(entry - sl) / entry * 100
+            if stop_pct_range[0] <= stop_pct <= stop_pct_range[1]:
+                kept.append(i)
+        idxs = np.array(kept)
 
     null_means = []
     for seed in range(n_seeds):

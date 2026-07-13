@@ -197,3 +197,22 @@ def test_sl_tp_geometry_returns_one_row_per_entry_with_expected_columns():
     assert {"stop_pct", "target_pct", "planned_rr", "stop_atr_mult"}.issubset(geo.columns)
     assert (geo["stop_pct"] > 0).all()
     assert (geo["planned_rr"] >= 1.49).all()  # min_rr floor is 1.5, small float slack
+
+
+def test_stop_pct_range_filter_narrows_to_subset():
+    ohlcv30 = make_staircase_series("up", bars=30000, tf_minutes=30, seed=11)
+    ohlcv240 = _resample(ohlcv30, 240)
+    dir_global = structure_ema_direction(ohlcv240)
+    dir_local = structure_ema_direction(ohlcv30)
+    g = asof_direction(ohlcv30["ts"], dir_global)
+    l = dir_local["direction"].to_numpy()
+    combo = np.where((g == l) & (g != "neutral"), g, "neutral")
+    from backtesting.features.structure import StructureConfig, build_structure_index
+    structure = build_structure_index(ohlcv30.reset_index(drop=True), StructureConfig(left=2, right=2))
+    bars = ohlcv30.reset_index(drop=True)
+
+    baseline = evaluate_real_sltp_series(bars, structure, combo)
+    geo = sl_tp_geometry(bars, structure, combo)
+    lo, hi = geo["stop_pct"].quantile(0.25), geo["stop_pct"].quantile(0.75)
+    filtered = evaluate_real_sltp_series(bars, structure, combo, stop_pct_range=(lo, hi))
+    assert 0 < filtered["n"] < baseline["n"]
