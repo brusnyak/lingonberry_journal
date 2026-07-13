@@ -1,0 +1,89 @@
+# Crypto Foundation Trade Forensics
+
+Purpose: de-duplicate the MTF structure journal into physical trades and test simple indicator chemistry.
+
+## Test Scope
+- Interval: `15m`.
+- Concrete execution: `fixed_2r` + `hold_target_expiry`.
+- Risk model: `0.20%` risk/trade, max `6` open, max `1` per symbol, daily loss cap `0.50%`.
+- Entry span: `2026-05-13 16:45:00+00:00` to `2026-07-11 23:45:00+00:00`.
+- Physical events: `378`.
+- Strict candidate events: `113`.
+
+## Rule Matrix
+| window | rule | candidates | accepted | symbols | events_in_window | events_per_day | events_per_symbol_week | avg_duration_h | median_duration_h | acceptance_rate | exchanges | total_r | avg_r | median_r | profit_factor | gross_return_pct | max_dd_pct | daily_max_dd_pct | return_to_dd | win_rate | stop_rate | expiry_rate | risk_per_trade_pct | max_open_trades | max_open_per_symbol | daily_loss_limit_pct | median_mfe_r | p75_mfe_r | target_exits | post8_more_1r_after_target | post16_more_1r_after_target |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 60d | all_physical_fixed2_hold | 378 | 315 | 14 | 378.000 | 6.375 | 3.188 | 4.772 | 6.000 | 0.833 | 1 | 69.809 | 0.222 | 0.079 | 1.716 | 0.140 | 0.022 | 0.022 | 6.269 | 0.537 | 0.206 | 0.629 | 0.002 | 6 | 1 | 0.005 | 0.897 | 1.577 | 65 | 0.400 | 0.538 |
+| 60d | strict_candidates | 113 | 112 | 14 | 113.000 | 1.906 | 0.953 | 4.511 | 6.000 | 0.991 | 1 | 63.374 | 0.566 | 0.497 | 3.251 | 0.127 | 0.008 | 0.007 | 16.729 | 0.670 | 0.179 | 0.554 | 0.002 | 6 | 1 | 0.005 | 1.275 | 2.146 | 30 | 0.367 | 0.500 |
+| 60d | late_us_fade | 70 | 70 | 14 | 70.000 | 1.181 | 0.590 | 4.671 | 6.000 | 1.000 | 1 | 28.710 | 0.410 | 0.418 | 2.335 | 0.057 | 0.009 | 0.008 | 6.727 | 0.600 | 0.229 | 0.557 | 0.002 | 6 | 1 | 0.005 | 1.025 | 1.766 | 15 | 0.200 | 0.333 |
+| 60d | ny_13_range_reversal | 29 | 29 | 12 | 29.000 | 0.489 | 0.285 | 3.914 | 6.000 | 1.000 | 1 | 25.093 | 0.865 | 1.016 | 6.151 | 0.050 | 0.003 | 0.003 | 14.854 | 0.759 | 0.103 | 0.517 | 0.002 | 6 | 1 | 0.005 | 1.856 | 3.579 | 11 | 0.455 | 0.636 |
+| 60d | late_us_fade_no_aligned_shock | 59 | 59 | 14 | 59.000 | 0.995 | 0.498 | 4.576 | 6.000 | 1.000 | 1 | 24.996 | 0.424 | 0.381 | 2.390 | 0.050 | 0.009 | 0.008 | 5.857 | 0.593 | 0.220 | 0.542 | 0.002 | 6 | 1 | 0.005 | 1.042 | 1.833 | 14 | 0.214 | 0.357 |
+| 60d | ny_13_expanded_or_opposing | 11 | 11 | 7 | 11.000 | 0.186 | 0.186 | 3.295 | 3.000 | 1.000 | 1 | 9.922 | 0.902 | 1.915 | 4.423 | 0.020 | 0.002 | 0.002 | 8.021 | 0.727 | 0.182 | 0.273 | 0.002 | 6 | 1 | 0.005 | 2.683 | 3.591 | 6 | 0.167 | 0.333 |
+| 60d | london_trend_aligned | 14 | 13 | 9 | 14.000 | 0.236 | 0.184 | 4.946 | 6.000 | 0.929 | 1 | 9.571 | 0.736 | 0.536 | 6.413 | 0.019 | 0.002 | 0.002 | 9.194 | 0.846 | 0.077 | 0.615 | 0.002 | 6 | 1 | 0.005 | 1.448 | 2.582 | 4 | 0.750 | 0.750 |
+| 60d | london_trend_ema_bullish | 14 | 13 | 9 | 14.000 | 0.236 | 0.184 | 4.946 | 6.000 | 0.929 | 1 | 9.571 | 0.736 | 0.536 | 6.413 | 0.019 | 0.002 | 0.002 | 9.194 | 0.846 | 0.077 | 0.615 | 0.002 | 6 | 1 | 0.005 | 1.448 | 2.582 | 4 | 0.750 | 0.750 |
+| 60d | london_trend_rsi_not_overbought | 9 | 8 | 8 | 9.000 | 0.152 | 0.133 | 5.250 | 6.000 | 0.889 | 1 | 4.086 | 0.511 | 0.466 | 4.926 | 0.008 | 0.002 | 0.002 | 3.926 | 0.875 | 0.125 | 0.750 | 0.002 | 6 | 1 | 0.005 | 0.900 | 1.508 | 1 | 1.000 | 1.000 |
+| 30d | all_physical_fixed2_hold | 238 | 209 | 14 | 238.000 | 8.042 | 4.021 | 4.645 | 6.000 | 0.878 | 1 | 64.600 | 0.309 | 0.163 | 2.123 | 0.129 | 0.023 | 0.023 | 5.733 | 0.569 | 0.167 | 0.636 | 0.002 | 6 | 1 | 0.005 | 0.951 | 1.763 | 51 | 0.412 | 0.529 |
+| 30d | strict_candidates | 87 | 86 | 14 | 87.000 | 2.940 | 1.470 | 4.489 | 6.000 | 0.989 | 1 | 57.987 | 0.674 | 0.565 | 4.034 | 0.116 | 0.008 | 0.007 | 15.307 | 0.709 | 0.151 | 0.535 | 0.002 | 6 | 1 | 0.005 | 1.387 | 2.189 | 27 | 0.333 | 0.481 |
+| 30d | late_us_fade | 53 | 53 | 13 | 53.000 | 1.791 | 0.964 | 4.665 | 6.000 | 1.000 | 1 | 27.447 | 0.518 | 0.512 | 2.782 | 0.055 | 0.009 | 0.008 | 6.431 | 0.642 | 0.208 | 0.547 | 0.002 | 6 | 1 | 0.005 | 1.134 | 1.889 | 13 | 0.154 | 0.308 |
+| 30d | late_us_fade_no_aligned_shock | 44 | 44 | 12 | 44.000 | 1.487 | 0.867 | 4.545 | 6.000 | 1.000 | 1 | 23.084 | 0.525 | 0.479 | 2.787 | 0.046 | 0.009 | 0.008 | 5.409 | 0.636 | 0.205 | 0.523 | 0.002 | 6 | 1 | 0.005 | 1.110 | 2.048 | 12 | 0.167 | 0.333 |
+| 30d | ny_13_range_reversal | 20 | 20 | 11 | 20.000 | 0.676 | 0.430 | 3.700 | 3.125 | 1.000 | 1 | 20.969 | 1.048 | 1.745 | 11.780 | 0.042 | 0.003 | 0.001 | 15.181 | 0.800 | 0.050 | 0.450 | 0.002 | 6 | 1 | 0.005 | 1.951 | 3.832 | 10 | 0.400 | 0.600 |
+| 30d | ny_13_expanded_or_opposing | 7 | 7 | 6 | 7.000 | 0.237 | 0.276 | 2.571 | 2.750 | 1.000 | 1 | 10.529 | 1.504 | 1.917 | 10.819 | 0.021 | 0.002 | 0.002 | 9.819 | 0.857 | 0.143 | 0.000 | 0.002 | 6 | 1 | 0.005 | 2.935 | 3.591 | 6 | 0.167 | 0.333 |
+| 30d | london_trend_aligned | 14 | 13 | 9 | 14.000 | 0.473 | 0.368 | 4.946 | 6.000 | 0.929 | 1 | 9.571 | 0.736 | 0.536 | 6.413 | 0.019 | 0.002 | 0.002 | 9.194 | 0.846 | 0.077 | 0.615 | 0.002 | 6 | 1 | 0.005 | 1.448 | 2.582 | 4 | 0.750 | 0.750 |
+| 30d | london_trend_ema_bullish | 14 | 13 | 9 | 14.000 | 0.473 | 0.368 | 4.946 | 6.000 | 0.929 | 1 | 9.571 | 0.736 | 0.536 | 6.413 | 0.019 | 0.002 | 0.002 | 9.194 | 0.846 | 0.077 | 0.615 | 0.002 | 6 | 1 | 0.005 | 1.448 | 2.582 | 4 | 0.750 | 0.750 |
+| 30d | london_trend_rsi_not_overbought | 9 | 8 | 8 | 9.000 | 0.304 | 0.266 | 5.250 | 6.000 | 0.889 | 1 | 4.086 | 0.511 | 0.466 | 4.926 | 0.008 | 0.002 | 0.002 | 3.926 | 0.875 | 0.125 | 0.750 | 0.002 | 6 | 1 | 0.005 | 0.900 | 1.508 | 1 | 1.000 | 1.000 |
+
+## Frequency By Symbol
+| symbol | events | events_per_day | events_per_week | avg_r | profit_factor | win_rate | median_duration_h | median_mfe_r | p75_mfe_r | median_mae_r | strict_events |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| BNBUSDT | 38 | 0.641 | 4.486 | 0.137 | 1.394 | 0.553 | 6.000 | 0.794 | 1.283 | -0.554 | 9 |
+| XRPUSDT | 37 | 0.624 | 4.368 | 0.368 | 2.500 | 0.568 | 6.000 | 1.163 | 2.000 | -0.485 | 12 |
+| ETHUSDT | 36 | 0.607 | 4.250 | 0.577 | 4.030 | 0.667 | 6.000 | 1.112 | 2.034 | -0.265 | 14 |
+| DOGEUSDT | 34 | 0.573 | 4.014 | 0.291 | 1.857 | 0.559 | 6.000 | 0.836 | 1.718 | -0.452 | 11 |
+| LINKUSDT | 32 | 0.540 | 3.778 | 0.097 | 1.261 | 0.500 | 6.000 | 0.813 | 1.592 | -0.581 | 8 |
+| BTCUSDT | 31 | 0.523 | 3.660 | 0.345 | 2.361 | 0.613 | 6.000 | 1.044 | 1.448 | -0.300 | 8 |
+| AAVEUSDT | 31 | 0.523 | 3.660 | 0.245 | 1.857 | 0.581 | 6.000 | 0.765 | 1.269 | -0.506 | 10 |
+| 1000PEPEUSDT | 26 | 0.439 | 3.070 | 0.304 | 2.246 | 0.577 | 6.000 | 0.833 | 1.504 | -0.492 | 5 |
+| NEARUSDT | 26 | 0.439 | 3.070 | 0.022 | 1.056 | 0.385 | 6.000 | 0.610 | 1.509 | -0.748 | 9 |
+| SOLUSDT | 23 | 0.388 | 2.715 | -0.049 | 0.887 | 0.478 | 6.000 | 0.874 | 1.561 | -0.735 | 7 |
+| HYPEUSDT | 22 | 0.371 | 2.597 | 0.192 | 1.555 | 0.545 | 6.000 | 0.865 | 1.358 | -0.434 | 8 |
+| SUIUSDT | 16 | 0.270 | 1.889 | -0.086 | 0.748 | 0.500 | 6.000 | 0.945 | 1.270 | -0.527 | 3 |
+| AVAXUSDT | 15 | 0.253 | 1.771 | -0.032 | 0.893 | 0.467 | 6.000 | 1.071 | 1.489 | -0.714 | 2 |
+| WLDUSDT | 11 | 0.186 | 1.299 | 0.787 | 5.879 | 0.636 | 6.000 | 1.304 | 2.552 | -0.468 | 7 |
+
+## Setup Summary
+| setup_name | mtf_mode | events | events_per_day | events_per_week | avg_r | profit_factor | win_rate | median_duration_h | median_mfe_r | p75_mfe_r | median_mae_r | strict_events |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| london_long_middle_local_next_open | conflict | 2 | 0.034 | 0.236 | 1.018 | inf | 1.000 | 3.375 | 5.180 | 7.510 | -0.307 | 0 |
+| london_long_middle_local_retest | conflict | 5 | 0.084 | 0.590 | 1.008 | inf | 1.000 | 6.000 | 1.473 | 2.902 | -0.235 | 0 |
+| london_long_middle_local_next_open | trend_aligned | 1 | 0.017 | 0.118 | 0.956 | inf | 1.000 | 6.000 | 1.508 | 1.508 | -0.117 | 1 |
+| london_long_middle_local_retest | trend_aligned | 13 | 0.219 | 1.535 | 0.736 | 6.413 | 0.846 | 6.000 | 1.387 | 2.872 | -0.125 | 13 |
+| london_long_middle_local_next_open | range_or_transition | 5 | 0.084 | 0.590 | 0.668 | 4.112 | 0.800 | 4.250 | 1.071 | 2.084 | -0.449 | 0 |
+| late_us_short_bull_flush_ce | countertrend | 53 | 0.894 | 6.257 | 0.429 | 2.555 | 0.604 | 6.000 | 1.008 | 1.720 | -0.487 | 53 |
+| late_us_short_bull_flush_ce | range_or_transition | 17 | 0.287 | 2.007 | 0.352 | 1.869 | 0.588 | 4.250 | 1.060 | 2.154 | -0.477 | 17 |
+| london_long_middle_local_retest | range_or_transition | 18 | 0.304 | 2.125 | 0.269 | 1.998 | 0.667 | 6.000 | 0.907 | 1.322 | -0.441 | 0 |
+| ny_long_neutral_reversal_ce | range_or_transition | 199 | 3.356 | 23.494 | 0.199 | 1.668 | 0.497 | 6.000 | 0.877 | 1.562 | -0.534 | 29 |
+| late_us_short_bearish_trend_ce | range_or_transition | 46 | 0.776 | 5.431 | 0.038 | 1.129 | 0.543 | 6.000 | 0.586 | 1.152 | -0.409 | 0 |
+| late_us_short_bull_flush_ce | conflict | 8 | 0.135 | 0.944 | -0.298 | 0.569 | 0.375 | 3.625 | 1.115 | 1.737 | -1.948 | 0 |
+| london_long_middle_local_retest | pullback_in_uptrend | 11 | 0.186 | 1.299 | -0.388 | 0.445 | 0.364 | 2.750 | 0.905 | 1.441 | -1.605 | 0 |
+
+## Management Comparison
+| scope | target_model | management_model | events | avg_r | profit_factor | win_rate | target_rate | stop_rate | expiry_rate | breakeven_rate |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| all | fixed_2r | be_after_half_target | 378 | 0.259 | 2.006 | 0.516 | 0.164 | 0.167 | 0.556 | 0.114 |
+| all | fixed_2r | partial_1r_be_after_half_target | 382 | 0.241 | 1.969 | 0.628 | 0.165 | 0.168 | 0.552 | 0.115 |
+| all | fixed_2r | hold_target_expiry | 378 | 0.236 | 1.775 | 0.550 | 0.172 | 0.206 | 0.622 | 0.000 |
+| all | fixed_1_5r | hold_target_expiry | 392 | 0.222 | 1.761 | 0.569 | 0.263 | 0.199 | 0.538 | 0.000 |
+| all | fixed_1_5r | partial_1r_be_after_half_target | 392 | 0.210 | 1.883 | 0.579 | 0.222 | 0.156 | 0.464 | 0.158 |
+| all | fixed_1_5r | be_after_half_target | 389 | 0.201 | 1.818 | 0.501 | 0.221 | 0.157 | 0.465 | 0.157 |
+| strict | fixed_2r | be_after_half_target | 113 | 0.595 | 3.791 | 0.646 | 0.265 | 0.150 | 0.496 | 0.088 |
+| strict | fixed_2r | hold_target_expiry | 113 | 0.569 | 3.285 | 0.673 | 0.265 | 0.177 | 0.558 | 0.000 |
+| strict | fixed_1_5r | hold_target_expiry | 116 | 0.512 | 3.142 | 0.690 | 0.431 | 0.172 | 0.397 | 0.000 |
+| strict | fixed_2r | partial_1r_be_after_half_target | 113 | 0.490 | 3.365 | 0.735 | 0.265 | 0.150 | 0.496 | 0.088 |
+| strict | fixed_1_5r | be_after_half_target | 112 | 0.468 | 3.301 | 0.625 | 0.375 | 0.143 | 0.348 | 0.134 |
+| strict | fixed_1_5r | partial_1r_be_after_half_target | 112 | 0.424 | 3.131 | 0.679 | 0.375 | 0.143 | 0.348 | 0.134 |
+
+## Verdict
+- Structure improves quality, but strict filtering lowers per-symbol frequency below a few trades per week.
+- Frequency has to come from more independent setup families or lower-timeframe entry expansion, not from weakening the MTF filter.
+- EMA helps only if the rule matrix improves return/DD without starving trades; otherwise it is descriptive, not a gate.
+- Post-target continuation is measured because fixed 2R may be too short for clean London/NY winners.

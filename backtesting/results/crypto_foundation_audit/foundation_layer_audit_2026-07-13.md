@@ -194,3 +194,58 @@ Next rule to test, not assume:
    slices and shock buckets out-of-sample.
 3. Late-US shorts: split into explicit shock/fade logic; do not force EMA/HTF
    trend filters onto it.
+
+## 2026-07-13 Foundation Trade Forensics Update
+
+Implemented `crypto_foundation_trade_forensics` to collapse target/management
+variants into one physical execution row, then measure frequency, duration,
+portfolio return/DD, post-target continuation, and simple indicator filters.
+
+Scope:
+
+- Interval: `15m`.
+- Concrete execution tested first: `fixed_2r` + `hold_target_expiry`.
+- Risk model: `0.20%` per trade, max `6` open trades, max `1` open per symbol,
+  daily loss cap `0.50%`.
+- Full window: `2026-05-13 16:45 UTC` to `2026-07-11 23:45 UTC`.
+
+Measured result:
+
+| Window | Rule | Events | Events / Day | Events / Symbol / Week | Return | Max DD | PF | Win Rate | Median Duration |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 60d | all physical fixed-2R hold | 378 | 6.38 | 3.19 | +13.96% | 2.23% | 1.72 | 53.7% | 6.0h |
+| 60d | strict candidates | 113 | 1.91 | 0.95 | +12.67% | 0.76% | 3.25 | 67.0% | 6.0h |
+| 30d | all physical fixed-2R hold | 238 | 8.04 | 4.02 | +12.92% | 2.25% | 2.12 | 56.9% | 6.0h |
+| 30d | strict candidates | 87 | 2.94 | 1.47 | +11.60% | 0.76% | 4.03 | 70.9% | 6.0h |
+| 30d | NY 13 range reversal | 20 | 0.68 | 0.43 | +4.19% | 0.28% | 11.78 | 80.0% | 3.1h |
+| 30d | Late-US fade | 53 | 1.79 | 0.96 | +5.49% | 0.85% | 2.78 | 64.2% | 6.0h |
+| 30d | London trend aligned | 14 | 0.47 | 0.37 | +1.91% | 0.21% | 6.41 | 84.6% | 6.0h |
+
+Indicator chemistry:
+
+- London `trend_aligned` and `EMA 21/55 bullish` are identical in this sample:
+  EMA did not add information after MTF structure alignment.
+- London RSI-not-overbought reduced trades from `14` to `9` and reduced return;
+  it is not a useful gate yet.
+- NY `expanded_or_opposing` improved average R but starved frequency: only `7`
+  events in 30d.
+- Late-US `no_aligned_shock` slightly improved average R but reduced events from
+  `53` to `44`; useful as a risk slice, not yet a hard filter.
+
+Blunt interpretation:
+
+- The strict structure layer improves quality materially: lower DD, higher PF,
+  higher win rate.
+- Per-symbol frequency is still not enough for "few trades per week per asset."
+  In the recent 30d strict set, frequency is only `1.47` events per symbol per
+  week across the basket average.
+- The way to increase frequency is not to weaken the structure filter. That
+  gives more trades but worse DD and PF.
+- Frequency needs more independent setup families:
+  1. trend continuation,
+  2. range reversal,
+  3. shock/fade,
+  4. lower-timeframe entry expansion under the same HTF context.
+- Current stats are good for research and candidate promotion, not deployment.
+  They still need walk-forward / holdout and UI review of individual winners and
+  losers.
