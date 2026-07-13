@@ -3319,3 +3319,32 @@ assets, exactly as it should be. Next candidate investigation: compare structura
 stop/target distance (as % of price, or as multiple of ATR) across all 6 pairs to see
 if BTC/DOGE's swing geometry is systematically different in a way that explains the
 R:R mismatch -- not yet done.
+
+## Phase 25 -- Stop/target geometry: BTC and DOGE sit at opposite extremes, working pairs cluster in the middle
+
+Ran `sl_tp_geometry` (full cascade, min_rr=1.5) across all 6 pairs:
+
+| Symbol | Median stop % of price | Median target % | Median stop/ATR | Null-test result |
+|---|---|---|---|---|
+| BTCUSDT | **0.193%** (tightest) | 0.343% | 1.261 | fails (46.7th) |
+| BNBUSDT | 0.220% | 0.381% | 1.267 | passes (93.3rd) |
+| ETHUSDT | 0.271% | 0.481% | 1.164 | passes (100th) |
+| XRPUSDT | 0.283% | 0.507% | 1.154 | passes (100th) |
+| SOLUSDT | 0.315% | 0.558% | 1.153 | passes (93.3rd) |
+| DOGEUSDT | **0.387%** (widest) | 0.663% | 1.200 | fails (46.7th) |
+
+**Median planned R:R is exactly 1.5 for every pair** -- the min_rr floor, not the real
+opposing-swing target, is the binding constraint for the majority of entries across
+all 6 pairs. This means "real liquidity target" is a partial misnomer for more than
+half of cascade entries -- worth remembering when reasoning about this mechanism
+going forward.
+
+**The pattern: the two pairs that fail the null test sit at opposite extremes of
+stop-distance-as-%-of-price, and the four that pass cluster in the middle (0.22-
+0.32%).** BTC's stop is tightest of all 6; DOGE's is widest of all 6. ATR-multiple
+doesn't show as clean a split (BTC/BNB both ~1.26 despite opposite null-test
+outcomes). This is a real, testable hypothesis -- not yet confirmed causally, n=6
+pairs is a small cross-section -- next step is to test it directly: does restricting
+BTC and DOGE's own trade population to the 0.22-0.32% stop-range band recover a
+passing null-test result for them specifically, rather than just noting the
+cross-sectional correlation.
