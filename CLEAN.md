@@ -3127,3 +3127,41 @@ BTCUSDT 30m candles, entry/SL/TP levels, and structure overlay (HH/HL/LH/LL, Cho
 BOS) render correctly -- ready for manual review, same workflow the user already
 trusts (used it to correctly spot-check the prior foundation-review packet).
 375 tests passing. No stops/targets touched.
+
+## Phase 19 -- 100% win rate in review UI was a display-sampling bug, not synthetic data or look-ahead bias
+
+User manually reviewed the new cascade button: BTCUSDT, 80 trades, 100% win rate --
+correctly flagged as implausible and asked to verify it wasn't synthetic or
+look-ahead-biased.
+
+**Verified it is neither.** `structure_at`'s causal join was already confirmed correct
+(Phase 12); re-checked the export's entry/walk-forward logic directly -- entry uses
+the signal bar's own close, outcome is walked strictly forward from bar i+1, no future
+data read at decision time. Real BTCUSDT market data throughout.
+
+**Real cause: a display-sampling bug in the exporter, not the backtest.** The review
+UI's `/api/review/ict-events` sorts events by `review_bucket` (best before worst) then
+truncates to its fetch limit (80). The exporter tagged every winner "best" and every
+loser "worst". Every symbol has 128-170 real winners out of 300-350 signals (all
+comfortably over 80) -- so the truncated view was *always* 100% wins, for every symbol,
+regardless of the real win rate. Confirmed by direct count: BTCUSDT 128/313 wins =
+40.9%, matching Phase 17's backtest (41.0%) almost exactly -- the underlying numbers
+were never wrong, only what got displayed.
+
+**Fix**: cap each symbol's export at 75 rows (below the UI's 80-row fetch limit) via
+systematic time-spaced sampling -- preserves chronological spread and the true win/
+loss ratio, and since nothing exceeds the fetch limit, nothing gets silently truncated.
+Dropped the outcome-correlated bucket label for a neutral one. Re-verified live:
+BTCUSDT now shows 75 trades, WR 30.7% (sampling variance from the true 40.9% at
+n=75 vs n=313, expected), PF 0.75, mixed wins/losses/expiries in chronological order.
+
+Added 3 regression tests: per-symbol export count stays under the UI's fetch limit,
+review_bucket doesn't correlate with win/loss, capped sample keeps both outcome
+classes. 378 tests passing. No stops/targets touched.
+
+**Lesson for this project's own review-UI convention**: any future "LOAD ... REVIEW"
+button that tags rows by outcome-derived bucket must keep the per-symbol/predictor
+row count under the UI's fetch limit, or apply the same neutral-bucket + capped-sample
+pattern -- the existing foundation-review packet and others were not audited for this
+same failure mode as part of this fix; worth a quick check if anyone reports a
+suspiciously clean win rate from those buttons too.
