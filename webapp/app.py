@@ -2675,7 +2675,7 @@ def api_review_ict_events():
             end=end_ts.isoformat(),
             asset_type=_review_asset_type(symbol),
             exchange=exchange or None,
-            crypto_source="exchange" if exchange and _review_asset_type(symbol) == "crypto" else None,
+            crypto_source="merged" if exchange and _review_asset_type(symbol) == "crypto" else None,
         )
         if df.empty:
             return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404

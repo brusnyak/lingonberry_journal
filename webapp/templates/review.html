@@ -223,6 +223,7 @@
     <button id="crypto-london-setup-btn" onclick="loadCryptoLondonSetupLabEvents()" style="grid-column:1/-1;background:#4338ca;color:#fff;border:none;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">LOAD LONDON SETUP LAB</button>
     <button id="crypto-pattern-btn" onclick="loadCryptoCanonicalPatternEvents()" style="grid-column:1/-1;background:#6d28d9;color:#fff;border:none;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">LOAD CANONICAL PATTERN REVIEW</button>
     <button id="crypto-foundation-btn" onclick="loadCryptoFoundationReviewEvents()" style="grid-column:1/-1;background:#be123c;color:#fff;border:none;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">LOAD FOUNDATION REVIEW</button>
+    <button id="crypto-cascade-btn" onclick="loadCryptoCascadeReviewEvents()" style="grid-column:1/-1;background:#166534;color:#fff;border:none;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">LOAD CASCADE (GLOBAL+LOCAL+MINI) REVIEW</button>
   </div>
 
   <div id="stats"></div>
@@ -818,6 +819,66 @@ async function loadCryptoFoundationReviewEvents() {
         exchange,
         limit: 80,
         events_path: 'backtesting/results/crypto_foundation_trade_forensics/foundation_review_packet.csv',
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) { alert(data.error + '\n' + (data.trace||'')); return; }
+
+    trades = data.trades || [];
+    allCandles = data.candles || [];
+    structureData = data.structure || { pivots: [], bos_events: [] };
+    userLabels = {};
+    if (drawingEngine) drawingEngine.setCandles(allCandles);
+    renderStats(data.report);
+    renderTradeList();
+    if (trades.length > 0) showTrade(0);
+  } catch(e) {
+    alert('Fetch error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    hideLoading();
+  }
+}
+
+async function loadCryptoCascadeReviewEvents() {
+  const btn = document.getElementById('crypto-cascade-btn');
+  btn.disabled = true;
+  const cascadeSymbols = new Set(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'BNBUSDT']);
+  let symbol = document.getElementById('cfg-symbol').value || 'BTCUSDT';
+  if (!cascadeSymbols.has(symbol)) {
+    symbol = 'BTCUSDT';
+    document.getElementById('cfg-symbol').value = symbol;
+  }
+  const exchange = document.getElementById('cfg-exchange').value || 'binance';
+  showLoading('Loading global+local+mini cascade review…');
+
+  currentSymbol = symbol;
+  currentTf = '30';
+  currentStrategy = 'CryptoCascadeReview';
+  currentParams = {
+    source: 'cascade_review_packet',
+    predictor: 'crypto_cascade_global_local_mini',
+    session: 'any',
+    direction: 'any',
+    target: '1.5r',
+    exchange,
+  };
+  document.getElementById('cfg-tf').value = '30';
+
+  try {
+    const resp = await fetch('/api/review/ict-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        symbol,
+        tf: '30',
+        predictor: 'crypto_cascade_global_local_mini',
+        session: 'any',
+        direction: 'any',
+        target: '1.5r',
+        exchange,
+        limit: 80,
+        events_path: 'backtesting/results/crypto_mtf_cascade_direction/cascade_review_packet.csv',
       }),
     });
     const data = await resp.json();
