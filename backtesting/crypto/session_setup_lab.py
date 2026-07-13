@@ -66,10 +66,10 @@ def _attach_entry_features(trades: pd.DataFrame) -> pd.DataFrame:
         data = load_data(
             str(symbol),
             tf=str(tf),
-            days=60,
+            days=400,
             asset_type="crypto",
             exchange=str(exchange),
-            crypto_source="exchange",
+            crypto_source="merged",
         ).sort_values("ts").reset_index(drop=True)
         data["ts"] = pd.to_datetime(data["ts"], utc=True)
         atr = _atr(data, 14)

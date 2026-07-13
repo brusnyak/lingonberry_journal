@@ -21,7 +21,7 @@ from backtesting.engine.data import load_data
 
 @dataclass(frozen=True)
 class TrendSessionMatrixConfig:
-    days: int = 60
+    days: int = 400
     context_tf: str = "240"
     middle_tf: str = "60"
     ema_fast: int = 21
@@ -47,7 +47,7 @@ def run_trend_session_matrix(
             global_ema = _ema_context(exchange, symbol, cfg.context_tf, cfg)
             middle_ema = _ema_context(exchange, symbol, cfg.middle_tf, cfg)
             for tf in tfs:
-                df = load_data(symbol, tf=tf, days=cfg.days, asset_type="crypto", exchange=exchange, crypto_source="exchange")
+                df = load_data(symbol, tf=tf, days=cfg.days, asset_type="crypto", exchange=exchange, crypto_source="merged")
                 if df.empty:
                     print(f"  {exchange}/{symbol} {tf}: missing data", flush=True)
                     continue
@@ -205,7 +205,7 @@ def write_matrix_report(events: pd.DataFrame, summary: pd.DataFrame, output_path
 
 
 def _ema_context(exchange: str, symbol: str, tf: str, cfg: TrendSessionMatrixConfig) -> pd.DataFrame:
-    df = load_data(symbol, tf=tf, days=cfg.days + 20, asset_type="crypto", exchange=exchange, crypto_source="exchange")
+    df = load_data(symbol, tf=tf, days=cfg.days + 20, asset_type="crypto", exchange=exchange, crypto_source="merged")
     if df.empty:
         return pd.DataFrame(columns=["known_after_ts", "ema_state", "ema_fast", "ema_slow"])
     return _ema_from_frame(df, tf=tf, cfg=cfg)
@@ -338,7 +338,7 @@ def main() -> int:
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--exchange", default="both", choices=["binance", "bybit", "both"])
     parser.add_argument("--tfs", default="5,15")
-    parser.add_argument("--days", type=int, default=60)
+    parser.add_argument("--days", type=int, default=400)
     parser.add_argument("--output-dir", default=str(TrendSessionMatrixConfig.output_dir))
     parser.add_argument("--min-events", type=int, default=80)
     parser.add_argument("--min-symbols", type=int, default=6)

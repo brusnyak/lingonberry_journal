@@ -29,7 +29,7 @@ def build_structure_regime_journal(
     *,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     structure_root: Path = DEFAULT_STRUCTURE_ROOT,
-    days: int = 90,
+    days: int = 400,
 ) -> dict[str, pd.DataFrame]:
     trades = _load_table(trades_path)
     if trades.empty:
@@ -64,7 +64,7 @@ def enrich_trades_with_structure(
     trades: pd.DataFrame,
     *,
     structure_root: Path = DEFAULT_STRUCTURE_ROOT,
-    days: int = 90,
+    days: int = 400,
 ) -> pd.DataFrame:
     data = trades.copy()
     for col in ["entry_ts", "signal_ts", "bar_ts", "exit_ts"]:
@@ -445,7 +445,7 @@ def _cached_structure(cache: dict[tuple[str, str, str], pd.DataFrame], root: Pat
 def _cached_ohlcv(cache: dict[tuple[str, str, str], pd.DataFrame], exchange: str, symbol: str, tf: str, days: int) -> pd.DataFrame:
     key = (exchange, symbol, str(tf))
     if key not in cache:
-        cache[key] = load_crypto(symbol, tf=str(tf), days=days, exchange=exchange, source="exchange")
+        cache[key] = load_crypto(symbol, tf=str(tf), days=days, exchange=exchange, source="merged")
     return cache[key]
 
 
@@ -588,7 +588,7 @@ def main() -> int:
     parser.add_argument("--trades", default=str(DEFAULT_ACCEPTED_TRADES))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--structure-root", default=str(DEFAULT_STRUCTURE_ROOT))
-    parser.add_argument("--days", type=int, default=90)
+    parser.add_argument("--days", type=int, default=400)
     args = parser.parse_args()
 
     result = build_structure_regime_journal(

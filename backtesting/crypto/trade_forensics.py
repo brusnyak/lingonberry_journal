@@ -33,7 +33,7 @@ class ForensicsConfig:
     max_open_trades: int = 6
     max_open_per_symbol: int = 1
     daily_loss_limit_pct: float = 0.005
-    days: int = 60
+    days: int = 400
 
 
 def build_trade_forensics(
@@ -182,7 +182,7 @@ def _forensic_row(row: dict, cfg: ForensicsConfig) -> dict:
         entry_ts = entry_ts.tz_convert("UTC")
 
     try:
-        data = load_data(symbol, tf=tf, days=cfg.days, asset_type="crypto", exchange=exchange, crypto_source="exchange")
+        data = load_data(symbol, tf=tf, days=cfg.days, asset_type="crypto", exchange=exchange, crypto_source="merged")
         data = data.sort_values("ts").reset_index(drop=True)
         data["ts"] = pd.to_datetime(data["ts"], utc=True)
     except Exception as exc:

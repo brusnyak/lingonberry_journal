@@ -61,7 +61,7 @@ class ForensicsRunConfig:
     max_open_trades: int = 6
     max_open_per_symbol: int = 1
     daily_loss_limit_pct: float = 0.005
-    days: int = 90
+    days: int = 400
     post_bars: tuple[int, ...] = (4, 8, 16, 24)
 
 
@@ -168,7 +168,7 @@ def enrich_events(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame
         tf = str(row.get("tf", "15"))
         key = (exchange, symbol, tf)
         if key not in cache:
-            cache[key] = load_crypto(symbol, tf=tf, days=cfg.days, exchange=exchange, source="exchange")
+            cache[key] = load_crypto(symbol, tf=tf, days=cfg.days, exchange=exchange, source="merged")
         ohlcv = _prepare_ohlcv(cache[key])
         row.update(indicator_snapshot(ohlcv, pd.Timestamp(row["entry_ts"])))
         row.update(post_exit_continuation(ohlcv, row, cfg.post_bars))

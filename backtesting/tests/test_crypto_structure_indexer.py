@@ -41,7 +41,7 @@ def test_build_one_writes_exchange_scoped_structure(monkeypatch, tmp_path):
     assert result.path.exists()
     assert calls[0][1]["asset_type"] == "crypto"
     assert calls[0][1]["exchange"] == "binance"
-    assert calls[0][1]["crypto_source"] == "exchange"
+    assert calls[0][1]["crypto_source"] == "merged"
 
     saved = pd.read_parquet(result.path)
     assert "known_after_ts" in saved.columns

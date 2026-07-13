@@ -43,10 +43,10 @@ def build_one(
     tf: str,
     exchange: str,
     *,
-    days: int = 120,
+    days: int = 400,
     output_root: Path = Path("data/features/structure/L2_R2"),
     config: StructureConfig | None = None,
-    crypto_source: str = "exchange",
+    crypto_source: str = "merged",
 ) -> StructureIndexResult:
     out_path = output_root / exchange / symbol / f"{tf}.parquet"
     try:
@@ -95,7 +95,7 @@ def build_crypto_structure_cache(
     days: int,
     output_root: Path = Path("data/features/structure/L2_R2"),
     config: StructureConfig | None = None,
-    crypto_source: str = "exchange",
+    crypto_source: str = "merged",
 ) -> pd.DataFrame:
     rows: list[dict] = []
     for exchange in exchanges:
@@ -132,12 +132,12 @@ def main() -> int:
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--exchange", default="both", choices=["binance", "bybit", "both"])
     parser.add_argument("--tfs", default=",".join(DEFAULT_TFS))
-    parser.add_argument("--days", type=int, default=120)
+    parser.add_argument("--days", type=int, default=400)
     parser.add_argument("--left", type=int, default=2)
     parser.add_argument("--right", type=int, default=2)
     parser.add_argument("--output-root", default="data/features/structure/L2_R2")
     parser.add_argument("--summary-output", default="backtesting/results/crypto_structure_index_summary.csv")
-    parser.add_argument("--source", default="exchange", choices=["exchange", "legacy", "merged"],
+    parser.add_argument("--source", default="merged", choices=["exchange", "legacy", "merged"],
                          help="'exchange' caps history to exchange-scoped files (~90-120d); "
                               "'merged' pulls in deep legacy history (multi-year) too.")
     args = parser.parse_args()
