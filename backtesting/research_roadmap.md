@@ -45,6 +45,8 @@ Done or implemented:
     half-target breakeven management, and optional EMA research variants.
 13. First trade-level forensic audit for the promoted shock-aware bucket,
     including UI review packet generation and exchange-specific review loading.
+14. First single-exchange trend/session matrix for crypto `15m`, separating
+    raw event frequency from execution-filter scarcity.
 
 Still needed:
 
@@ -473,6 +475,49 @@ Forensic verdict:
   `backtesting/results/review_samples/crypto_shock_forensics_review_samples.csv`.
 - The review UI now has exchange-specific loading for Binance/Bybit so manual
   labels do not mix exchange candles.
+
+Trend/session matrix checkpoint on 2026-07-13:
+
+- Scope: Binance only, reviewed `11`-symbol crypto basket, `15m`, `60d`.
+- Reason for Binance-only: Binance and Bybit price action is similar enough for
+  first-pass direction/session research. Exchange split should be reserved for
+  robustness, fees, liquidity, and execution validation after a viable bucket is
+  found.
+- Total event rows: `278,770`.
+- FVG event rows: `134,850`.
+- Summary rows: `4,953`.
+- Research-ready rows after single-exchange gates: `432`.
+- Raw FVG event flow is not scarce. The low trade count in the promoted bucket
+  comes from execution-selection filters: session, direction, structure,
+  retest, duplicate suppression, and portfolio throttles.
+
+Top event-level buckets from the matrix:
+
+| Session | Direction | Context | EMA/trend state | Stop | Target | Events | Symbols | Avg R | PF | Stop |
+|---|---|---|---|---|---|---:|---:|---:|---:|---:|
+| late US | short | 4H bull | counter global/structure | ATR | fixed 2R | 131 | 11 | +0.602 | 2.31 | 40.5% |
+| late US | short | 4H bull | counter global/structure | event extreme | fixed 2R | 131 | 11 | +0.598 | 2.40 | 36.6% |
+| late US | short | 4H bull | counter global/structure | prior swing | fixed 2R | 131 | 11 | +0.425 | 3.21 | 12.2% |
+| Asia | short | 4H bull | 1H+15m bearish EMA | event extreme | fixed 2R | 117 | 11 | +0.387 | 1.86 | 37.6% |
+| Asia | short | 4H bull | 1H+15m bearish EMA | prior swing | fixed 2R | 117 | 11 | +0.320 | 2.33 | 17.1% |
+| London | long | 4H bull | 1H+15m bullish EMA | prior swing | fixed 2R | 181 | 10 | +0.240 | 1.82 | 22.7% |
+
+Matrix interpretation:
+
+- The current late-US short idea still appears in the best event-level rows, but
+  it is explicitly a countertrend/flush bucket, not a general trend engine.
+- Asia short with 1H+15m bearish EMA alignment is the first non-late-US short
+  candidate.
+- London long with 1H+15m bullish EMA alignment is the first cleaner
+  trend-following candidate.
+- Full all-timeframe trend alignment was not best at the raw event level. The
+  useful helper appears to be middle/local EMA alignment, not blindly requiring
+  4H EMA plus 4H structure to agree.
+- Next step is not another broad backtest. It is execution-path validation for
+  three candidates:
+  1. late-US short countertrend, kept as benchmark;
+  2. Asia short with middle/local bearish EMA;
+  3. London long with middle/local bullish EMA.
 
 Execution-path review:
 
