@@ -2885,3 +2885,89 @@ next candidate, decoupled from trend-alignment framing), and does not rule out a
 different structure definition doing better -- only that this one, as implemented,
 doesn't. Per instruction, no stops or targets were touched; this is a read, not a
 strategy change. 366 tests passing (2 new, for the new module).
+
+## Phase 14 -- Config centralized; synthetic ground-truth validation finds the real culprit; EMA+structure agreement is the best signal so far
+
+Three user directives: (1) stop hardcoding a specific backtest interval in N places --
+make it one reconfigurable setting; (2) validate the direction-accuracy harness on
+synthetic data with a known, verifiable answer before trusting any real-data result;
+(3) structure alone is not expected to carry direction -- combine MTF structure with
+technical-indicator trend at global/local/mini-trend levels, confirmation/entry decided
+on the 1m/5m mini-trend.
+
+**(1) Centralized.** `backtesting/crypto/config.py` (`DEFAULT_DAYS=400`,
+`DEFAULT_SOURCE="merged"`) is now the single source all 9 crypto loading scripts
+reference. Change the interval once, not in 9 files.
+
+**(2) Synthetic validation -- found the real problem.** Built
+`backtesting/crypto/synthetic_ohlcv.py` (staircase trend with real HH/HL swing legs,
+plus a random-walk negative control) and ran the same measurement harness against it.
+
+| Series | Pivot window | n (decided) | Direction accuracy |
+|---|---|---|---|
+| Synthetic uptrend (known) | left=2,right=2 (project default) | 554 | 57.4% |
+| Synthetic uptrend (known) | left=5,right=5 | 94 | 71.3% |
+| Synthetic uptrend (known) | left=8,right=8 | 12 | 83.3% |
+| Synthetic downtrend (known) | left=2,right=2 | 572 | 58.9% |
+| Random walk (known: no edge) | left=2,right=2 | 836 | 45.5% |
+| Random walk (known: no edge) | left=8,right=8 | 292 | 47.9% |
+
+**Finding: the project-wide default pivot window (left=2, right=2) is measurably too
+noise-sensitive to characterize even a real, known trend.** It generates far more
+"regime transitions" than the actual number of trend legs (554 vs ~363 true legs in the
+uptrend series), diluting a real signal toward the mid-50s. Widening the window
+recovers real accuracy (83% at left=8) but at the cost of sample size. Random walk
+stays correctly ~46-48% at every setting (no baked-in bias). This means Phase 12/13's
+~42-53% real-data results are contaminated by a harness/hyperparameter weakness, not
+purely evidence of "no real structure" -- retested with wider windows below.
+
+**Retested real BTC/ETH/SOL at 240m with wider pivot windows -- does not recover:**
+
+| Symbol | left=2,right=2 | left=5,right=5 | left=8,right=8 |
+|---|---|---|---|
+| BTCUSDT | 43.8% (n=112) | 40.8% (n=49) | 43.5% (n=23) |
+| ETHUSDT | 51.5% (n=103) | 60.9% (n=46) | 48.1% (n=27) |
+| SOLUSDT | 53.4% (n=103) | 53.8% (n=52) | 58.8% (n=34) |
+
+Unlike synthetic data, widening the window on real data does not monotonically improve
+accuracy -- it bounces noisily and n shrinks fast. Because the harness is now proven
+capable of detecting a real trend when one exists, this null result on real data is
+more trustworthy than Phase 12/13's, not less.
+
+**EMA(21/55)-slope trend (`direction_layer.ema_state`, already-existing, causal) is a
+better-behaved classifier on synthetic data:**
+
+| Series | n (decided) | Direction accuracy |
+|---|---|---|
+| Synthetic uptrend (known) | 533 | 78.8% |
+| Synthetic downtrend (known) | 516 | 77.5% |
+| Random walk (known: no edge) | 1591 | 48.1% |
+
+**On real 240m data, EMA alone is still noisy (46.6-57.7% across 6 pairs)** -- better
+calibrated than structure alone but no clear edge yet solo.
+
+**Requiring structure AND EMA to agree (single TF, 240m) is the most promising result
+so far**, though not yet synthetic-validated or individually significant at n~100-117:
+
+| Symbol | Structure only | EMA only | Structure+EMA agree |
+|---|---|---|---|
+| BTCUSDT | 43.8% | 52.7% | 46.6% |
+| ETHUSDT | 51.5% | 46.6% | 50.0% |
+| SOLUSDT | 53.4% | 57.7% | 61.9% |
+| XRPUSDT | 42.9% | 51.5% | 51.3% |
+| DOGEUSDT | 44.7% | 52.7% | 59.0% |
+| BNBUSDT | 44.9% | 53.7% | 58.7% |
+| **mean** | **46.9%** | **52.5%** | **54.6%** |
+
+**Research (practitioner-level, not academically rigorous -- flagged honestly):**
+multi-timeframe trend confirmation (global bias -> medium-TF alignment -> low-TF entry
+timing, commonly 4:1-6:1 TF ratios) and EMA+ADX dual confirmation are standard
+practitioner patterns ([tradeciety](https://tradeciety.com/how-to-perform-a-multiple-time-frame-analysis),
+[mindmathmoney](https://www.mindmathmoney.com/articles/multi-timeframe-analysis-trading-strategy-the-complete-guide-to-trading-multiple-timeframes),
+[forextester ADX+EMA](https://forextester.com/blog/adx-14-ema-strategy/)) -- no
+peer-reviewed backtest evidence found, only blog-level consensus. Treat as a reasonable
+prior on architecture (TF ratios, dual-confirmation logic), not as validated edge.
+
+**Not yet done, next step**: full global/local/mini-trend cascade (3 timeframes, not
+just single-TF combination) is the user's actual design ask -- deferred pending TF
+assignment confirmation. No stops/targets touched. 370 tests passing.
