@@ -268,9 +268,11 @@ def evaluate_stress_matrix(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.
         return pd.DataFrame()
     data = events.copy()
     data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True, errors="coerce")
+    min_ts = data["entry_ts"].min()
     max_ts = data["entry_ts"].max()
     windows = [
         ("60d", data),
+        ("first30d", data[data["entry_ts"] < min_ts + pd.Timedelta(days=30)].copy()),
         ("30d", data[data["entry_ts"] >= max_ts - pd.Timedelta(days=30)].copy()),
     ]
     scenarios = [
@@ -349,9 +351,11 @@ def evaluate_windowed_rules(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd
         return evaluate_rules(events, cfg)
     data = events.copy()
     data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True, errors="coerce")
+    min_ts = data["entry_ts"].min()
     max_ts = data["entry_ts"].max()
     windows = [
         ("60d", data),
+        ("first30d", data[data["entry_ts"] < min_ts + pd.Timedelta(days=30)].copy()),
         ("30d", data[data["entry_ts"] >= max_ts - pd.Timedelta(days=30)].copy()),
     ]
     frames: list[pd.DataFrame] = []
@@ -610,7 +614,7 @@ def _stress_report_slice(stress: pd.DataFrame) -> pd.DataFrame:
     if stress.empty:
         return stress
     keep = stress[
-        (stress["window"].isin(["60d", "30d"]))
+        (stress["window"].isin(["60d", "first30d", "30d"]))
         & (stress["rule"].isin(["strict_candidates", "ny_13_range_reversal", "late_us_fade", "london_trend_aligned"]))
     ].copy()
     cols = [
@@ -626,7 +630,7 @@ def _stress_report_slice(stress: pd.DataFrame) -> pd.DataFrame:
         "win_rate",
         "return_to_dd",
     ]
-    return keep[cols].head(40)
+    return keep[cols]
 
 
 def _format_report_table(df: pd.DataFrame) -> pd.DataFrame:

@@ -272,6 +272,9 @@ Strict candidate stress:
 | 60d | high 22 bps | +8.51% | 0.92% | 2.26 | 63.1% | 9.24 |
 | 60d | punitive 40 bps | +4.92% | 1.32% | 1.61 | 61.3% | 3.72 |
 | 60d | nightmare 60 bps | +1.00% | 1.75% | 1.11 | 52.3% | 0.57 |
+| first 30d | baseline | +1.08% | 0.64% | 1.60 | 53.8% | 1.69 |
+| first 30d | high 22 bps | +0.26% | 0.81% | 1.12 | 50.0% | 0.32 |
+| first 30d | punitive 40 bps | -0.41% | 1.32% | 0.85 | 46.2% | -0.31 |
 | 30d | baseline | +11.60% | 0.76% | 4.03 | 70.9% | 15.31 |
 | 30d | high 22 bps | +8.25% | 0.92% | 2.82 | 67.1% | 8.96 |
 | 30d | punitive 40 bps | +5.33% | 1.05% | 1.99 | 65.9% | 5.05 |
@@ -281,6 +284,8 @@ Blunt interpretation:
 
 - The strict structure basket survives realistic, high, and punitive friction.
 - It does not have enough margin to trust under nightmare `60 bps` friction.
+- First 30d is weak and fails punitive `40 bps`; recent 30d is strong. This is
+  regime dependence, not deployment stability.
 - NY 13 range reversal and London trend-aligned are the most friction-resistant
   modules, but sample size is still small.
 - Late-US fade is useful but cost-sensitive; it dies around nightmare friction.
