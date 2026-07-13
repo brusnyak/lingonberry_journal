@@ -56,6 +56,8 @@ Done or implemented:
     strategy-filter scarcity, and raw executable-event frequency.
 19. First London setup lab testing candle/setup confirmation features as
     frequency-quality gates.
+20. Engine-correctness audit found and fixed duplicate execution variants in
+    portfolio/review research packets.
 
 Still needed:
 
@@ -848,6 +850,41 @@ Setup-lab interpretation:
   `SOLUSDT`, `AVAXUSDT`. Do not exclude them permanently yet; validate with
   walk-forward symbol promotion.
 
+Engine-correctness audit on 2026-07-13:
+
+- Manual UI review was correct: some review rows were the same execution shown
+  multiple times under raw and structure-confirmed labels.
+- Fixed:
+  - portfolio preparation now de-duplicates exact executions;
+  - structure-confirmed rows are preferred over raw duplicate rows;
+  - London frequency/setup review packets are also de-duplicated.
+- Exact execution identity:
+  `exchange + symbol + entry_ts + entry + stop + target + direction +
+  target_model + management_model`.
+- Post-fix duplicate counts:
+  - London setup review packet: `122` rows, `0` exact duplicates;
+  - London frequency review packet: `123` rows, `0` exact duplicates;
+  - London setup enriched trades: `3,057` rows, `0` exact duplicates.
+
+Corrected setup-lab result:
+
+| Variant | Candidates | Accepted | Avg R | PF | Return | Max DD | Stop |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `middle_local_bull_any_entry_confirm` | `267` | `73` | `+0.396R` | `2.51` | `+5.79%` | `1.33%` | `17.8%` |
+| `middle_local_bull_rejection_or_break` | `61` | `34` | `+0.660R` | `5.67` | `+4.49%` | `0.69%` | `8.8%` |
+| `middle_local_bull_candle_confirm` | `62` | `33` | `+0.633R` | `4.61` | `+4.17%` | `0.91%` | `12.1%` |
+| `all_london_long` | `3,057` | `361` | `+0.017R` | `1.04` | `+1.23%` | `5.70%` | `29.9%` |
+
+Interval/window audit:
+
+- `15m/30d` London long is strong: best rows around `+0.51R` to `+0.61R`,
+  PF `4.1-5.0`, stop `11-13%`.
+- `15m/60d` still favors late-US short as the more stable module.
+- `5m/30d` generated `340,362` scored rows; it is too noisy/heavy as the main
+  search layer but useful as an entry-refinement layer.
+- Do not run exhaustive `5m/60d` matrices as the normal loop. Build a thin
+  canonical harness that emits one setup/one execution/one forensic path.
+
 Research notes from external literature:
 
 - Bitcoin activity and volatility are not uniform through the day; European and
@@ -881,17 +918,22 @@ Next concrete work:
 
 1. Run rolling/discovery-holdout validation for the late-US short + London long
    module stack.
-2. UI-review London setup lab samples using
+2. Build a thin canonical backtest harness:
+   - one setup row;
+   - one selected execution;
+   - explicit reject/accept reason;
+   - full pre/post forensic path.
+3. UI-review corrected London setup lab samples using
    `backtesting/results/review_samples/crypto_london_setup_lab_review_samples.csv`,
    especially `setup_confirm_loser` and `no_confirm_winner`.
-3. Run holdout validation for London setup variants:
+4. Run holdout validation for London setup variants:
    - `middle_local_bull_any_entry_confirm`;
    - `middle_local_bull_rejection_or_break`;
    - `middle_local_bull_candle_confirm`.
-4. Promote Asia short only if it survives the same execution, portfolio, and
+5. Promote Asia short only if it survives the same execution, portfolio, and
    holdout gates.
-5. Add walk-forward symbol filtering to session modules instead of static
+6. Add walk-forward symbol filtering to session modules instead of static
    symbol exclusions.
-6. Add trade-frequency, overlap/correlation, and drawdown controls before
+7. Add trade-frequency, overlap/correlation, and drawdown controls before
    judging returns.
-7. Add multi-asset refresh for FX/metals/indices before comparing asset classes.
+8. Add multi-asset refresh for FX/metals/indices before comparing asset classes.

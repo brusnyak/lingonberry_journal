@@ -97,3 +97,34 @@ def test_simulate_portfolio_applies_daily_loss_cap():
 
     assert len(accepted) == 1
     assert summary["gross_return_pct"] == -0.01
+
+
+def test_simulate_portfolio_dedupes_same_execution_preferring_confirmed():
+    trades = _trades().head(1).copy()
+    raw = trades.iloc[0].copy()
+    raw["entry_model"] = "next_open"
+    raw["confirmation_model"] = "none"
+    confirmed = raw.copy()
+    confirmed["entry_model"] = "structure_confirmed_next_open"
+    confirmed["confirmation_model"] = "latest_bull_regime"
+    data = pd.DataFrame([raw, confirmed])
+    data["entry"] = 100.0
+    data["stop"] = 99.0
+    data["target"] = 102.0
+    data["direction"] = "long"
+    data["target_model"] = "fixed_2r"
+
+    accepted, summary = simulate_portfolio(
+        data,
+        PortfolioRiskConfig(
+            risk_per_trade_pct=0.01,
+            max_open_trades=5,
+            max_open_per_symbol=5,
+            cooldown_after_loss_bars=0,
+            daily_loss_limit_pct=1.0,
+        ),
+    )
+
+    assert summary["candidates"] == 1
+    assert len(accepted) == 1
+    assert accepted.iloc[0]["entry_model"] == "structure_confirmed_next_open"

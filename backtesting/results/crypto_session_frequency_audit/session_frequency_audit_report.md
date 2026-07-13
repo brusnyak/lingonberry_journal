@@ -13,28 +13,28 @@ Date: 2026-07-13.
 
 | module | candidates | accepted | symbols | avg_r | profit_factor | gross_return_pct | max_dd_pct | stop_rate | expiry_rate |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| london_current | 143 | 69 | 10 | +0.347 | +2.262 | 4.78% | 1.75% | 18.84% | 46.38% |
-| late_us_current | 74 | 53 | 11 | +0.355 | +2.140 | 3.76% | 1.84% | 22.64% | 54.72% |
+| london_current | 143 | 69 | 10 | +0.354 | +2.289 | 4.89% | 1.75% | 18.84% | 44.93% |
+| late_us_current | 74 | 53 | 11 | +0.379 | +2.217 | 4.02% | 1.62% | 22.64% | 52.83% |
 
 ## London Variants
 
 | variant | candidates | accepted | symbols | avg_r | profit_factor | gross_return_pct | max_dd_pct | stop_rate | expiry_rate |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ctx_bull_all_middle_local_long | 627 | 78 | 10 | +0.350 | +2.262 | 5.45% | 1.82% | 19.23% | 46.15% |
-| ctx_bull_any_entry_confirm | 267 | 73 | 10 | +0.373 | +2.417 | 5.45% | 1.35% | 17.81% | 46.58% |
-| current | 143 | 69 | 10 | +0.347 | +2.262 | 4.78% | 1.75% | 18.84% | 46.38% |
-| drop_ctx_keep_ema_confirm | 155 | 73 | 11 | +0.295 | +1.983 | 4.31% | 1.96% | 20.55% | 46.58% |
-| all_london_long_fixed2_be | 993 | 320 | 11 | +0.008 | +1.020 | 0.54% | 6.39% | 30.94% | 44.69% |
+| ctx_bull_any_entry_confirm | 267 | 73 | 10 | +0.396 | +2.513 | 5.79% | 1.33% | 17.81% | 46.58% |
+| current | 143 | 69 | 10 | +0.354 | +2.289 | 4.89% | 1.75% | 18.84% | 44.93% |
+| drop_ctx_keep_ema_confirm | 155 | 73 | 11 | +0.301 | +2.004 | 4.40% | 1.96% | 20.55% | 46.58% |
+| ctx_bull_all_middle_local_long | 627 | 78 | 10 | +0.278 | +1.975 | 4.34% | 2.21% | 19.23% | 44.87% |
+| all_london_long_fixed2_be | 993 | 315 | 11 | +0.017 | +1.042 | 1.09% | 6.07% | 31.11% | 44.76% |
 
 ## London Filter Funnel
 
 | stage | candidates | accepted | symbols | accepted_avg_r | accepted_pf | accepted_return_pct | accepted_dd_pct | accepted_stop_rate | accepted_expiry_rate |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| all_london_long_fixed2_be | 5147 | 355 | 11 | -0.017 | +0.960 | -1.21% | 6.42% | 32.11% | 42.54% |
-| plus_ctx_bull | 3720 | 315 | 11 | -0.004 | +0.991 | -0.25% | 6.13% | 33.02% | 38.41% |
-| plus_middle_local_bullish | 627 | 78 | 10 | +0.350 | +2.262 | 5.45% | 1.82% | 19.23% | 46.15% |
-| plus_structure_confirmed_next_open | 146 | 70 | 10 | +0.345 | +2.273 | 4.83% | 1.75% | 18.57% | 47.14% |
-| current_with_latest_bull_regime | 143 | 69 | 10 | +0.347 | +2.262 | 4.78% | 1.75% | 18.84% | 46.38% |
+| all_london_long_fixed2_be | 5147 | 361 | 11 | +0.017 | +1.042 | 1.23% | 5.70% | 29.92% | 42.38% |
+| plus_ctx_bull | 3720 | 316 | 11 | +0.005 | +1.011 | 0.29% | 5.70% | 32.91% | 36.39% |
+| plus_middle_local_bullish | 627 | 78 | 10 | +0.278 | +1.975 | 4.34% | 2.21% | 19.23% | 44.87% |
+| plus_structure_confirmed_next_open | 146 | 70 | 10 | +0.353 | +2.308 | 4.95% | 1.75% | 18.57% | 47.14% |
+| current_with_latest_bull_regime | 143 | 69 | 10 | +0.354 | +2.289 | 4.89% | 1.75% | 18.84% | 44.93% |
 
 ## Session/Direction Reality Check
 

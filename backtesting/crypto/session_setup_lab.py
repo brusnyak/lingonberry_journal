@@ -30,7 +30,7 @@ def run_session_setup_lab(
 ) -> dict[str, pd.DataFrame]:
     output_dir.mkdir(parents=True, exist_ok=True)
     base = _london_base(trades)
-    enriched = _attach_entry_features(base)
+    enriched = _dedupe_executions(_attach_entry_features(base))
     variants = _variant_summary(enriched)
     by_symbol = _by_symbol(enriched)
     review = _review_packet(enriched)
@@ -298,12 +298,12 @@ def _by_symbol(trades: pd.DataFrame) -> pd.DataFrame:
 
 
 def _review_packet(trades: pd.DataFrame, per_symbol: int = 4) -> pd.DataFrame:
-    current = _filter(trades, {
+    current = _dedupe_executions(_filter(trades, {
         "ctx_240_regime": "bull",
         "trend_alignment": "middle_local_ema",
         "middle_ema_state": "bullish",
         "local_ema_state": "bullish",
-    }).copy()
+    })).copy()
     if current.empty:
         return current
     buckets = []
@@ -371,6 +371,34 @@ def _filter(trades: pd.DataFrame, spec: dict[str, object]) -> pd.DataFrame:
         else:
             out = out[out[col].astype(str) == str(value)].copy()
     return out.reset_index(drop=True)
+
+
+def _dedupe_executions(trades: pd.DataFrame) -> pd.DataFrame:
+    if trades.empty:
+        return trades.copy()
+    data = trades.copy()
+    data["_execution_priority"] = data.apply(_execution_priority, axis=1)
+    sort_cols = [c for c in ["entry_ts", "exchange", "symbol", "_execution_priority"] if c in data.columns]
+    data = data.sort_values(sort_cols).reset_index(drop=True)
+    identity = [c for c in ["exchange", "symbol", "entry_ts", "entry", "stop", "target", "direction", "target_model", "management_model"] if c in data.columns]
+    if identity:
+        data = data.drop_duplicates(subset=identity, keep="first").reset_index(drop=True)
+    return data.drop(columns=["_execution_priority"], errors="ignore")
+
+
+def _execution_priority(row: pd.Series) -> tuple[int, int]:
+    entry_model = str(row.get("entry_model", ""))
+    confirmation = str(row.get("confirmation_model", ""))
+    confirmed_rank = 0 if entry_model.startswith("structure_confirmed_") or confirmation not in {"", "none", "nan"} else 1
+    entry_rank = {
+        "structure_confirmed_fvg_ce_retest": 0,
+        "fvg_ce_retest": 1,
+        "structure_confirmed_fvg_edge_retest": 2,
+        "fvg_edge_retest": 3,
+        "structure_confirmed_next_open": 4,
+        "next_open": 5,
+    }.get(entry_model, 9)
+    return confirmed_rank, entry_rank
 
 
 def _span_days(ts: pd.Series) -> float:

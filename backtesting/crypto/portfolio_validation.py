@@ -155,7 +155,33 @@ def _prepare_trades(trades: pd.DataFrame) -> pd.DataFrame:
         data["exit_ts"] = data["entry_ts"] + pd.to_timedelta(data["bars_to_exit"] * 15, unit="m")
     else:
         data["exit_ts"] = pd.to_datetime(data["exit_ts"], utc=True, errors="coerce")
-    return data.dropna(subset=["exit_ts"]).sort_values("entry_ts").reset_index(drop=True)
+    data = data.dropna(subset=["exit_ts"]).copy()
+    data["_execution_priority"] = data.apply(_execution_priority, axis=1)
+    data = data.sort_values(["entry_ts", "exchange", "symbol", "_execution_priority"]).reset_index(drop=True)
+    identity = _execution_identity_cols(data)
+    if identity:
+        data = data.drop_duplicates(subset=identity, keep="first").reset_index(drop=True)
+    return data.drop(columns=["_execution_priority"], errors="ignore").sort_values("entry_ts").reset_index(drop=True)
+
+
+def _execution_identity_cols(data: pd.DataFrame) -> list[str]:
+    cols = ["exchange", "symbol", "entry_ts", "entry", "stop", "target", "direction", "target_model", "management_model"]
+    return [c for c in cols if c in data.columns]
+
+
+def _execution_priority(row: pd.Series) -> tuple[int, int]:
+    entry_model = str(row.get("entry_model", ""))
+    confirmation = str(row.get("confirmation_model", ""))
+    confirmed_rank = 0 if entry_model.startswith("structure_confirmed_") or confirmation not in {"", "none", "nan"} else 1
+    entry_rank = {
+        "structure_confirmed_fvg_ce_retest": 0,
+        "fvg_ce_retest": 1,
+        "structure_confirmed_fvg_edge_retest": 2,
+        "fvg_edge_retest": 3,
+        "structure_confirmed_next_open": 4,
+        "next_open": 5,
+    }.get(entry_model, 9)
+    return confirmed_rank, entry_rank
 
 
 def _empty_summary(cfg: PortfolioRiskConfig, *, candidates: int = 0) -> dict:

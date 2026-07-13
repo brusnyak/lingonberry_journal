@@ -254,14 +254,16 @@ def _london_filter_funnel(trades: pd.DataFrame, cfg: PortfolioRiskConfig) -> pd.
 
 
 def _london_review_packet(trades: pd.DataFrame, per_symbol: int = 3) -> pd.DataFrame:
-    current = _filter(trades, LONDON_CURRENT).copy()
+    current = _dedupe_executions(_filter(trades, LONDON_CURRENT)).copy()
     wide = trades[
         (trades["session_utc"] == "london")
         & (trades["direction"] == "long")
         & (trades["target_model"] == "fixed_2r")
         & (trades["management_model"] == "be_after_half_target")
     ].copy()
-    near = wide.loc[~wide.index.isin(current.index)].copy()
+    wide = _dedupe_executions(wide)
+    current_keys = _key_series(current)
+    near = wide.loc[~_key_series(wide).isin(current_keys)].copy()
     samples = []
     for bucket, data, ascending in [
         ("current_london_winner", current[current["net_r"] > 0], False),
@@ -324,6 +326,41 @@ def _filter(trades: pd.DataFrame, spec: dict[str, str]) -> pd.DataFrame:
     for col, value in spec.items():
         out = out[out[col].astype(str) == str(value)].copy()
     return out.reset_index(drop=True)
+
+
+def _dedupe_executions(trades: pd.DataFrame) -> pd.DataFrame:
+    if trades.empty:
+        return trades.copy()
+    data = trades.copy()
+    data["_execution_priority"] = data.apply(_execution_priority, axis=1)
+    sort_cols = [c for c in ["entry_ts", "exchange", "symbol", "_execution_priority"] if c in data.columns]
+    data = data.sort_values(sort_cols).reset_index(drop=True)
+    identity = [c for c in ["exchange", "symbol", "entry_ts", "entry", "stop", "target", "direction", "target_model", "management_model"] if c in data.columns]
+    if identity:
+        data = data.drop_duplicates(subset=identity, keep="first").reset_index(drop=True)
+    return data.drop(columns=["_execution_priority"], errors="ignore")
+
+
+def _execution_priority(row: pd.Series) -> tuple[int, int]:
+    entry_model = str(row.get("entry_model", ""))
+    confirmation = str(row.get("confirmation_model", ""))
+    confirmed_rank = 0 if entry_model.startswith("structure_confirmed_") or confirmation not in {"", "none", "nan"} else 1
+    entry_rank = {
+        "structure_confirmed_fvg_ce_retest": 0,
+        "fvg_ce_retest": 1,
+        "structure_confirmed_fvg_edge_retest": 2,
+        "fvg_edge_retest": 3,
+        "structure_confirmed_next_open": 4,
+        "next_open": 5,
+    }.get(entry_model, 9)
+    return confirmed_rank, entry_rank
+
+
+def _key_series(trades: pd.DataFrame) -> pd.Series:
+    if trades.empty:
+        return pd.Series(dtype=str)
+    fields = [c for c in ["exchange", "symbol", "entry_ts", "entry", "stop", "target", "direction", "target_model", "management_model"] if c in trades.columns]
+    return trades[fields].astype(str).agg("|".join, axis=1)
 
 
 def _write_report(
