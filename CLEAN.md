@@ -3225,3 +3225,31 @@ already-committed static CSVs.
 **Active stack going forward**: `data.py`, `config.py`, `direction_layer.py`,
 `mtf_cascade_direction.py` (the one configurable CLI, Phase 21), `mtf_cascade_review_export.py`,
 `structure_direction_accuracy.py`, `synthetic_ohlcv.py`.
+
+## Phase 23 -- Real-SL/TP rolling stability confirms the 4 pairs hold up across time
+
+Extended tool used immediately: does Phase 20's null-confirmed edge (ETH/SOL/XRP/BNB)
+hold up across time, or is it an aggregate artifact of one lucky stretch. Rolling
+30-day windows, 7-day step, full 400-day span, real structural SL/TP:
+
+| Symbol | Windows | % positive avg_r | Median avg_r | Worst avg_r | Median PF | Median WR |
+|---|---|---|---|---|---|---|
+| BNBUSDT | 53 | 81.1% | +0.206 | -0.250 | 1.37 | 42.9% |
+| ETHUSDT | 52 | 82.7% | +0.168 | -0.140 | 1.29 | 42.6% |
+| SOLUSDT | 53 | 77.4% | +0.134 | -0.252 | 1.23 | 40.6% |
+| XRPUSDT | 53 | 83.0% | +0.147 | -0.235 | 1.26 | 40.3% |
+
+**All 4 pairs: 77-83% of rolling windows positive, median avg_r consistently
+positive (+0.13 to +0.21R), median PF 1.23-1.37.** This is the "clear direction all
+the time, not just in aggregate" check -- and it holds. Win rate sits ~40-43%
+(asymmetric R:R shape, not high-win-rate-small-wins), consistent with a real
+structural-target edge rather than a lucky aggregate. Worst windows do go negative
+(-0.14 to -0.25 avg_r) -- real variance, not a guarantee every 30 days, but the
+median and majority of windows are solidly positive across all 4.
+
+**Standing status of the structure/direction foundation layer**: global(240m
+structure+EMA) + local(30m structure+EMA) + mini(5m EMA) cascade, real structural
+SL/TP (existing PropFirmStructureV1 fields, min_rr=1.5) -- validated on 4/6 pairs
+(ETH, SOL, XRP, BNB) via synthetic gate (Phase 15), null test (Phase 20), and now
+rolling stability (this phase). BTC and DOGE consistently show no edge (50th
+percentile, twice). Next layer (consolidation) not yet started, per plan.
