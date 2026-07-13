@@ -334,17 +334,17 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | punitive_40bps | 30 | symbol | BNBUSDT | 11 | 6 | 0.545 | -0.436 | 0.479 | 0.494 | 2.394 | 0.333 |
 | punitive_40bps | 30 | symbol | BTCUSDT | 13 | 7 | 0.538 | 0.268 | 0.383 | 3.095 | 3.099 | 0.571 |
 | punitive_40bps | 30 | exit_reason | stop | 41 | 22 | 0.537 | -1.472 | -1.456 | 0.000 | 0.000 | 0.000 |
+| punitive_40bps | 30 | session_vwap_extension | normal | 60 | 32 | 0.533 | 0.092 | 0.337 | 1.217 | 2.118 | 0.531 |
 | punitive_40bps | 30 | shock_alignment | aligned_shock | 48 | 25 | 0.521 | -0.110 | 0.408 | 0.793 | 2.398 | 0.600 |
 | punitive_40bps | 30 | entry_hour_utc | 22 | 25 | 13 | 0.520 | -0.773 | -0.065 | 0.024 | 0.885 | 0.154 |
 | punitive_40bps | 30 | global_ema_state | bearish | 33 | 17 | 0.515 | 0.149 | 0.853 | 1.413 | 18.282 | 0.647 |
 | punitive_40bps | 30 | entry_hour_utc | 21 | 37 | 19 | 0.514 | 0.105 | 0.176 | 1.320 | 1.506 | 0.526 |
 | punitive_40bps | 30 | local_ema_state | mixed | 127 | 65 | 0.512 | 0.096 | 0.216 | 1.243 | 1.621 | 0.538 |
 | punitive_40bps | 30 | rsi_bucket | bearish_mid | 59 | 30 | 0.508 | -0.026 | 0.334 | 0.937 | 2.021 | 0.533 |
+| punitive_40bps | 30 | vwap_direction_agreement | agrees | 75 | 38 | 0.507 | 0.217 | 0.513 | 1.860 | 4.259 | 0.684 |
 | punitive_40bps | 30 | compression_state | expanded | 44 | 22 | 0.500 | 0.234 | 0.605 | 1.442 | 2.786 | 0.636 |
 | punitive_40bps | 30 | symbol | DOGEUSDT | 22 | 11 | 0.500 | -0.341 | 0.856 | 0.420 | 287.034 | 0.364 |
 | punitive_40bps | 30 | local_ema_state | bearish | 16 | 8 | 0.500 | -0.092 | 0.734 | 0.860 | 8.439 | 0.625 |
-| punitive_40bps | 30 | symbol | SUIUSDT | 10 | 5 | 0.500 | 0.137 | 0.075 | 1.281 | 1.137 | 0.400 |
-| punitive_40bps | 30 | entry_hour_utc | 7 | 8 | 4 | 0.500 | 0.231 | 0.231 | inf | inf | 1.000 |
 
 ## Review Packet
 | review_bucket | rows | symbols | avg_outcome_r | worst_outcome_r |
@@ -398,6 +398,44 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | 60d | strict_no_countertrend | punitive_40bps | 60 | 55 | 13 | 0.545 | 0.020 | 0.008 | 1.703 | 0.618 | quality_ok_frequency_sparse |
 | 60d | all_foundation_physical | punitive_40bps | 378 | 235 | 14 | 3.188 | -0.035 | 0.051 | 0.782 | 0.434 | reject_more_trades_break_edge |
 | 60d | ny_london_plus_non_strict_confirmed | punitive_40bps | 244 | 181 | 14 | 2.058 | -0.040 | 0.060 | 0.679 | 0.398 | reject_more_trades_break_edge |
+
+## Direction Audit
+| scope | feature | value | events | events_per_symbol_week | avg_r | profit_factor | win_rate | direction_accuracy | bad_direction_rate | bad_entry_rate | stop_rate | median_mfe_r | median_mae_r |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| strict | direction_stack | neutral/bear/neutral | 7 | 0.241 | 0.826 | 25.769 | 0.857 | 0.714 | 0.143 | 0.000 | 0.000 | 1.765 | -0.474 |
+| strict | direction_stack | neutral/bear/bull | 5 | 1.092 | 0.754 | 4.428 | 0.800 | 0.800 | 0.200 | 0.200 | 0.200 | 1.375 | -0.154 |
+| strict | direction_stack | bull/bull/bull | 38 | 0.352 | 0.668 | 3.969 | 0.711 | 0.605 | 0.132 | 0.158 | 0.158 | 1.515 | -0.315 |
+| strict | direction_stack | bull/neutral/bull | 8 | 0.148 | 0.571 | 2.420 | 0.625 | 0.500 | 0.250 | 0.500 | 0.375 | 1.475 | -1.003 |
+| strict | direction_stack | bull/bull/neutral | 19 | 0.208 | 0.433 | 3.349 | 0.684 | 0.421 | 0.316 | 0.105 | 0.105 | 0.824 | -0.300 |
+| strict | direction_stack | bull/neutral/bear | 5 | 0.167 | 0.267 | 1.870 | 0.600 | 0.800 | 0.200 | 0.200 | 0.200 | 1.068 | -0.424 |
+| strict | mtf_mode | trend_aligned | 14 | 0.386 | 0.752 | 6.954 | 0.857 | 0.571 | 0.071 | 0.071 | 0.071 | 1.448 | -0.121 |
+| strict | mtf_mode | range_or_transition | 46 | 0.419 | 0.676 | 3.642 | 0.696 | 0.696 | 0.152 | 0.217 | 0.196 | 1.605 | -0.517 |
+| strict | mtf_mode | countertrend | 53 | 0.456 | 0.429 | 2.555 | 0.604 | 0.509 | 0.245 | 0.189 | 0.189 | 1.008 | -0.487 |
+| strict | structure_confirmation | mtf_and_local | 14 | 0.386 | 0.752 | 6.954 | 0.857 | 0.571 | 0.071 | 0.071 | 0.071 | 1.448 | -0.121 |
+| strict | structure_confirmation | unconfirmed | 39 | 0.361 | 0.559 | 3.167 | 0.641 | 0.564 | 0.256 | 0.179 | 0.179 | 1.347 | -0.421 |
+| strict | structure_confirmation | range_unconfirmed | 26 | 0.268 | 0.549 | 2.846 | 0.654 | 0.615 | 0.154 | 0.269 | 0.231 | 1.605 | -0.626 |
+| strict | structure_confirmation | local_only | 34 | 0.313 | 0.520 | 3.065 | 0.647 | 0.618 | 0.176 | 0.176 | 0.176 | 1.166 | -0.485 |
+| strict | ema_stack | bearish/bearish/mixed | 9 | 0.269 | 1.350 | inf | 1.000 | 0.889 | 0.111 | 0.000 | 0.000 | 1.771 | -0.157 |
+| strict | ema_stack | mixed/bullish/bullish | 14 | 0.386 | 0.752 | 6.954 | 0.857 | 0.571 | 0.071 | 0.071 | 0.071 | 1.448 | -0.121 |
+| strict | ema_stack | bullish/bullish/bullish | 26 | 0.303 | 0.665 | 3.238 | 0.654 | 0.692 | 0.077 | 0.231 | 0.231 | 1.658 | -0.548 |
+| strict | ema_stack | bullish/bullish/mixed | 43 | 0.364 | 0.255 | 1.796 | 0.558 | 0.395 | 0.372 | 0.256 | 0.233 | 0.672 | -0.477 |
+| strict | session_vwap_state | below | 24 | 0.263 | 0.620 | 4.363 | 0.667 | 0.667 | 0.167 | 0.083 | 0.083 | 1.150 | -0.423 |
+| strict | session_vwap_state | above | 83 | 0.757 | 0.573 | 3.070 | 0.675 | 0.590 | 0.193 | 0.229 | 0.217 | 1.375 | -0.463 |
+| strict | session_vwap_state | near | 6 | 0.132 | 0.315 | 3.508 | 0.667 | 0.333 | 0.167 | 0.000 | 0.000 | 0.894 | -0.650 |
+| strict | session_vwap_extension | normal | 30 | 0.296 | 0.693 | 4.440 | 0.700 | 0.633 | 0.200 | 0.133 | 0.133 | 1.166 | -0.476 |
+| strict | session_vwap_extension | extended | 47 | 0.433 | 0.574 | 3.495 | 0.702 | 0.574 | 0.191 | 0.149 | 0.149 | 1.500 | -0.296 |
+| strict | session_vwap_extension | stretched | 36 | 0.365 | 0.460 | 2.467 | 0.611 | 0.583 | 0.167 | 0.278 | 0.250 | 1.237 | -0.475 |
+| strict | vwap_direction_agreement | agrees | 38 | 0.414 | 0.729 | 7.624 | 0.816 | 0.605 | 0.184 | 0.053 | 0.053 | 1.223 | -0.196 |
+| strict | vwap_direction_agreement | opposes | 69 | 0.584 | 0.503 | 2.496 | 0.594 | 0.609 | 0.188 | 0.275 | 0.261 | 1.445 | -0.570 |
+| strict | vwap_direction_agreement | near_vwap | 6 | 0.132 | 0.315 | 3.508 | 0.667 | 0.333 | 0.167 | 0.000 | 0.000 | 0.894 | -0.650 |
+| strict | shock_alignment | opposing_shock | 15 | 0.207 | 1.073 | 6.288 | 0.733 | 0.800 | 0.000 | 0.133 | 0.133 | 2.497 | -0.587 |
+| strict | shock_alignment | aligned_shock | 25 | 0.354 | 0.583 | 3.431 | 0.720 | 0.600 | 0.200 | 0.200 | 0.200 | 1.275 | -0.203 |
+| strict | shock_alignment | no_shock | 73 | 0.618 | 0.461 | 2.762 | 0.644 | 0.548 | 0.219 | 0.192 | 0.178 | 1.068 | -0.454 |
+| strict | compression_state | expanded | 25 | 0.232 | 0.706 | 4.018 | 0.680 | 0.760 | 0.160 | 0.160 | 0.160 | 1.683 | -0.177 |
+| strict | compression_state | normal | 88 | 0.745 | 0.531 | 3.093 | 0.670 | 0.545 | 0.193 | 0.193 | 0.182 | 1.114 | -0.482 |
+| strict | setup_name | ny_long_neutral_reversal_ce | 29 | 0.302 | 0.865 | 6.151 | 0.759 | 0.793 | 0.069 | 0.103 | 0.103 | 1.856 | -0.527 |
+| strict | setup_name | london_long_middle_local_retest | 13 | 0.359 | 0.736 | 6.413 | 0.846 | 0.538 | 0.077 | 0.077 | 0.077 | 1.387 | -0.125 |
+| strict | setup_name | late_us_short_bull_flush_ce | 70 | 0.592 | 0.410 | 2.335 | 0.600 | 0.514 | 0.257 | 0.243 | 0.229 | 1.025 | -0.482 |
 
 ## Concentration
 | dimension | value | events | total_r | share_of_total_r | avg_r | profit_factor | win_rate |
@@ -478,4 +516,6 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 - Review packet targets failed rolling windows and clean winners; it is not a random sample.
 - Saved manual labels mostly flag direction/confirmation defects, especially late-US countertrend shorts.
 - Frequency expansion rejects broad non-strict additions when they improve count but break punitive-cost expectancy.
+- Direction audit keeps legacy stops fixed and tests whether structure, EMA, VWAP, shock, and compression explain direction quality.
+- Legacy stop construction is intentionally unchanged; direction research treats stop quality as a dependent metric, not a tuning knob.
 - Concentration is measured on strict candidates with conservative risk under punitive costs.

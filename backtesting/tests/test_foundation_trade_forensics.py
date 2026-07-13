@@ -8,6 +8,7 @@ from backtesting.crypto.foundation_trade_forensics import (
     build_foundation_review_packet,
     diagnose_rolling_failures,
     evaluate_contribution_concentration,
+    evaluate_direction_audit,
     evaluate_extreme_config_matrix,
     evaluate_frequency_expansion,
     evaluate_rolling_validation,
@@ -17,7 +18,10 @@ from backtesting.crypto.foundation_trade_forensics import (
     profit_factor,
     rsi_bucket,
     select_concrete_execution,
+    session_vwap_snapshot,
     volume_bucket,
+    vwap_extension,
+    vwap_state,
 )
 
 
@@ -71,6 +75,28 @@ def test_indicator_buckets_are_stable():
     assert rsi_bucket(60) == "bullish_mid"
     assert volume_bucket(2.0) == "high"
     assert volume_bucket(-1.2) == "low"
+    assert vwap_state(0.3) == "above"
+    assert vwap_state(-0.3) == "below"
+    assert vwap_state(0.1) == "near"
+    assert vwap_extension(2.2) == "extended"
+    assert vwap_extension(1.2) == "stretched"
+
+
+def test_session_vwap_snapshot_uses_completed_candles_only():
+    data = pd.DataFrame({
+        "ts": pd.date_range("2026-01-01", periods=4, freq="15min", tz="UTC"),
+        "open": [100.0, 101.0, 102.0, 500.0],
+        "high": [101.0, 102.0, 103.0, 600.0],
+        "low": [99.0, 100.0, 101.0, 400.0],
+        "close": [100.0, 101.0, 102.0, 500.0],
+        "volume": [1.0, 1.0, 1.0, 1000.0],
+    })
+    atr = pd.Series([1.0, 1.0, 1.0, 1.0])
+
+    snap = session_vwap_snapshot(data, pd.Timestamp("2026-01-01 00:45:00Z"), atr)
+
+    assert round(snap["session_vwap"], 6) == 101.0
+    assert snap["session_vwap"] < 200.0
 
 
 def test_profit_factor_handles_no_losses():
@@ -247,6 +273,49 @@ def test_frequency_expansion_matrix_exposes_bad_more_trades_variant():
     bad_rows = matrix[matrix["variant"] == "ny_london_plus_non_strict_confirmed"]
     assert not bad_rows.empty
     assert "reject_more_trades_break_edge" in set(bad_rows["frequency_verdict"])
+
+
+def test_direction_audit_summarizes_structure_and_vwap_layers():
+    ts = pd.date_range("2026-01-01", periods=8, freq="1h", tz="UTC")
+    events = pd.DataFrame({
+        "exchange": ["binance"] * len(ts),
+        "symbol": ["BTCUSDT", "ETHUSDT"] * 4,
+        "entry_ts": ts,
+        "exit_ts": ts + pd.Timedelta(hours=1),
+        "bars_to_exit": [4] * len(ts),
+        "entry": [100.0] * len(ts),
+        "risk_price": [1.0] * len(ts),
+        "net_r": [1.0, 1.2, -0.5, 1.4, -1.0, 1.5, 0.5, -0.4],
+        "direction": ["long", "long", "short", "long", "short", "long", "short", "short"],
+        "setup_name": ["ny_long_neutral_reversal_ce"] * len(ts),
+        "mtf_mode": ["range_or_transition"] * len(ts),
+        "entry_hour_utc": [13] * len(ts),
+        "structure_confirmation": ["range_unconfirmed"] * len(ts),
+        "context_regime": ["neutral"] * len(ts),
+        "middle_regime": ["neutral"] * len(ts),
+        "local_regime": ["bull", "bull", "bear", "bull", "bear", "bull", "bear", "bear"],
+        "global_ema_state": ["mixed"] * len(ts),
+        "middle_ema_state": ["mixed"] * len(ts),
+        "local_ema_state": ["bullish", "bullish", "bearish", "bullish", "bearish", "bullish", "bearish", "bearish"],
+        "ema_21_55_state": ["mixed"] * len(ts),
+        "session_vwap_state": ["above", "above", "below", "above", "below", "above", "below", "below"],
+        "session_vwap_extension": ["normal"] * len(ts),
+        "vwap_direction_agreement": ["agrees"] * len(ts),
+        "compression_state": ["normal"] * len(ts),
+        "shock_alignment": ["no_shock"] * len(ts),
+        "direction_correct": [True, True, False, True, False, True, True, False],
+        "bad_direction": [False, False, True, False, True, False, False, True],
+        "bad_entry": [False] * len(ts),
+        "hit_stop": [False, False, True, False, True, False, False, True],
+        "exit_reason": ["target", "target", "stop", "target", "stop", "target", "expiry", "stop"],
+        "mfe_r": [2.0] * len(ts),
+        "mae_r": [-0.5] * len(ts),
+    })
+
+    audit = evaluate_direction_audit(events, min_events=2)
+
+    assert {"direction_stack", "session_vwap_state", "vwap_direction_agreement"} <= set(audit["feature"])
+    assert set(audit["scope"]) == {"all_physical", "strict"}
 
 
 def test_contribution_concentration_reports_symbol_and_setup_share():

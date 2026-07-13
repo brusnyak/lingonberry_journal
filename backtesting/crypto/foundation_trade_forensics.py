@@ -60,6 +60,7 @@ def run_foundation_trade_forensics(
     review_packet = build_foundation_review_packet(rolling_trades)
     review_audit = analyze_foundation_review_labels(review_packet, DEFAULT_REVIEW_LABELS)
     frequency_expansion = evaluate_frequency_expansion(events, cfg)
+    direction_audit = evaluate_direction_audit(events)
     contribution = evaluate_contribution_concentration(events)
     by_symbol = summarize_by_symbol(events)
     by_setup = summarize(events, ["setup_name", "mtf_mode"])
@@ -77,11 +78,12 @@ def run_foundation_trade_forensics(
     review_packet.to_csv(output_dir / "foundation_review_packet.csv", index=False)
     review_audit.to_csv(output_dir / "foundation_manual_review_audit.csv", index=False)
     frequency_expansion.to_csv(output_dir / "foundation_frequency_expansion_matrix.csv", index=False)
+    direction_audit.to_csv(output_dir / "foundation_direction_audit.csv", index=False)
     contribution.to_csv(output_dir / "foundation_contribution_concentration.csv", index=False)
     by_symbol.to_csv(output_dir / "foundation_frequency_by_symbol.csv", index=False)
     by_setup.to_csv(output_dir / "foundation_summary_by_setup.csv", index=False)
     management.to_csv(output_dir / "foundation_management_comparison.csv", index=False)
-    _write_report(events, rules, stress, extreme, rolling_summary, failure_diagnostics, review_packet, review_audit, frequency_expansion, contribution, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
+    _write_report(events, rules, stress, extreme, rolling_summary, failure_diagnostics, review_packet, review_audit, frequency_expansion, direction_audit, contribution, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
     return {
         "events": events,
         "rules": rules,
@@ -94,6 +96,7 @@ def run_foundation_trade_forensics(
         "review_packet": review_packet,
         "review_audit": review_audit,
         "frequency_expansion": frequency_expansion,
+        "direction_audit": direction_audit,
         "contribution": contribution,
         "by_symbol": by_symbol,
         "by_setup": by_setup,
@@ -143,6 +146,7 @@ def enrich_events(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame
         row.update(post_exit_continuation(ohlcv, row, cfg.post_bars))
         row["duration_hours"] = _duration_hours(row)
         row["is_strict_candidate"] = is_strict_candidate(row)
+        row["vwap_direction_agreement"] = _vwap_direction_agreement(pd.Series(row))
         rows.append(row)
     out = pd.DataFrame(rows)
     return out.sort_values(["entry_ts", "symbol", "setup_name"]).reset_index(drop=True)
@@ -160,6 +164,10 @@ def indicator_snapshot(data: pd.DataFrame, entry_ts: pd.Timestamp) -> dict:
         "atr_pct_bucket": "unknown",
         "volume_z_48": np.nan,
         "volume_bucket": "unknown",
+        "session_vwap": np.nan,
+        "session_vwap_dist_atr": np.nan,
+        "session_vwap_state": "unknown",
+        "session_vwap_extension": "unknown",
     }
     if data.empty:
         return base
@@ -197,6 +205,44 @@ def indicator_snapshot(data: pd.DataFrame, entry_ts: pd.Timestamp) -> dict:
         z = (volume - mean) / std.replace(0, np.nan)
         out["volume_z_48"] = float(z.iat[idx]) if np.isfinite(z.iat[idx]) else np.nan
         out["volume_bucket"] = volume_bucket(out["volume_z_48"])
+        out.update(session_vwap_snapshot(data, entry_ts, atr))
+    return out
+
+
+def session_vwap_snapshot(data: pd.DataFrame, entry_ts: pd.Timestamp, atr: pd.Series) -> dict:
+    """Causal UTC-day VWAP snapshot from completed candles before entry."""
+    base = {
+        "session_vwap": np.nan,
+        "session_vwap_dist_atr": np.nan,
+        "session_vwap_state": "unknown",
+        "session_vwap_extension": "unknown",
+    }
+    idx = _completed_entry_index(data, entry_ts)
+    if idx is None or idx < 1 or "volume" not in data.columns:
+        return base
+    volume = pd.to_numeric(data["volume"], errors="coerce")
+    if not np.isfinite(volume.iat[idx]) or volume.iat[idx] <= 0:
+        return base
+    day = pd.Timestamp(data["ts"].iat[idx]).date()
+    same_day = data.index[pd.to_datetime(data["ts"], utc=True).dt.date == day]
+    same_day = same_day[same_day <= idx]
+    if len(same_day) < 2:
+        return base
+    scoped = data.loc[same_day]
+    vol = pd.to_numeric(scoped["volume"], errors="coerce").fillna(0.0)
+    vol_sum = float(vol.sum())
+    if vol_sum <= 0:
+        return base
+    typical = (pd.to_numeric(scoped["high"], errors="coerce") + pd.to_numeric(scoped["low"], errors="coerce") + pd.to_numeric(scoped["close"], errors="coerce")) / 3.0
+    vwap = float((typical * vol).sum() / vol_sum)
+    close_now = float(pd.to_numeric(data["close"], errors="coerce").iat[idx])
+    atr_now = float(atr.iat[idx]) if idx < len(atr) and np.isfinite(atr.iat[idx]) else np.nan
+    dist_atr = (close_now - vwap) / atr_now if np.isfinite(atr_now) and atr_now > 0 else np.nan
+    out = dict(base)
+    out["session_vwap"] = vwap
+    out["session_vwap_dist_atr"] = float(dist_atr) if np.isfinite(dist_atr) else np.nan
+    out["session_vwap_state"] = vwap_state(dist_atr)
+    out["session_vwap_extension"] = vwap_extension(dist_atr)
     return out
 
 
@@ -610,6 +656,9 @@ def diagnose_rolling_failures(rolling_trades: pd.DataFrame) -> pd.DataFrame:
         "rsi_bucket",
         "atr_pct_bucket",
         "volume_bucket",
+        "session_vwap_state",
+        "session_vwap_extension",
+        "vwap_direction_agreement",
         "exit_reason",
     ]
     rows: list[dict] = []
@@ -742,6 +791,9 @@ def _foundation_to_review_schema(trades: pd.DataFrame) -> pd.DataFrame:
         "atr_pct_bucket",
         "volume_bucket",
         "ema_21_55_state",
+        "session_vwap_state",
+        "session_vwap_extension",
+        "vwap_direction_agreement",
         "compression_state",
         "shock_alignment",
         "notes_hint",
@@ -922,6 +974,104 @@ def _frequency_verdict(selected: pd.DataFrame, portfolio: dict, scenario: str) -
     if epsw < 1.0:
         return "quality_ok_frequency_sparse"
     return "candidate_frequency_improves"
+
+
+def evaluate_direction_audit(events: pd.DataFrame, *, min_events: int = 5) -> pd.DataFrame:
+    """Summarize direction quality by structure, trend, VWAP, and tape context."""
+    if events.empty:
+        return pd.DataFrame()
+    data = events.copy()
+    strict_mask = rule_masks(data).get("strict_candidates", pd.Series(False, index=data.index)).fillna(False)
+    data["direction_stack"] = _direction_stack_series(data)
+    data["ema_stack"] = _ema_stack_series(data)
+    data["vwap_direction_agreement"] = data.apply(_vwap_direction_agreement, axis=1)
+    dimensions = [
+        "direction_stack",
+        "mtf_mode",
+        "structure_confirmation",
+        "context_regime",
+        "middle_regime",
+        "local_regime",
+        "ema_stack",
+        "global_ema_state",
+        "middle_ema_state",
+        "local_ema_state",
+        "ema_21_55_state",
+        "session_vwap_state",
+        "session_vwap_extension",
+        "vwap_direction_agreement",
+        "compression_state",
+        "shock_alignment",
+        "setup_name",
+        "session_utc",
+    ]
+    rows: list[dict] = []
+    for scope, subset in [("all_physical", data), ("strict", data[strict_mask].copy())]:
+        if subset.empty:
+            continue
+        for feature in dimensions:
+            if feature not in subset.columns:
+                continue
+            values = subset[feature].fillna("unknown").astype(str)
+            for value, group in subset.assign(_feature_value=values).groupby("_feature_value", dropna=False):
+                if len(group) < min_events:
+                    continue
+                net = pd.to_numeric(group["net_r"], errors="coerce")
+                rows.append({
+                    "scope": scope,
+                    "feature": feature,
+                    "value": value,
+                    "events": int(len(group)),
+                    "events_per_symbol_week": _events_per_symbol_week(group),
+                    "avg_r": float(net.mean()) if len(net) else 0.0,
+                    "profit_factor": profit_factor(net),
+                    "win_rate": float((net > 0).mean()) if len(net) else 0.0,
+                    "direction_accuracy": _bool_rate(group, "direction_correct"),
+                    "bad_direction_rate": _bool_rate(group, "bad_direction"),
+                    "bad_entry_rate": _bool_rate(group, "bad_entry"),
+                    "stop_rate": _bool_rate(group, "hit_stop"),
+                    "expiry_rate": float((group["exit_reason"].astype(str) == "expiry").mean()) if "exit_reason" in group else np.nan,
+                    "median_mfe_r": _median(group, "mfe_r"),
+                    "median_mae_r": _median(group, "mae_r"),
+                })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(
+        ["scope", "feature", "avg_r", "events"],
+        ascending=[True, True, False, False],
+    ).reset_index(drop=True)
+
+
+def _direction_stack_series(data: pd.DataFrame) -> pd.Series:
+    cols = ["context_regime", "middle_regime", "local_regime"]
+    values = []
+    for _, row in data.iterrows():
+        parts = [str(row.get(col, "missing")) for col in cols]
+        values.append("/".join(parts))
+    return pd.Series(values, index=data.index)
+
+
+def _ema_stack_series(data: pd.DataFrame) -> pd.Series:
+    cols = ["global_ema_state", "middle_ema_state", "local_ema_state"]
+    values = []
+    for _, row in data.iterrows():
+        parts = [str(row.get(col, "unknown")) for col in cols]
+        values.append("/".join(parts))
+    return pd.Series(values, index=data.index)
+
+
+def _vwap_direction_agreement(row: pd.Series) -> str:
+    direction = str(row.get("direction", "")).lower()
+    state = str(row.get("session_vwap_state", "unknown"))
+    if state == "unknown" or direction not in {"long", "short"}:
+        return "unknown"
+    if state == "near":
+        return "near_vwap"
+    if direction == "long" and state == "above":
+        return "agrees"
+    if direction == "short" and state == "below":
+        return "agrees"
+    return "opposes"
 
 
 def evaluate_contribution_concentration(events: pd.DataFrame) -> pd.DataFrame:
@@ -1144,6 +1294,27 @@ def volume_bucket(value: float) -> str:
     return "normal"
 
 
+def vwap_state(dist_atr: float) -> str:
+    if not np.isfinite(dist_atr):
+        return "unknown"
+    if dist_atr >= 0.25:
+        return "above"
+    if dist_atr <= -0.25:
+        return "below"
+    return "near"
+
+
+def vwap_extension(dist_atr: float) -> str:
+    if not np.isfinite(dist_atr):
+        return "unknown"
+    distance = abs(dist_atr)
+    if distance >= 2.0:
+        return "extended"
+    if distance >= 1.0:
+        return "stretched"
+    return "normal"
+
+
 def profit_factor(net: pd.Series) -> float:
     clean = pd.to_numeric(net, errors="coerce").dropna()
     wins = clean[clean > 0].sum()
@@ -1176,6 +1347,18 @@ def _entry_index(data: pd.DataFrame, ts: pd.Timestamp) -> int | None:
     return int(matches[-1]) if matches else None
 
 
+def _completed_entry_index(data: pd.DataFrame, ts: pd.Timestamp) -> int | None:
+    if data.empty:
+        return None
+    entry = pd.Timestamp(ts)
+    if entry.tzinfo is None:
+        entry = entry.tz_localize("UTC")
+    else:
+        entry = entry.tz_convert("UTC")
+    matches = data.index[data["ts"] < entry].to_list()
+    return int(matches[-1]) if matches else None
+
+
 def _duration_hours(row: dict) -> float:
     start = pd.Timestamp(row.get("entry_ts"))
     end = pd.Timestamp(row.get("exit_ts"))
@@ -1203,6 +1386,23 @@ def _span_days(ts: pd.Series) -> float:
     if values.empty:
         return 1.0
     return max(float((values.max() - values.min()).total_seconds() / 86400.0), 1.0)
+
+
+def _events_per_symbol_week(df: pd.DataFrame) -> float:
+    if df.empty or "entry_ts" not in df:
+        return 0.0
+    symbols = int(df["symbol"].nunique()) if "symbol" in df else 1
+    return float(len(df) / max(symbols, 1) / (_span_days(df["entry_ts"]) / 7.0))
+
+
+def _bool_rate(df: pd.DataFrame, col: str) -> float:
+    if df.empty or col not in df:
+        return np.nan
+    values = df[col]
+    if values.dtype == bool:
+        return float(values.mean())
+    normalized = values.astype(str).str.lower()
+    return float(normalized.isin(["true", "1", "yes"]).mean())
 
 
 def _median(df: pd.DataFrame, col: str) -> float:
@@ -1240,6 +1440,7 @@ def _write_report(
     review_packet: pd.DataFrame,
     review_audit: pd.DataFrame,
     frequency_expansion: pd.DataFrame,
+    direction_audit: pd.DataFrame,
     contribution: pd.DataFrame,
     by_symbol: pd.DataFrame,
     by_setup: pd.DataFrame,
@@ -1284,6 +1485,9 @@ def _write_report(
         "## Frequency Expansion Matrix",
         *_markdown_table(_format_report_table(_frequency_expansion_report_slice(frequency_expansion))),
         "",
+        "## Direction Audit",
+        *_markdown_table(_format_report_table(_direction_audit_report_slice(direction_audit))),
+        "",
         "## Concentration",
         *_markdown_table(_format_report_table(_contribution_report_slice(contribution))),
         "",
@@ -1307,6 +1511,8 @@ def _write_report(
         "- Review packet targets failed rolling windows and clean winners; it is not a random sample.",
         "- Saved manual labels mostly flag direction/confirmation defects, especially late-US countertrend shorts.",
         "- Frequency expansion rejects broad non-strict additions when they improve count but break punitive-cost expectancy.",
+        "- Direction audit keeps legacy stops fixed and tests whether structure, EMA, VWAP, shock, and compression explain direction quality.",
+        "- Legacy stop construction is intentionally unchanged; direction research treats stop quality as a dependent metric, not a tuning knob.",
         "- Concentration is measured on strict candidates with conservative risk under punitive costs.",
         "",
     ]
@@ -1484,6 +1690,51 @@ def _frequency_expansion_report_slice(frequency_expansion: pd.DataFrame) -> pd.D
         ["window", "scenario", "gross_return_pct"],
         ascending=[True, True, False],
     ).groupby(["window", "scenario"], group_keys=False).head(10).reset_index(drop=True)
+
+
+def _direction_audit_report_slice(direction_audit: pd.DataFrame) -> pd.DataFrame:
+    if direction_audit.empty:
+        return direction_audit
+    feature_order = [
+        "direction_stack",
+        "mtf_mode",
+        "structure_confirmation",
+        "ema_stack",
+        "session_vwap_state",
+        "session_vwap_extension",
+        "vwap_direction_agreement",
+        "shock_alignment",
+        "compression_state",
+        "setup_name",
+    ]
+    keep = direction_audit[
+        (direction_audit["scope"] == "strict")
+        & (direction_audit["feature"].isin(feature_order))
+        & (direction_audit["events"] >= 5)
+    ].copy()
+    if keep.empty:
+        keep = direction_audit[direction_audit["events"] >= 5].copy()
+    cols = [
+        "scope",
+        "feature",
+        "value",
+        "events",
+        "events_per_symbol_week",
+        "avg_r",
+        "profit_factor",
+        "win_rate",
+        "direction_accuracy",
+        "bad_direction_rate",
+        "bad_entry_rate",
+        "stop_rate",
+        "median_mfe_r",
+        "median_mae_r",
+    ]
+    keep["_feature_order"] = keep["feature"].map({name: i for i, name in enumerate(feature_order)}).fillna(99)
+    return keep[cols + ["_feature_order"]].sort_values(
+        ["_feature_order", "avg_r", "events"],
+        ascending=[True, False, False],
+    ).drop(columns=["_feature_order"]).groupby("feature", group_keys=False).head(6).reset_index(drop=True)
 
 
 def _contribution_report_slice(contribution: pd.DataFrame) -> pd.DataFrame:
