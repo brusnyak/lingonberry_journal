@@ -144,3 +144,53 @@ Next implementation target:
 - include direction accuracy, clean path, bad entry, stop failure, target too
   far, expiry rate, return/DD, and per-symbol contribution.
 
+## 2026-07-13 MTF Structure Journal Update
+
+Implemented `crypto_structure_regime_journal_reindexed` to join each accepted
+trade to causal 15m / 60m / 240m structure rows by `known_after_ts`, then label:
+
+- `trend_aligned`: local, 60m, and 240m structure agree with trade direction.
+- `pullback_in_uptrend/downtrend`: 60m and 240m agree, local structure is
+  neutral or opposed.
+- `range_or_transition`: 60m or 240m is neutral.
+- `countertrend`: trade direction opposes both 60m and 240m.
+- `conflict`: 60m and 240m disagree.
+
+Coverage:
+
+- `2,546` accepted trades journaled.
+- `14` symbols.
+- Entry span: `2026-05-13 16:45 UTC` to `2026-07-11 23:45 UTC`.
+
+Measured result:
+
+| Setup / Bucket | Trades | Avg R | PF | Win Rate | Direction Acc | Bad Entry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| London long retest, trend aligned | 81 | +0.668 | 5.93 | 81.5% | 55.6% | 7.4% |
+| London long next-open, trend aligned | 81 | +0.663 | 5.90 | 81.5% | 55.6% | 7.4% |
+| London long retest, pullback in uptrend | 70 | -0.214 | 0.63 | 40.0% | 38.6% | 65.7% |
+| London long next-open, pullback in uptrend | 70 | -0.214 | 0.63 | 40.0% | 38.6% | 65.7% |
+| NY long neutral reversal, range/transition | 1,228 | +0.177 | 1.66 | 49.8% | 46.0% | 19.6% |
+| Late-US short bull flush, countertrend | 319 | +0.408 | 2.69 | 61.8% | 49.5% | 19.4% |
+
+Blunt interpretation:
+
+- Single-timeframe structure is not enough. That assumption is now proven.
+- Higher-timeframe pullback is not automatically valid. In current London-long
+  data, it is actively bad because entry quality collapses: `65.7%` bad-entry
+  rate.
+- For London longs, the foundation should require full 15m/60m/240m alignment
+  or a separate, stricter pullback-entry model.
+- Range/transition should not be treated as trend. It can work for reversal
+  setups (`NY 13:00 UTC` remains strong), but that is a different setup family.
+- Late-US bull-flush short remains a special case: it profits while formally
+  countertrend, so it should be modeled as a shock/fade setup, not a trend setup.
+
+Next rule to test, not assume:
+
+1. London longs: allow only `trend_aligned` first; reject `pullback_in_uptrend`
+   until a separate confirmation trigger fixes bad entries.
+2. NY neutral reversal: keep `range_or_transition`, but only validate session
+   slices and shock buckets out-of-sample.
+3. Late-US shorts: split into explicit shock/fade logic; do not force EMA/HTF
+   trend filters onto it.
