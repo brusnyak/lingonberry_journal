@@ -509,7 +509,7 @@ def build_checklist(
     atr_period: int = 14,
     bos_lookback: int = 10,
     choch_lookback: int = 10,
-    swing_recency_bars: int = 150,
+    swing_recency_bars: int = 15,
     sweep_lookback: int = 20,
     stop_atr_range: tuple[float, float] = (0.5, 3.0),
 ) -> pd.DataFrame:
@@ -523,7 +523,11 @@ def build_checklist(
     stale (within swing_recency_bars). sweep_preceded: reuses the existing
     sweep_preceded() check. stop_atr_sane: stop distance falls in a universal
     ATR-multiple sanity band -- a broad data-quality bound, not a per-symbol
-    fitted range (that's what Phase 25/26's stop_pct_range search got wrong)."""
+    fitted range (that's what Phase 25/26's stop_pct_range search got wrong).
+    swing_recency_bars=15 was picked from the pooled (all 6 pairs, not
+    per-symbol) bars-since-anchor-swing distribution -- median 11, 90th
+    pctile 26, max 90 -- the original 150 default was above the observed
+    max and made the criterion inert (Phase 27 first pass)."""
     combo_s = pd.Series(combo)
     changed = combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"])
     atr = _atr(bars, atr_period)

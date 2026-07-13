@@ -3385,3 +3385,92 @@ realization not yet working," and move forward building the next layer
 BNB). Revisit BTC/DOGE if/when a genuinely new angle presents itself (real cost
 modeling, a different structure definition, or more history), rather than continuing
 to guess at fixes for two pairs while the other four sit un-built-upon.
+
+## Phase 27 -- Universal per-trade checklist, ablation-tested across all 6 pairs: none of it generalizes
+
+User correction (2026-07-13): Phase 25/26's BTC/DOGE-specific stop-band search was
+overfitting to 2 symbols, not foundation work. Redirect: "there's no such thing as
+it works on for validated pairs and nothing else... focus on foundation, determine
+what are the aspects and concepts of the good trade... What is the checklist that
+has to be confirmed for each trade individually... test test to irritate and try
+the chemistry of every aspect." Memory updated (`engine-must-generalize-across-
+assets`, `foundation-checklist-pivot`): every checklist criterion must use ONE
+universal threshold applied identically to every pair, never a per-symbol fit.
+
+Built `build_checklist()`/`summarize_checklist()`/`null_test_from_checklist()`/
+`checklist_ablation()` in `mtf_cascade_direction.py` -- all 5 criteria reuse
+existing `structure.py` fields, no new detection mechanism:
+
+- **bos_confirmed**: an actual `bos_up`/`bos_down` event fired within 10 bars
+  before entry (not just the regime label being bull/bear).
+- **no_recent_choch**: no ChoCH (either direction) within 10 bars before entry --
+  structure hasn't just whipsawn.
+- **swing_fresh**: the anchor swing (`last_hl`/`last_lh`) defining the stop is
+  recent. First pass used a 150-bar threshold and was **inert on every single
+  pair** (n unchanged vs baseline) -- checked the pooled bars-since-anchor
+  distribution across all 6 pairs (n=8680: median 11, 90th pctile 26, max 90) and
+  recalibrated to 15 bars, pooled/universal, not fit per symbol.
+- **sweep_preceded**: reuses the existing `sweep_preceded()` check (Phase 24).
+- **stop_atr_sane**: stop distance within [0.5, 3.0]x local ATR -- a broad
+  data-quality bound, not a fitted range.
+
+Ran the full ablation (baseline, each criterion alone, all 5 combined) through the
+same randomized-direction null test (20 seeds) used since Phase 17, on all 6 pairs,
+full_cascade stage. Delta vs each symbol's own baseline percentile:
+
+| criterion | BTC | ETH | SOL | XRP | DOGE | BNB | mean delta |
+|---|---|---|---|---|---|---|---|
+| baseline (pctile) | 50.0 | 95.0 | 85.0 | 100.0 | 50.0 | 90.0 | -- |
+| bos_confirmed | 0 | **-85** | +15 | -30 | +10 | -15 | **-17.5** |
+| no_recent_choch | +40 | 0 | -15 | -5 | -20 | -20 | -3.3 |
+| swing_fresh (calibrated) | +5 | 0 | +5 | 0 | 0 | 0 | +1.7 |
+| sweep_preceded | +15 | +5 | -40 | -20 | 0 | -25 | -10.8 |
+| stop_atr_sane | +15 | +5 | -10 | -20 | 0 | -5 | -2.5 |
+| all_combined | -25 | -65 | -10 | -45 | -15 | -25 | **-30.8** |
+
+Full numeric table (n, win_rate, avg_r, pf, null_mean, percentile per symbol per
+criterion) at `backtesting/results/crypto_mtf_cascade_direction/
+checklist_ablation_plus_mini.csv`.
+
+**Verdict -- none of the five criteria is a generalizable foundation filter:**
+
+- `bos_confirmed` and `sweep_preceded` are net harmful and each badly breaks a
+  previously-validated pair (ETH 95->10, SOL 85->45) while barely moving BTC/DOGE.
+  Requiring an explicit BOS or a preceding liquidity sweep is not a quality signal
+  on this MTF cascade's entries -- it's noise that also throws away 70-75% of the
+  sample.
+- `no_recent_choch` helps BTC a lot (+40) but by the same logic should have helped
+  DOGE (the other failing pair) -- instead it hurts DOGE (-20) and 3 of the 4
+  passing pairs. Not a real, generalizable effect; looks like it's picking up
+  BTC-specific noise.
+- `swing_fresh`, once correctly calibrated (not inert), is genuinely neutral
+  everywhere -- doesn't help, doesn't hurt, just discards ~30% of entries for no
+  measurable gain. The anchor-swing-staleness concept doesn't carry information
+  this cascade doesn't already have.
+- `stop_atr_sane` is a mild no-op -- most entries already sit inside a sane ATR
+  band, so the filter rarely binds and does essentially nothing.
+- **Combining all five is destructive on every single pair** -- n collapses to 2-6%
+  of baseline (26-72 trades) and percentile drops on 5/6 symbols, including turning
+  BNB from a clean pass (90) into a coin flip (65) and ETH from 95 into 30. This is
+  the textbook failure mode of AND-ing several independently-weak filters: sample
+  size dies faster than any real edge accumulates.
+
+**BTC and DOGE remain unresolved.** No criterion, alone or combined, closes their
+gap to the ~50th percentile (indistinguishable from randomized direction). Four
+real hypotheses have now been tested and rejected for these two pairs across
+Phases 24-27: direction-signal asset-specificity, liquidity-sweep timing,
+stop-distance sweet spot, and this 5-criterion checklist. The foundation (MTF
+cascade direction + structural SL/TP) is defined identically for all 6 pairs, which
+satisfies the "must generalize" requirement in definition -- what's not resolved is
+*why* 2 of 6 pairs don't clear the null-test bar under that shared definition. That
+looks increasingly like a property of BTC/DOGE's own price action (large-outlier R
+distributions per the base avg_r of 4.7 and 6.4 seen in these runs -- a few huge
+moves that null-direction also captures, versus ETH/XRP/BNB's much smaller,
+steadier avg_r ~0.13-0.21) rather than a missing entry-quality filter.
+
+**Recommendation:** stop searching for entry-quality filters on this cascade --
+five tested, all either harmful or inert. The foundation as currently defined (MTF
+direction cascade + structural SL/TP, no extra checklist gate) is the right
+building block: build the next layer (consolidation) on top of it for all 6 pairs,
+carrying BTC/DOGE forward with their gap still open and flagged, rather than
+gating any pair in/out by an entry filter that doesn't actually generalize.
