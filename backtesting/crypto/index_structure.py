@@ -46,6 +46,7 @@ def build_one(
     days: int = 120,
     output_root: Path = Path("data/features/structure/L2_R2"),
     config: StructureConfig | None = None,
+    crypto_source: str = "exchange",
 ) -> StructureIndexResult:
     out_path = output_root / exchange / symbol / f"{tf}.parquet"
     try:
@@ -55,7 +56,7 @@ def build_one(
             days=days,
             asset_type="crypto",
             exchange=exchange,
-            crypto_source="exchange",
+            crypto_source=crypto_source,
         )
         if df.empty:
             return StructureIndexResult(exchange, symbol, tf, 0, None, None, out_path, "empty_ohlcv")
@@ -94,6 +95,7 @@ def build_crypto_structure_cache(
     days: int,
     output_root: Path = Path("data/features/structure/L2_R2"),
     config: StructureConfig | None = None,
+    crypto_source: str = "exchange",
 ) -> pd.DataFrame:
     rows: list[dict] = []
     for exchange in exchanges:
@@ -106,6 +108,7 @@ def build_crypto_structure_cache(
                     days=days,
                     output_root=output_root,
                     config=config,
+                    crypto_source=crypto_source,
                 )
                 rows.append({
                     "exchange": result.exchange,
@@ -134,6 +137,9 @@ def main() -> int:
     parser.add_argument("--right", type=int, default=2)
     parser.add_argument("--output-root", default="data/features/structure/L2_R2")
     parser.add_argument("--summary-output", default="backtesting/results/crypto_structure_index_summary.csv")
+    parser.add_argument("--source", default="exchange", choices=["exchange", "legacy", "merged"],
+                         help="'exchange' caps history to exchange-scoped files (~90-120d); "
+                              "'merged' pulls in deep legacy history (multi-year) too.")
     args = parser.parse_args()
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -153,6 +159,7 @@ def main() -> int:
         days=args.days,
         output_root=Path(args.output_root),
         config=StructureConfig(left=args.left, right=args.right),
+        crypto_source=args.source,
     )
 
     out = Path(args.summary_output)

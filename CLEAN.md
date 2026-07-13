@@ -2823,3 +2823,65 @@ No live wiring exists for any of this. The foundation audit doc's own running ve
 and consistent with what's actually in the repo. Nothing here contradicts that; this
 audit adds the two concrete gates required before it can change: (1) backfill and
 re-test on deep history, (2) null-test the direction call.
+
+## Phase 13 -- Backfilled to real full-year data; standalone direction-accuracy test settles the open question
+
+User asked to (1) confirm the backtest actually uses at least a year of the OHLCV
+already on disk, and (2) prioritize a direct read on structure/direction accuracy over
+continuing to chase the FVG entry layer.
+
+### Root cause of the 47-day cap, fixed
+`index_structure.py::build_one` (builds `L2_R2`) and `fvg_execution_matrix.py` (the
+FVG event generator underneath the whole foundation basket) both hardcoded
+`crypto_source="exchange"` in their `load_data()` calls -- silently discarding the
+multi-year `legacy` parquet files this project already has (confirmed in Phase 8) and
+capping every downstream number to whatever the exchange-scoped file happens to cover
+(91-120 days, and in practice less once TF/pair intersections were taken). Made
+`crypto_source` a configurable field/CLI flag (`--source`) on both, default unchanged
+(`"exchange"`) so nothing else silently changes behavior.
+
+BTC/ETH/BNB had no legacy 15m file at all (only 5m/60m/1440m were backfilled in
+Phase 8) -- resampled 15m from the existing deep 5m legacy (2017-2026, same
+`_resample_to_tf` technique as Phase 8, no new logic). All 6 core pairs now have
+**400 real days** of 15m/60m/240m at `crypto_source="merged"`, confirmed by direct
+load. Rebuilt `L2_R2` at 400 days for all 6 pairs / 3 TFs (`data/` is gitignored, no
+commit needed for the parquet files).
+
+### FVG regeneration killed mid-run -- correctly, not a loss
+Regenerating the FVG-triggered event basket at 400 days took >30 min and only got
+through 4/6 pairs before being stopped. Its own partial output is instructive on the
+way out: **~140,000-194,000 raw FVG candidate rows per pair per year**, before any
+retest/session/structure filtering. That volume, plus the multiple-comparisons
+bucket-slicing flagged in Phase 12, is consistent with FVG being a high-frequency, low-
+selectivity primitive -- expensive to backfill and not obviously the right place to
+anchor "foundational" analysis. Correctly deprioritized in favor of a direct test.
+
+### Standalone structure/direction accuracy test (new, `structure_direction_accuracy.py`)
+Built a FVG-free, entry-pattern-free test of the thing the user actually asked about:
+does the causal HTF structure regime (`bull`/`bear`, the same label the whole
+foundation layer already keys off) predict forward price direction at all, on its own.
+At every regime *transition* (not every bar of a persistent trend -- avoids massively
+overcounting one trend as hundreds of "calls"), take a symmetric 1:1 R position
+(ATR(15m) stop = ATR(15m) target, no target-optimization bias) and walk the 15m path
+forward. 6 pairs x {60m, 240m} structure TF x {24, 48, 96 bar} horizon = 36 cells, full
+400-day span, `crypto_source="merged"`.
+
+**Result: direction_accuracy ranges 42.8%-53.4% across all 36 cells.** No cell clears
+54%. Several sit meaningfully *below* 50% (BTC/BNB/DOGE/XRP on 240m: 42.8-44.9% across
+every horizon) -- not noise-neutral, mildly anti-predictive on those pairs/timeframe.
+n=103-459 non-overlapping calls per cell -- not a small-sample artifact. Full table:
+`backtesting/results/crypto_structure_direction_accuracy_report.md`.
+
+### Verdict
+This settles the question Phase 12 could only gesture at (35-56% direction accuracy
+*inside* the FVG-triggered basket, confounded with FVG's own selection effect). Tested
+in isolation, on real full-year data: **the swing-based HH/HL/LH/LL -> bull/bear
+structure regime has no measurable directional edge.** Whatever positive PF/return the
+FVG-triggered "strict candidates" basket showed in Phase 12 is not coming from the
+direction call -- it's coming from entry timing, target/stop placement, or session
+structure layered on top of a coin-flip (or slightly worse) direction signal. Does not
+rule out a specific entry trigger having value on its own (session-time buckets are the
+next candidate, decoupled from trend-alignment framing), and does not rule out a
+different structure definition doing better -- only that this one, as implemented,
+doesn't. Per instruction, no stops or targets were touched; this is a read, not a
+strategy change. 366 tests passing (2 new, for the new module).

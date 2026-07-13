@@ -25,6 +25,7 @@ from backtesting.features.structure import build_structure_index
 @dataclass(frozen=True)
 class FvgExecutionMatrixConfig:
     days: int = 60
+    crypto_source: str = "exchange"
     tf: str = "15"
     context_tf: str = "240"
     middle_tf: str = "60"
@@ -54,7 +55,7 @@ def run_fvg_execution_matrix(
     rows = []
     for exchange in exchanges:
         for symbol in symbols:
-            df = load_data(symbol, tf=cfg.tf, days=cfg.days, asset_type="crypto", exchange=exchange, crypto_source="exchange")
+            df = load_data(symbol, tf=cfg.tf, days=cfg.days, asset_type="crypto", exchange=exchange, crypto_source=cfg.crypto_source)
             if df.empty:
                 print(f"  {exchange}/{symbol} {cfg.tf}: missing data", flush=True)
                 continue
@@ -510,11 +511,14 @@ def main() -> int:
     parser.add_argument("--tf", default="15")
     parser.add_argument("--days", type=int, default=60)
     parser.add_argument("--output-dir", default=str(FvgExecutionMatrixConfig.output_dir))
+    parser.add_argument("--source", default="exchange", choices=["exchange", "legacy", "merged"],
+                         help="'exchange' caps history to exchange-scoped files (~90-120d); "
+                              "'merged' pulls in deep legacy history (multi-year) too.")
     args = parser.parse_args()
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     exchanges = ["binance", "bybit"] if args.exchange == "both" else [args.exchange]
-    cfg = FvgExecutionMatrixConfig(days=args.days, tf=args.tf, output_dir=Path(args.output_dir))
+    cfg = FvgExecutionMatrixConfig(days=args.days, tf=args.tf, output_dir=Path(args.output_dir), crypto_source=args.source)
     trades, summary = run_fvg_execution_matrix(symbols=symbols, exchanges=exchanges, config=cfg)
     print(f"Execution rows: {len(trades)}")
     print(f"Summary rows: {len(summary)}")
