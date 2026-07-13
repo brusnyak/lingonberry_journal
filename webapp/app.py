@@ -2638,9 +2638,11 @@ def api_review_ict_events():
         filtered = events[
             (events["symbol"].astype(str).str.upper() == symbol)
             & (events["predictor"].astype(str) == predictor)
-            & (events["session"].astype(str) == session)
-            & (events["direction"].astype(str) == direction)
         ].copy()
+        if session.lower() != "any":
+            filtered = filtered[filtered["session"].astype(str) == session].copy()
+        if direction.lower() != "any":
+            filtered = filtered[filtered["direction"].astype(str) == direction].copy()
         if exchange and "exchange" in filtered.columns:
             filtered = filtered[filtered["exchange"].astype(str).str.lower() == exchange].copy()
         if filtered.empty:
