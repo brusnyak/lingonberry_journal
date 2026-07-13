@@ -3165,3 +3165,38 @@ row count under the UI's fetch limit, or apply the same neutral-bucket + capped-
 pattern -- the existing foundation-review packet and others were not audited for this
 same failure mode as part of this fix; worth a quick check if anyone reports a
 suspiciously clean win rate from those buttons too.
+
+## Phase 20 -- Full cascade (global+local+mini) null-tested with real SL/TP: 4 of 6 pairs clear the bar
+
+Phase 17 only null-tested global+local (30m entries). Extended to the full 3-tier
+cascade (global 240m + local 30m + mini 5m, 5m entries), same real structural SL/TP,
+20-seed random-direction null test:
+
+| Symbol | n | WR | PF | Real avg_r | Null mean avg_r | Percentile |
+|---|---|---|---|---|---|---|
+| BTCUSDT | 1132 | 40.7% | 9.04 | +4.77 | +3.07 | 50th |
+| ETHUSDT | 1208 | 43.8% | 1.37 | +0.209 | +0.103 | **100th** |
+| SOLUSDT | 1282 | 40.7% | 1.22 | +0.131 | +0.048 | 95th |
+| XRPUSDT | 1351 | 41.2% | 1.36 | +0.212 | +0.093 | **100th** |
+| DOGEUSDT | 1222 | 39.0% | 1.23 | +0.138 | +0.121 | 50th |
+| BNBUSDT | 1167 | 42.4% | 1.36 | +0.205 | +0.118 | 95th |
+
+**4 of 6 pairs (ETH, SOL, XRP, BNB) clear the null-test bar convincingly (95-100th
+percentile)** -- a materially stronger result than Phase 17's global+local-only test,
+which cleared nothing decisively. BTC and DOGE sit at exactly 50th percentile (real
+indistinguishable from random) both here and in Phase 17's coarser test -- consistent,
+repeatable non-result for those two specifically, not noise. BTC's large real_avg_r
+(+4.77) paired with an equally large null mean (+3.07) is the same "wide-target rides
+drift regardless of direction" artifact flagged before -- correctly caught by the null
+test rather than mistaken for edge.
+
+**Reading**: the mini(5m) tier materially helps -- both by shrinking to a finer, more
+selective entry (5m vs 30m) and by the larger sample (n~1100-1350 vs ~300-350) giving
+the null test more power to separate real signal from chance. This is the first result
+in the whole crypto foundation-layer audit where a majority of pairs (4/6) show a
+real, null-test-confirmed edge with actual stops and targets, not just direction
+accuracy. Still open: no walk-forward/rolling stability check on this specific
+(cascade + real SL/TP) combination yet -- Phase 16's rolling check used symmetric R,
+not this real SL/TP; that's the natural next verification before trusting this further.
+Not committed as new code this round (ad hoc verification query); worth promoting to
+a proper module + test once rolling-stability confirms it holds across time.
