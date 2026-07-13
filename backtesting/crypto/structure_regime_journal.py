@@ -540,6 +540,13 @@ def _write_report(
         "- `consolidation_state`: separates actual range compression/weak ADX from trend transition.",
         "- `foundation_state`: combines MTF structure with consolidation so direction gates do not treat all neutral regimes equally.",
         "",
+        "## Next Research",
+        "- `30/1 approach`: use 30m/60m/240m for global direction, then require 1m or 5m local CHOCH/BOS confirmation before entry.",
+        "- London pullback longs need local reclaim confirmation; higher-timeframe uptrend alone is not enough.",
+        "- Consolidation gates must be setup-specific: range can help late-US fades but hurts London continuation entries.",
+        "- Do not promote stronger ADX blindly; current audit shows `trend` is cleaner than `strong_trend`, likely because extreme trend can mean late/exhausted entry.",
+        "- Next validation target: compare kept vs rejected trades for local CHOCH/BOS confirmation without changing legacy stops/targets.",
+        "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
 
