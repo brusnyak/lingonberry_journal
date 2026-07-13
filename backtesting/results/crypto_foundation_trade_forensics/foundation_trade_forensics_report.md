@@ -306,7 +306,12 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | punitive_40bps | 30 | entry_hour_utc | 23 | 14 | 10 | 0.714 | 1.097 | 0.287 | 8.097 | 1.429 | 0.900 |
 | punitive_40bps | 30 | symbol | NEARUSDT | 20 | 12 | 0.600 | -0.144 | 0.136 | 0.664 | 1.360 | 0.583 |
 | punitive_40bps | 30 | symbol | HYPEUSDT | 22 | 13 | 0.591 | -0.475 | 0.029 | 0.361 | 1.042 | 0.154 |
+| punitive_40bps | 30 | foundation_state | consolidation | 19 | 11 | 0.579 | 0.330 | 0.895 | 3.298 | 27.151 | 0.545 |
+| punitive_40bps | 30 | consolidation_state | range | 19 | 11 | 0.579 | 0.330 | 0.895 | 3.298 | 27.151 | 0.545 |
+| punitive_40bps | 30 | trend_strength | weak_or_range | 19 | 11 | 0.579 | 0.330 | 0.895 | 3.298 | 27.151 | 0.545 |
+| punitive_40bps | 30 | consolidation_state | transition | 42 | 24 | 0.571 | -0.069 | 0.127 | 0.897 | 1.270 | 0.333 |
 | punitive_40bps | 30 | volume_bucket | low | 20 | 11 | 0.550 | -0.195 | 0.082 | 0.550 | 1.198 | 0.364 |
+| punitive_40bps | 30 | trend_strength | transition | 44 | 24 | 0.545 | -0.069 | 0.235 | 0.897 | 1.552 | 0.333 |
 | punitive_40bps | 30 | symbol | BNBUSDT | 11 | 6 | 0.545 | -0.436 | 0.479 | 0.494 | 2.394 | 0.333 |
 | punitive_40bps | 30 | symbol | BTCUSDT | 13 | 7 | 0.538 | 0.268 | 0.383 | 3.095 | 3.099 | 0.571 |
 | punitive_40bps | 30 | exit_reason | stop | 41 | 22 | 0.537 | -1.472 | -1.456 | 0.000 | 0.000 | 0.000 |
@@ -316,11 +321,6 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | punitive_40bps | 30 | global_ema_state | bearish | 33 | 17 | 0.515 | 0.149 | 0.853 | 1.413 | 18.282 | 0.647 |
 | punitive_40bps | 30 | entry_hour_utc | 21 | 37 | 19 | 0.514 | 0.105 | 0.176 | 1.320 | 1.506 | 0.526 |
 | punitive_40bps | 30 | local_ema_state | mixed | 127 | 65 | 0.512 | 0.096 | 0.216 | 1.243 | 1.621 | 0.538 |
-| punitive_40bps | 30 | rsi_bucket | bearish_mid | 59 | 30 | 0.508 | -0.026 | 0.334 | 0.937 | 2.021 | 0.533 |
-| punitive_40bps | 30 | vwap_direction_agreement | agrees | 75 | 38 | 0.507 | 0.217 | 0.513 | 1.860 | 4.259 | 0.684 |
-| punitive_40bps | 30 | compression_state | expanded | 44 | 22 | 0.500 | 0.234 | 0.605 | 1.442 | 2.786 | 0.636 |
-| punitive_40bps | 30 | symbol | DOGEUSDT | 22 | 11 | 0.500 | -0.341 | 0.856 | 0.420 | 287.034 | 0.364 |
-| punitive_40bps | 30 | local_ema_state | bearish | 16 | 8 | 0.500 | -0.092 | 0.734 | 0.860 | 8.439 | 0.625 |
 
 ## Review Packet
 | review_bucket | rows | symbols | avg_outcome_r | worst_outcome_r |

@@ -4,10 +4,14 @@ import pandas as pd
 
 from backtesting.crypto.structure_regime_journal import (
     average_true_range,
+    classify_consolidation_state,
+    classify_foundation_state,
     classify_mtf_mode,
     compression_bucket,
+    directional_movement_index,
     price_action_snapshot,
     range_atr_ratio,
+    trend_strength_bucket,
 )
 from backtesting.crypto.direction_layer import structure_at
 
@@ -88,6 +92,75 @@ def test_compression_bucket_boundaries():
     assert compression_bucket(6.0) == "expanded"
 
 
+def test_trend_strength_bucket_boundaries():
+    assert trend_strength_bucket(10) == "weak_or_range"
+    assert trend_strength_bucket(22) == "transition"
+    assert trend_strength_bucket(30) == "trend"
+    assert trend_strength_bucket(45) == "strong_trend"
+
+
+def test_consolidation_state_splits_range_from_transition():
+    assert classify_consolidation_state(
+        compression_state="compressed",
+        trend_strength="weak_or_range",
+        pre_range_atr_16=1.8,
+    ) == "tight_range"
+    assert classify_consolidation_state(
+        compression_state="compressed",
+        trend_strength="transition",
+        pre_range_atr_16=2.1,
+    ) == "coiling_transition"
+    assert classify_consolidation_state(
+        compression_state="expanded",
+        trend_strength="weak_or_range",
+        pre_range_atr_16=6.0,
+    ) == "volatile_range"
+
+
+def test_foundation_state_does_not_treat_range_as_directional_trend():
+    assert classify_foundation_state(
+        mtf_mode="range_or_transition",
+        consolidation_state="tight_range",
+        trend_strength="weak_or_range",
+    ) == "consolidation"
+    assert classify_foundation_state(
+        mtf_mode="pullback_in_uptrend",
+        consolidation_state="directional",
+        trend_strength="trend",
+    ) == "directional_trend"
+    assert classify_foundation_state(
+        mtf_mode="countertrend",
+        consolidation_state="directional",
+        trend_strength="trend",
+    ) == "countertrend_risk"
+
+
+def test_directional_movement_index_marks_synthetic_trend_stronger_than_range():
+    ts = pd.date_range("2026-01-01", periods=80, freq="15min", tz="UTC")
+    trend_close = [100 + i * 0.4 for i in range(80)]
+    trend = pd.DataFrame({
+        "ts": ts,
+        "open": trend_close,
+        "high": [p + 0.3 for p in trend_close],
+        "low": [p - 0.2 for p in trend_close],
+        "close": trend_close,
+    })
+    range_close = [100 + (0.2 if i % 2 else -0.2) for i in range(80)]
+    ranging = pd.DataFrame({
+        "ts": ts,
+        "open": range_close,
+        "high": [p + 0.3 for p in range_close],
+        "low": [p - 0.3 for p in range_close],
+        "close": range_close,
+    })
+
+    trend_adx = directional_movement_index(trend, 14)["adx"].iloc[-1]
+    range_adx = directional_movement_index(ranging, 14)["adx"].iloc[-1]
+
+    assert trend_adx > 25
+    assert range_adx < trend_adx
+
+
 def test_price_action_snapshot_flags_opposing_shock_before_long_entry():
     ts = pd.date_range("2026-01-01", periods=24, freq="15min", tz="UTC")
     close = [100.0] * 24
@@ -105,6 +178,8 @@ def test_price_action_snapshot_flags_opposing_shock_before_long_entry():
     assert snap["shock_state"] == "bearish_shock"
     assert snap["shock_alignment"] == "opposing_shock"
     assert snap["entry_hour_utc"] == 5
+    assert "trend_strength" in snap
+    assert "consolidation_state" in snap
 
 
 def test_range_atr_ratio_uses_only_past_window():

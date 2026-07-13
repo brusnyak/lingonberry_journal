@@ -72,6 +72,30 @@ Purpose: explain accepted trades by causal local/middle/context structure and pr
 | late_us_short_bearish_trend_ce | normal | no_shock | 141 | 0.146 | 0.092 | 1.594 | 0.560 | 0.447 | 0.298 | 0.298 | 0.220 | 0.035 | 0.732 | -0.580 | True |
 | late_us_short_bull_flush_ce | normal | no_shock | 265 | 0.120 | 0.031 | 1.330 | 0.513 | 0.449 | 0.294 | 0.351 | 0.158 | 0.019 | 0.926 | -0.773 | True |
 
+## Foundation State Buckets
+| setup_name | foundation_state | consolidation_state | trend_strength | trades | avg_r | median_r | profit_factor | win_rate | direction_accuracy | bad_direction_rate | bad_entry_rate | target_too_far_rate | stop_after_favorable_rate | median_mfe_r | median_mae_r | research_ready |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| late_us_short_bull_flush_ce | transition | directional | trend | 65 | 0.696 | 0.720 | 5.533 | 0.785 | 0.769 | 0.185 | 0.462 | 0.138 | 0.046 | 1.655 | -0.773 | True |
+| ny_long_neutral_reversal_ce | transition | range_to_trend_transition | transition | 12 | 0.694 | 0.501 | 11.965 | 0.500 | 0.500 | 0.500 | 0.000 | 0.000 | 0.000 | 3.163 | -0.476 | True |
+| late_us_short_bull_flush_ce | countertrend_risk | directional | trend | 134 | 0.611 | 0.727 | 4.049 | 0.694 | 0.597 | 0.157 | 0.179 | 0.269 | 0.000 | 1.287 | -0.411 | True |
+| london_long_middle_local_retest | directional_trend | directional | strong_trend | 42 | 0.552 | 0.555 | 6.313 | 0.857 | 0.357 | 0.143 | 0.000 | 0.143 | 0.000 | 0.855 | -0.062 | True |
+| london_long_middle_local_next_open | directional_trend | directional | strong_trend | 42 | 0.543 | 0.555 | 6.224 | 0.857 | 0.357 | 0.143 | 0.000 | 0.143 | 0.000 | 0.855 | -0.117 | True |
+| london_long_middle_local_next_open | directional_trend | directional | trend | 37 | 0.522 | 0.436 | 3.695 | 0.784 | 0.568 | 0.108 | 0.270 | 0.081 | 0.054 | 1.488 | -0.074 | True |
+| london_long_middle_local_retest | directional_trend | directional | trend | 37 | 0.522 | 0.436 | 3.695 | 0.784 | 0.568 | 0.108 | 0.270 | 0.081 | 0.054 | 1.488 | -0.074 | True |
+| late_us_short_bull_flush_ce | consolidation | range | weak_or_range | 31 | 0.484 | 0.460 | 7.237 | 0.710 | 0.419 | 0.194 | 0.032 | 0.129 | 0.032 | 0.824 | -0.535 | True |
+| london_long_middle_local_next_open | transition | directional | trend | 42 | 0.476 | 0.272 | 5.343 | 0.762 | 0.714 | 0.143 | 0.143 | 0.190 | 0.048 | 1.071 | -0.449 | True |
+| london_long_middle_local_retest | transition | directional | strong_trend | 60 | 0.425 | 0.311 | 5.127 | 0.767 | 0.200 | 0.400 | 0.000 | 0.000 | 0.000 | 0.819 | -0.305 | True |
+| london_long_middle_local_next_open | transition | directional | strong_trend | 60 | 0.417 | 0.131 | 5.053 | 0.767 | 0.200 | 0.400 | 0.000 | 0.000 | 0.000 | 0.658 | -0.413 | True |
+| london_long_middle_local_retest | transition | directional | trend | 45 | 0.365 | 0.332 | 3.205 | 0.711 | 0.667 | 0.200 | 0.200 | 0.178 | 0.022 | 1.401 | -0.435 | True |
+| late_us_short_bearish_trend_ce | consolidation | range | weak_or_range | 18 | 0.302 | 0.380 | 43.085 | 0.889 | 0.333 | 0.000 | 0.000 | 0.333 | 0.000 | 0.778 | -0.421 | True |
+| late_us_short_bull_flush_ce | countertrend_risk | directional | strong_trend | 125 | 0.281 | 0.231 | 2.210 | 0.576 | 0.432 | 0.312 | 0.160 | 0.184 | 0.008 | 0.930 | -0.444 | True |
+| ny_long_neutral_reversal_ce | transition | directional | trend | 415 | 0.263 | 0.061 | 2.187 | 0.557 | 0.508 | 0.253 | 0.188 | 0.154 | 0.024 | 1.034 | -0.485 | True |
+| late_us_short_bearish_trend_ce | transition | directional | trend | 84 | 0.256 | 0.504 | 2.025 | 0.643 | 0.429 | 0.214 | 0.357 | 0.214 | 0.036 | 0.849 | -0.526 | True |
+| london_long_middle_local_next_open | transition | transition | transition | 24 | 0.216 | 0.538 | 1.815 | 0.750 | 0.500 | 0.250 | 0.250 | 0.500 | 0.000 | 0.875 | -0.595 | True |
+| london_long_middle_local_retest | transition | transition | transition | 24 | 0.216 | 0.538 | 1.815 | 0.750 | 0.500 | 0.250 | 0.250 | 0.500 | 0.000 | 0.875 | -0.595 | True |
+| late_us_short_bearish_trend_ce | transition | transition | transition | 42 | 0.197 | -0.042 | 1.856 | 0.429 | 0.286 | 0.571 | 0.143 | 0.143 | 0.000 | 0.434 | -0.220 | True |
+| ny_long_neutral_reversal_ce | transition | directional | strong_trend | 508 | 0.184 | -0.012 | 1.704 | 0.498 | 0.472 | 0.280 | 0.197 | 0.138 | 0.059 | 0.899 | -0.534 | True |
+
 ## Hour + MTF Buckets
 | setup_name | entry_hour_utc | mtf_mode | trades | avg_r | median_r | profit_factor | win_rate | direction_accuracy | bad_direction_rate | bad_entry_rate | target_too_far_rate | stop_after_favorable_rate | median_mfe_r | median_mae_r | research_ready |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -106,3 +130,5 @@ Purpose: explain accepted trades by causal local/middle/context structure and pr
 - `pullback_in_uptrend/downtrend`: 60m and 240m agree with direction, local structure is neutral/opposed.
 - `range_or_transition`: middle or context structure is neutral; trend-follow rules should not be assumed.
 - `countertrend`: trade direction opposes both 60m and 240m structure.
+- `consolidation_state`: separates actual range compression/weak ADX from trend transition.
+- `foundation_state`: combines MTF structure with consolidation so direction gates do not treat all neutral regimes equally.

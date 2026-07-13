@@ -40,19 +40,22 @@ def build_structure_regime_journal(
     by_mode = summarize(enriched, ["setup_name", "mtf_mode"])
     by_regime = summarize(enriched, ["setup_name", "context_regime", "middle_regime", "local_regime"])
     by_pa = summarize(enriched, ["setup_name", "compression_state", "shock_alignment"])
+    by_foundation = summarize(enriched, ["setup_name", "foundation_state", "consolidation_state", "trend_strength"])
     by_hour = summarize(enriched, ["setup_name", "entry_hour_utc", "mtf_mode"])
 
     enriched.to_csv(output_dir / "structure_regime_trade_journal.csv", index=False)
     by_mode.to_csv(output_dir / "structure_regime_by_mtf_mode.csv", index=False)
     by_regime.to_csv(output_dir / "structure_regime_by_regime_stack.csv", index=False)
     by_pa.to_csv(output_dir / "structure_regime_by_price_action.csv", index=False)
+    by_foundation.to_csv(output_dir / "structure_regime_by_foundation_state.csv", index=False)
     by_hour.to_csv(output_dir / "structure_regime_by_hour.csv", index=False)
-    _write_report(enriched, by_mode, by_regime, by_pa, by_hour, output_dir / "structure_regime_report.md")
+    _write_report(enriched, by_mode, by_regime, by_pa, by_foundation, by_hour, output_dir / "structure_regime_report.md")
     return {
         "journal": enriched,
         "by_mode": by_mode,
         "by_regime": by_regime,
         "by_price_action": by_pa,
+        "by_foundation": by_foundation,
         "by_hour": by_hour,
     }
 
@@ -108,6 +111,11 @@ def enrich_trades_with_structure(
 
         ohlcv = _cached_ohlcv(ohlcv_cache, exchange, symbol, tf, days)
         joined.update(price_action_snapshot(ohlcv, entry_ts=entry_ts, direction=direction))
+        joined["foundation_state"] = classify_foundation_state(
+            mtf_mode=joined.get("mtf_mode", "missing_structure"),
+            consolidation_state=joined.get("consolidation_state", "unknown"),
+            trend_strength=joined.get("trend_strength", "unknown"),
+        )
         rows.append(joined)
 
     out = pd.DataFrame(rows)
@@ -181,6 +189,11 @@ def price_action_snapshot(data: pd.DataFrame, *, entry_ts: pd.Timestamp, directi
         "compression_state": "missing_ohlcv",
         "shock_state": "none",
         "shock_alignment": "no_shock",
+        "adx_14": np.nan,
+        "plus_di_14": np.nan,
+        "minus_di_14": np.nan,
+        "trend_strength": "unknown",
+        "consolidation_state": "unknown",
         "entry_close_position_4": np.nan,
         "pre_return_8_pct": np.nan,
     }
@@ -203,6 +216,16 @@ def price_action_snapshot(data: pd.DataFrame, *, entry_ts: pd.Timestamp, directi
     snap["pre_range_atr_8"] = range_atr_ratio(ohlcv, atr, pre_i, 8)
     snap["pre_range_atr_16"] = range_atr_ratio(ohlcv, atr, pre_i, 16)
     snap["compression_state"] = compression_bucket(snap["pre_range_atr_16"])
+    dmi = directional_movement_index(ohlcv, 14)
+    snap["adx_14"] = _series_value(dmi["adx"], pre_i)
+    snap["plus_di_14"] = _series_value(dmi["plus_di"], pre_i)
+    snap["minus_di_14"] = _series_value(dmi["minus_di"], pre_i)
+    snap["trend_strength"] = trend_strength_bucket(snap["adx_14"])
+    snap["consolidation_state"] = classify_consolidation_state(
+        compression_state=snap["compression_state"],
+        trend_strength=snap["trend_strength"],
+        pre_range_atr_16=snap["pre_range_atr_16"],
+    )
     snap["entry_close_position_4"] = close_position(ohlcv, pre_i, 4)
     snap["pre_return_8_pct"] = pre_return_pct(ohlcv, pre_i, 8)
 
@@ -225,6 +248,76 @@ def compression_bucket(range_atr: float) -> str:
     if range_atr > 5.0:
         return "expanded"
     return "normal"
+
+
+def directional_movement_index(data: pd.DataFrame, window: int = 14) -> pd.DataFrame:
+    high = pd.to_numeric(data["high"], errors="coerce")
+    low = pd.to_numeric(data["low"], errors="coerce")
+    close = pd.to_numeric(data["close"], errors="coerce")
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+    up_move = high - prev_high
+    down_move = prev_low - low
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=data.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=data.index)
+    tr = pd.concat([(high - low), (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(window, min_periods=max(2, window // 2)).mean()
+    plus_di = 100.0 * plus_dm.rolling(window, min_periods=max(2, window // 2)).mean() / atr
+    minus_di = 100.0 * minus_dm.rolling(window, min_periods=max(2, window // 2)).mean() / atr
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx = dx.rolling(window, min_periods=max(2, window // 2)).mean()
+    return pd.DataFrame({"plus_di": plus_di, "minus_di": minus_di, "adx": adx})
+
+
+def trend_strength_bucket(adx: float) -> str:
+    if not np.isfinite(adx):
+        return "unknown"
+    if adx < 18.0:
+        return "weak_or_range"
+    if adx < 25.0:
+        return "transition"
+    if adx < 40.0:
+        return "trend"
+    return "strong_trend"
+
+
+def classify_consolidation_state(*, compression_state: str, trend_strength: str, pre_range_atr_16: float) -> str:
+    compression = str(compression_state)
+    strength = str(trend_strength)
+    if compression in {"missing_ohlcv", "unknown"} or strength == "unknown":
+        return "unknown"
+    if compression == "compressed" and strength == "weak_or_range":
+        return "tight_range"
+    if compression == "normal" and strength == "weak_or_range":
+        return "range"
+    if compression == "expanded" and strength == "weak_or_range":
+        return "volatile_range"
+    if compression == "compressed" and strength == "transition":
+        return "coiling_transition"
+    if strength in {"trend", "strong_trend"} and compression != "compressed":
+        return "directional"
+    if np.isfinite(pre_range_atr_16) and pre_range_atr_16 < 2.8 and strength == "transition":
+        return "range_to_trend_transition"
+    return "transition"
+
+
+def classify_foundation_state(*, mtf_mode: str, consolidation_state: str, trend_strength: str) -> str:
+    mtf = str(mtf_mode)
+    consolidation = str(consolidation_state)
+    strength = str(trend_strength)
+    if mtf == "missing_structure" or consolidation == "unknown":
+        return "missing"
+    if consolidation in {"tight_range", "range", "volatile_range"}:
+        return "consolidation"
+    if consolidation in {"coiling_transition", "range_to_trend_transition"}:
+        return "transition"
+    if mtf in {"trend_aligned", "pullback_in_uptrend", "pullback_in_downtrend"} and strength in {"trend", "strong_trend"}:
+        return "directional_trend"
+    if mtf == "countertrend":
+        return "countertrend_risk"
+    if mtf in {"range_or_transition", "conflict", "mixed"}:
+        return "transition"
+    return "mixed"
 
 
 def shock_alignment(direction: str, shock_direction: str) -> str:
@@ -387,6 +480,13 @@ def _median(group: pd.DataFrame, col: str) -> float:
     return float(pd.to_numeric(group[col], errors="coerce").median())
 
 
+def _series_value(series: pd.Series, idx: int) -> float:
+    if idx >= len(series):
+        return np.nan
+    value = float(series.iat[idx])
+    return value if np.isfinite(value) else np.nan
+
+
 def _load_table(path: Path) -> pd.DataFrame:
     return pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
 
@@ -403,6 +503,7 @@ def _write_report(
     by_mode: pd.DataFrame,
     by_regime: pd.DataFrame,
     by_pa: pd.DataFrame,
+    by_foundation: pd.DataFrame,
     by_hour: pd.DataFrame,
     path: Path,
 ) -> None:
@@ -425,6 +526,9 @@ def _write_report(
         "## Price Action Buckets",
         *_markdown_table(_format_summary(by_pa.head(20))),
         "",
+        "## Foundation State Buckets",
+        *_markdown_table(_format_summary(by_foundation.head(20))),
+        "",
         "## Hour + MTF Buckets",
         *_markdown_table(_format_summary(by_hour.head(25))),
         "",
@@ -433,6 +537,8 @@ def _write_report(
         "- `pullback_in_uptrend/downtrend`: 60m and 240m agree with direction, local structure is neutral/opposed.",
         "- `range_or_transition`: middle or context structure is neutral; trend-follow rules should not be assumed.",
         "- `countertrend`: trade direction opposes both 60m and 240m structure.",
+        "- `consolidation_state`: separates actual range compression/weak ADX from trend transition.",
+        "- `foundation_state`: combines MTF structure with consolidation so direction gates do not treat all neutral regimes equally.",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
