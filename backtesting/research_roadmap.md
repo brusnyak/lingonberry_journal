@@ -49,6 +49,9 @@ Done or implemented:
     raw event frequency from execution-filter scarcity.
 15. First executable FVG session matrix for crypto `15m`, testing actual retest
     entries/exits across all sessions instead of raw event drift.
+16. First promoted daytime module: London long with `1H+15m` bullish EMA,
+    structure confirmation, fixed `2R`, and breakeven after half-target.
+17. First two-module crypto stack combining late-US short and London long.
 
 Still needed:
 
@@ -703,6 +706,80 @@ UI review threshold:
   - focus on whether the retest is visually real and whether prior-swing stop
     placement is structurally valid.
 
+Session-module promotion checkpoint on 2026-07-13:
+
+- Scope: Binance only, reviewed `11`-symbol crypto basket, `15m`, `60d`.
+- Reason for single exchange: Binance/Bybit price action is similar enough for
+  first-pass session/module research; exchange split is a later robustness and
+  execution-cost check.
+
+London long candidate:
+
+- Filters:
+  - session: `london`;
+  - direction: `long`;
+  - `4H` structure context: `bull`;
+  - trend helper: `1H+15m bullish EMA`;
+  - entry: `structure_confirmed_next_open`;
+  - confirmation: `latest_bull_regime`;
+  - target: `fixed_2r`;
+  - management: `be_after_half_target`.
+- Candidate trades: `143`.
+- Portfolio-accepted trades: `69`.
+- Symbols: `10`.
+- Gross return at `0.20%` risk/trade: `+4.78%`.
+- Max DD: `1.75%`.
+- Return/DD: `2.73`.
+- PF: `2.26`.
+- Avg R: `+0.347`.
+- Win rate: `56.5%`.
+- Stop rate: `18.8%`.
+- Expiry rate: `46.4%`.
+- Forensic split:
+  - working: `39` trades, avg `+1.100R`;
+  - direction/entry failure: `15` trades, avg `-0.865R`;
+  - management/target failure: `10` trades, avg `-0.098R`;
+  - entry/stop failure: `4` trades, avg `-1.077R`;
+  - target/time-exit failure: `1` trade, avg `-0.702R`.
+
+Two-module stack:
+
+- Modules:
+  - late-US short benchmark: `53` accepted trades, avg `+0.355R`,
+    total `+18.815R`, stop `22.6%`, expiry `54.7%`;
+  - London long: `67` accepted trades, avg `+0.381R`,
+    total `+25.548R`, stop `19.4%`, expiry `44.8%`.
+- Combined candidate trades: `217`.
+- Combined accepted trades: `120`.
+- Symbols: `11`.
+- Gross return at `0.20%` risk/trade: `+8.87%`.
+- Max DD: `1.81%`.
+- Daily max DD: `1.47%`.
+- Return/DD: `4.91`.
+- PF: `2.28`.
+- Avg R: `+0.370`.
+- Median R: `+0.271`.
+- Win rate: `56.7%`.
+- Stop rate: `20.8%`.
+- Expiry rate: `49.2%`.
+
+Session-module interpretation:
+
+- The earlier user observation was directionally right: relying on one late-US
+  short module leaves too much of the day unused.
+- The engine is not missing raw FVG retests. The final strategy filters create
+  low per-symbol frequency.
+- Daytime is not dead. London long is the first credible daytime module and
+  contributed more total R than the late-US benchmark in this in-sample stack.
+- Still not enough for one trade per asset per day. Current frequency is about
+  `2` accepted trades per day across the basket, but only about `0.18` accepted
+  trades per symbol per day.
+- Forcing daily trades per asset is a bad strategy unless new modules survive
+  validation. Frequency should come from validated session modules, not looser
+  filters.
+- Next research target: rolling/discovery-holdout validation for the two-module
+  stack, then optional Asia short promotion under the same gates.
+
 ## Validation Gates
 
 Minimum gates before strategy construction:
@@ -719,12 +796,14 @@ Do not code another strategy yet.
 
 Next concrete work:
 
-1. Run shock-aware discovery/holdout for the promoted top-retest bucket.
-2. Add walk-forward symbol filtering to the shock-aware execution model.
-3. Generate UI review samples for accepted winners, accepted losers,
-   stale-continuation entries, and bullish-shock rejections.
-4. Promote to paper only if shock-aware top-retest survives symbol filtering and
-   realistic expiry assumptions.
+1. Run rolling/discovery-holdout validation for the late-US short + London long
+   module stack.
+2. UI-review London long forensic edge cases using
+   `backtesting/results/review_samples/crypto_london_long_forensics_review_samples.csv`.
+3. Promote Asia short only if it survives the same execution, portfolio, and
+   holdout gates.
+4. Add walk-forward symbol filtering to session modules instead of static
+   symbol exclusions.
 5. Add trade-frequency, overlap/correlation, and drawdown controls before
    judging returns.
 6. Add multi-asset refresh for FX/metals/indices before comparing asset classes.

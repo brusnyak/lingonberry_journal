@@ -167,7 +167,7 @@ def build_forensic_review_packet(
         for (exchange, symbol), group in packet.groupby(["exchange", "symbol"], dropna=False):
             safe_exchange = str(exchange).lower()
             safe_symbol = str(symbol).upper()
-            group.to_csv(output_path.with_name(f"crypto_shock_forensics_review_{safe_exchange}_{safe_symbol}.csv"), index=False)
+            group.to_csv(output_path.with_name(f"{output_path.stem}_{safe_exchange}_{safe_symbol}.csv"), index=False)
     return packet
 
 
@@ -213,7 +213,8 @@ def _forensic_row(row: dict, cfg: ForensicsConfig) -> dict:
     pre_lower_lows = int((pre["low"].diff() < 0).sum()) if len(pre) else 0
     pre_lower_highs = int((pre["high"].diff() < 0).sum()) if len(pre) else 0
 
-    path = _path_milestones(post, entry=entry, stop=stop, target=target, risk=risk)
+    direction = str(row.get("direction", "short")).lower()
+    path = _path_milestones(post, direction=direction, entry=entry, stop=stop, target=target, risk=risk)
     base = _base_row(row)
     out = {
         **base,
@@ -222,7 +223,7 @@ def _forensic_row(row: dict, cfg: ForensicsConfig) -> dict:
         "pre_range_atr": pre_range_atr,
         "pre_lower_low_count": pre_lower_lows,
         "pre_lower_high_count": pre_lower_highs,
-        "pre_structure_tape": _pre_structure_tape(pre_move_r, pre_lower_lows, pre_lower_highs),
+        "pre_structure_tape": _pre_structure_tape(direction, pre_move_r, pre_lower_lows, pre_lower_highs),
         **path,
     }
     out["failure_layer"] = _failure_layer(out)
@@ -236,8 +237,8 @@ def _forensics_to_review_schema(forensic: pd.DataFrame) -> pd.DataFrame:
     out = forensic.copy()
     out["ts"] = pd.to_datetime(out["entry_ts"], utc=True)
     out["predictor"] = "crypto_shock_forensics"
-    out["session"] = "late_us"
-    out["direction"] = "short"
+    out["session"] = out["session_utc"] if "session_utc" in out.columns else "late_us"
+    out["direction"] = out["direction"].fillna("short") if "direction" in out.columns else "short"
     out["entry_price"] = out["entry"].astype(float)
     out["sl"] = out["stop"].astype(float)
     out["tp1"] = out["target"].astype(float)
@@ -302,9 +303,10 @@ def _forensic_notes_hint(row: pd.Series) -> str:
     return "Judge direction, entry confirmation, shock state, target, and management."
 
 
-def _path_milestones(post: pd.DataFrame, *, entry: float, stop: float, target: float, risk: float) -> dict:
-    one_r = entry - risk
-    half_target = entry - 0.5 * (entry - target)
+def _path_milestones(post: pd.DataFrame, *, direction: str, entry: float, stop: float, target: float, risk: float) -> dict:
+    is_long = direction == "long"
+    one_r = entry + risk if is_long else entry - risk
+    half_target = entry + 0.5 * (target - entry)
     mfe = 0.0
     mae = 0.0
     bars_to_half = np.nan
@@ -317,18 +319,33 @@ def _path_milestones(post: pd.DataFrame, *, entry: float, stop: float, target: f
         high = float(candle.high)
         low = float(candle.low)
         close = float(candle.close)
-        mfe = max(mfe, (entry - low) / risk)
-        mae = min(mae, (entry - high) / risk)
-        close_r = (entry - close) / risk
-        if np.isnan(first_adverse_05r) and (entry - high) / risk <= -0.5:
+        if is_long:
+            mfe = max(mfe, (high - entry) / risk)
+            mae = min(mae, (low - entry) / risk)
+            close_r = (close - entry) / risk
+            adverse_r = (low - entry) / risk
+            half_hit = high >= half_target
+            one_r_hit = high >= one_r
+            target_hit = high >= target
+            stop_hit = low <= stop
+        else:
+            mfe = max(mfe, (entry - low) / risk)
+            mae = min(mae, (entry - high) / risk)
+            close_r = (entry - close) / risk
+            adverse_r = (entry - high) / risk
+            half_hit = low <= half_target
+            one_r_hit = low <= one_r
+            target_hit = low <= target
+            stop_hit = high >= stop
+        if np.isnan(first_adverse_05r) and adverse_r <= -0.5:
             first_adverse_05r = offset
-        if np.isnan(bars_to_stop) and high >= stop:
+        if np.isnan(bars_to_stop) and stop_hit:
             bars_to_stop = offset
-        if np.isnan(bars_to_half) and low <= half_target:
+        if np.isnan(bars_to_half) and half_hit:
             bars_to_half = offset
-        if np.isnan(bars_to_1r) and low <= one_r:
+        if np.isnan(bars_to_1r) and one_r_hit:
             bars_to_1r = offset
-        if np.isnan(bars_to_target) and low <= target:
+        if np.isnan(bars_to_target) and target_hit:
             bars_to_target = offset
     return {
         "path_mfe_r": mfe,
@@ -349,6 +366,7 @@ def _path_milestones(post: pd.DataFrame, *, entry: float, stop: float, target: f
 def _base_row(row: dict) -> dict:
     keep = [
         "exchange", "symbol", "tf", "entry_ts", "entry", "stop", "target", "risk_price",
+        "session_utc", "direction",
         "entry_model", "target_model", "management_model",
         "net_r", "mfe_r", "mae_r", "hit_1r", "hit_target", "hit_stop", "exit_reason",
         "bars_to_entry", "bars_to_exit", "confirmation_model", "shock_state",
@@ -357,7 +375,15 @@ def _base_row(row: dict) -> dict:
     return {k: row.get(k) for k in keep}
 
 
-def _pre_structure_tape(pre_move_r: float, lower_lows: int, lower_highs: int) -> str:
+def _pre_structure_tape(direction: str, pre_move_r: float, lower_lows: int, lower_highs: int) -> str:
+    if direction == "long":
+        if np.isfinite(pre_move_r) and pre_move_r >= 1.0:
+            return "bullish_continuation"
+        if np.isfinite(pre_move_r) and pre_move_r <= -1.0:
+            return "bearish_reversal_pressure"
+        if lower_lows <= 4 and lower_highs <= 4:
+            return "mixed_or_chop"
+        return "orderly_bullish"
     if np.isfinite(pre_move_r) and pre_move_r <= -1.0 and lower_lows >= 4:
         return "bearish_continuation"
     if np.isfinite(pre_move_r) and pre_move_r >= 1.0:

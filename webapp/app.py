@@ -2706,6 +2706,9 @@ def api_review_ict_events():
             trades_json.append(
                 {
                     "id": idx + 1,
+                    "symbol": str(row.get("symbol", symbol)).upper(),
+                    "tf": tf,
+                    "exchange": str(row.get("exchange", exchange)).lower() if "exchange" in row and pd.notna(row.get("exchange")) else exchange,
                     "direction": "LONG" if is_long else "SHORT",
                     "entry_time": event_ts.isoformat(),
                     "exit_time": exit_ts.isoformat(),
