@@ -20,19 +20,14 @@ from backtesting.crypto.data import load_crypto
 from backtesting.crypto.mtf_cascade_direction import (
     CascadeConfig,
     asof_direction,
+    structural_stop_target,
     structure_ema_direction,
+    walk_structural_outcome,
 )
 from backtesting.features.structure import StructureConfig, build_structure_index
 
 DEFAULT_OUTPUT = Path("backtesting/results/crypto_mtf_cascade_direction/cascade_review_packet.csv")
 PREDICTOR = "crypto_cascade_global_local_mini"
-
-
-def _first_finite(*values) -> float:
-    for v in values:
-        if v is not None and np.isfinite(v):
-            return float(v)
-    return np.nan
 
 
 def _session_utc(ts: pd.Timestamp) -> str:
@@ -44,46 +39,6 @@ def _session_utc(ts: pd.Timestamp) -> str:
     if 17 <= h < 22:
         return "late_us"
     return "asia"
-
-
-def _walk_with_mfe_mae(bars: pd.DataFrame, entry_i: int, direction: str, sl: float, tp: float, horizon: int = 200) -> dict:
-    entry = float(bars["close"].iat[entry_i])
-    risk = abs(entry - sl)
-    if risk <= 0:
-        return {}
-    target_r = abs(tp - entry) / risk
-    end_i = min(entry_i + horizon, len(bars) - 1)
-    mfe = 0.0
-    mae = 0.0
-    outcome_r = 0.0
-    hit = False
-    for j in range(entry_i + 1, end_i + 1):
-        hi = float(bars["high"].iat[j])
-        lo = float(bars["low"].iat[j])
-        if direction == "long":
-            fav = (hi - entry) / risk
-            adv = (entry - lo) / risk
-            hit_tp = hi >= tp
-            hit_sl = lo <= sl
-        else:
-            fav = (entry - lo) / risk
-            adv = (hi - entry) / risk
-            hit_tp = lo <= tp
-            hit_sl = hi >= sl
-        mfe = max(mfe, fav)
-        mae = max(mae, adv)
-        if hit_tp and hit_sl:
-            outcome_r, hit = -1.0, False
-            break
-        if hit_tp:
-            outcome_r, hit = target_r, True
-            break
-        if hit_sl:
-            outcome_r, hit = -1.0, False
-            break
-    else:
-        outcome_r, hit = 0.0, False  # expiry
-    return {"outcome_1.5r": outcome_r, "hit_1.5r": hit, "mfe_r": mfe, "mae_r": -mae, "risk_price": risk}
 
 
 def build_cascade_review_packet(
@@ -129,21 +84,12 @@ def build_cascade_review_packet(
             direction = "long" if combo_s.iat[i] == "bull" else "short"
             srow = structure_local.iloc[i]
             entry = float(bars_local["close"].iat[i])
-            if direction == "long":
-                sl = _first_finite(srow.get("long_structural_sl"), srow.get("last_swing_low"))
-                if not np.isfinite(sl) or sl >= entry:
-                    continue
-                risk = entry - sl
-                tp = max(_first_finite(srow.get("long_target_1"), entry + min_rr * risk), entry + min_rr * risk)
-            else:
-                sl = _first_finite(srow.get("short_structural_sl"), srow.get("last_swing_high"))
-                if not np.isfinite(sl) or sl <= entry:
-                    continue
-                risk = sl - entry
-                tp = min(_first_finite(srow.get("short_target_1"), entry - min_rr * risk), entry - min_rr * risk)
+            sl, tp = structural_stop_target(srow, direction, entry, min_rr)
+            if not np.isfinite(sl):
+                continue
 
-            outcome = _walk_with_mfe_mae(bars_local, i, direction, sl, tp)
-            if not outcome:
+            outcome = walk_structural_outcome(bars_local, i, direction, sl, tp, track_excursion=True)
+            if outcome is None:
                 continue
             ts = pd.Timestamp(bars_local["ts"].iat[i])
             symbol_rows.append({
@@ -158,11 +104,11 @@ def build_cascade_review_packet(
                 "sl": sl,
                 "tp1": tp,
                 "risk_price": outcome["risk_price"],
-                "outcome_1.5r": outcome["outcome_1.5r"],
-                "hit_1.5r": outcome["hit_1.5r"],
+                "outcome_1.5r": outcome["r_multiple"],
+                "hit_1.5r": outcome["hit"],
                 "mfe_r": outcome["mfe_r"],
                 "mae_r": outcome["mae_r"],
-                "exit_reason": "target" if outcome["hit_1.5r"] else "stop",
+                "exit_reason": "target" if outcome["hit"] else "stop",
                 "review_bucket": "sample",  # neutral -- must NOT correlate with win/loss, see docstring
                 "notes_hint": "Global(240m)+local(30m) structure+EMA agreement, structural SL/target (reused from PropFirmStructureV1) -- verify the direction call visually, not just the R outcome.",
             })
