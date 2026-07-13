@@ -32,6 +32,50 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | 30d | london_trend_ema_bullish | 14 | 13 | 9 | 14.000 | 0.473 | 0.368 | 4.946 | 6.000 | 0.929 | 1 | 9.571 | 0.736 | 0.536 | 6.413 | 0.019 | 0.002 | 0.002 | 9.194 | 0.846 | 0.077 | 0.615 | 0.002 | 6 | 1 | 0.005 | 1.448 | 2.582 | 4 | 0.750 | 0.750 |
 | 30d | london_trend_rsi_not_overbought | 9 | 8 | 8 | 9.000 | 0.304 | 0.266 | 5.250 | 6.000 | 0.889 | 1 | 4.086 | 0.511 | 0.466 | 4.926 | 0.008 | 0.002 | 0.002 | 3.926 | 0.875 | 0.125 | 0.750 | 0.002 | 6 | 1 | 0.005 | 0.900 | 1.508 | 1 | 1.000 | 1.000 |
 
+## Cost And Slippage Stress
+| window | rule | scenario | candidates | accepted | median_extra_cost_r | gross_return_pct | max_dd_pct | profit_factor | win_rate | return_to_dd |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 30d | late_us_fade | baseline | 53 | 53 | 0.000 | 0.055 | 0.009 | 2.782 | 0.642 | 6.431 |
+| 30d | late_us_fade | realistic_10bps | 53 | 52 | 0.084 | 0.047 | 0.009 | 2.480 | 0.635 | 5.026 |
+| 30d | late_us_fade | high_22bps | 53 | 52 | 0.184 | 0.036 | 0.011 | 1.991 | 0.635 | 3.309 |
+| 30d | late_us_fade | punitive_40bps | 53 | 52 | 0.334 | 0.019 | 0.014 | 1.437 | 0.635 | 1.357 |
+| 30d | late_us_fade | nightmare_60bps | 53 | 50 | 0.501 | -0.000 | 0.023 | 0.993 | 0.520 | -0.014 |
+| 30d | london_trend_aligned | baseline | 14 | 13 | 0.000 | 0.019 | 0.002 | 6.413 | 0.846 | 9.194 |
+| 30d | london_trend_aligned | realistic_10bps | 14 | 13 | 0.049 | 0.017 | 0.002 | 5.657 | 0.846 | 7.938 |
+| 30d | london_trend_aligned | high_22bps | 14 | 13 | 0.107 | 0.015 | 0.002 | 4.805 | 0.769 | 6.580 |
+| 30d | london_trend_aligned | punitive_40bps | 14 | 13 | 0.195 | 0.012 | 0.002 | 3.388 | 0.692 | 4.795 |
+| 30d | london_trend_aligned | nightmare_60bps | 14 | 13 | 0.293 | 0.008 | 0.003 | 2.223 | 0.538 | 2.676 |
+| 30d | ny_13_range_reversal | baseline | 20 | 20 | 0.000 | 0.042 | 0.003 | 11.780 | 0.800 | 15.181 |
+| 30d | ny_13_range_reversal | realistic_10bps | 20 | 20 | 0.106 | 0.037 | 0.003 | 9.544 | 0.800 | 11.994 |
+| 30d | ny_13_range_reversal | high_22bps | 20 | 20 | 0.232 | 0.031 | 0.004 | 7.077 | 0.700 | 8.426 |
+| 30d | ny_13_range_reversal | punitive_40bps | 20 | 20 | 0.423 | 0.023 | 0.005 | 4.422 | 0.700 | 4.484 |
+| 30d | ny_13_range_reversal | nightmare_60bps | 20 | 20 | 0.634 | 0.013 | 0.008 | 2.487 | 0.600 | 1.762 |
+| 30d | strict_candidates | baseline | 87 | 86 | 0.000 | 0.116 | 0.008 | 4.034 | 0.709 | 15.307 |
+| 30d | strict_candidates | realistic_10bps | 87 | 85 | 0.082 | 0.102 | 0.008 | 3.541 | 0.706 | 12.252 |
+| 30d | strict_candidates | high_22bps | 87 | 85 | 0.180 | 0.082 | 0.009 | 2.819 | 0.671 | 8.955 |
+| 30d | strict_candidates | punitive_40bps | 87 | 85 | 0.328 | 0.053 | 0.011 | 1.986 | 0.659 | 5.054 |
+| 30d | strict_candidates | nightmare_60bps | 87 | 84 | 0.492 | 0.018 | 0.017 | 1.276 | 0.536 | 1.043 |
+| 60d | late_us_fade | baseline | 70 | 70 | 0.000 | 0.057 | 0.009 | 2.335 | 0.600 | 6.727 |
+| 60d | late_us_fade | realistic_10bps | 70 | 69 | 0.070 | 0.049 | 0.009 | 2.074 | 0.594 | 5.148 |
+| 60d | late_us_fade | high_22bps | 70 | 69 | 0.154 | 0.035 | 0.011 | 1.698 | 0.580 | 3.264 |
+| 60d | late_us_fade | punitive_40bps | 70 | 69 | 0.281 | 0.016 | 0.014 | 1.264 | 0.580 | 1.140 |
+| 60d | late_us_fade | nightmare_60bps | 70 | 67 | 0.421 | -0.006 | 0.023 | 0.910 | 0.493 | -0.258 |
+| 60d | london_trend_aligned | baseline | 14 | 13 | 0.000 | 0.019 | 0.002 | 6.413 | 0.846 | 9.194 |
+| 60d | london_trend_aligned | realistic_10bps | 14 | 13 | 0.049 | 0.017 | 0.002 | 5.657 | 0.846 | 7.938 |
+| 60d | london_trend_aligned | high_22bps | 14 | 13 | 0.107 | 0.015 | 0.002 | 4.805 | 0.769 | 6.580 |
+| 60d | london_trend_aligned | punitive_40bps | 14 | 13 | 0.195 | 0.012 | 0.002 | 3.388 | 0.692 | 4.795 |
+| 60d | london_trend_aligned | nightmare_60bps | 14 | 13 | 0.293 | 0.008 | 0.003 | 2.223 | 0.538 | 2.676 |
+| 60d | ny_13_range_reversal | baseline | 29 | 29 | 0.000 | 0.050 | 0.003 | 6.151 | 0.759 | 14.854 |
+| 60d | ny_13_range_reversal | realistic_10bps | 29 | 29 | 0.096 | 0.043 | 0.004 | 4.859 | 0.759 | 11.509 |
+| 60d | ny_13_range_reversal | high_22bps | 29 | 29 | 0.212 | 0.035 | 0.004 | 3.629 | 0.690 | 8.262 |
+| 60d | ny_13_range_reversal | punitive_40bps | 29 | 29 | 0.385 | 0.022 | 0.005 | 2.280 | 0.655 | 3.997 |
+| 60d | ny_13_range_reversal | nightmare_60bps | 29 | 29 | 0.577 | 0.007 | 0.009 | 1.332 | 0.586 | 0.848 |
+| 60d | strict_candidates | baseline | 113 | 112 | 0.000 | 0.127 | 0.008 | 3.251 | 0.670 | 16.729 |
+| 60d | strict_candidates | realistic_10bps | 113 | 111 | 0.077 | 0.109 | 0.008 | 2.813 | 0.667 | 13.101 |
+| 60d | strict_candidates | high_22bps | 113 | 111 | 0.169 | 0.085 | 0.009 | 2.255 | 0.631 | 9.237 |
+| 60d | strict_candidates | punitive_40bps | 113 | 111 | 0.308 | 0.049 | 0.013 | 1.609 | 0.613 | 3.724 |
+| 60d | strict_candidates | nightmare_60bps | 113 | 109 | 0.462 | 0.010 | 0.017 | 1.106 | 0.523 | 0.574 |
+
 ## Frequency By Symbol
 | symbol | events | events_per_day | events_per_week | avg_r | profit_factor | win_rate | median_duration_h | median_mfe_r | p75_mfe_r | median_mae_r | strict_events |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -87,3 +131,4 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 - Frequency has to come from more independent setup families or lower-timeframe entry expansion, not from weakening the MTF filter.
 - EMA helps only if the rule matrix improves return/DD without starving trades; otherwise it is descriptive, not a gate.
 - Post-target continuation is measured because fixed 2R may be too short for clean London/NY winners.
+- Stress scenarios convert extra bps into R, so tight-stop trades are penalized harder.

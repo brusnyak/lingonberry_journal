@@ -249,3 +249,39 @@ Blunt interpretation:
 - Current stats are good for research and candidate promotion, not deployment.
   They still need walk-forward / holdout and UI review of individual winners and
   losers.
+
+## 2026-07-13 Cost Stress Update
+
+Added cost/slippage stress to `crypto_foundation_trade_forensics`.
+
+Method:
+
+- Convert extra friction into R: `extra_cost_r = total_bps / 10000 * entry / risk`.
+- This intentionally penalizes tight-stop trades harder.
+- Scenarios:
+  - `realistic_10bps`: 6 bps round-trip fee + 2 bps slippage per side.
+  - `high_22bps`: 12 bps round-trip fee + 5 bps slippage per side.
+  - `punitive_40bps`: 20 bps round-trip fee + 10 bps slippage per side.
+  - `nightmare_60bps`: 30 bps round-trip fee + 15 bps slippage per side.
+
+Strict candidate stress:
+
+| Window | Scenario | Return | Max DD | PF | Win Rate | Return/DD |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 60d | baseline | +12.67% | 0.76% | 3.25 | 67.0% | 16.73 |
+| 60d | high 22 bps | +8.51% | 0.92% | 2.26 | 63.1% | 9.24 |
+| 60d | punitive 40 bps | +4.92% | 1.32% | 1.61 | 61.3% | 3.72 |
+| 60d | nightmare 60 bps | +1.00% | 1.75% | 1.11 | 52.3% | 0.57 |
+| 30d | baseline | +11.60% | 0.76% | 4.03 | 70.9% | 15.31 |
+| 30d | high 22 bps | +8.25% | 0.92% | 2.82 | 67.1% | 8.96 |
+| 30d | punitive 40 bps | +5.33% | 1.05% | 1.99 | 65.9% | 5.05 |
+| 30d | nightmare 60 bps | +1.82% | 1.75% | 1.28 | 53.6% | 1.04 |
+
+Blunt interpretation:
+
+- The strict structure basket survives realistic, high, and punitive friction.
+- It does not have enough margin to trust under nightmare `60 bps` friction.
+- NY 13 range reversal and London trend-aligned are the most friction-resistant
+  modules, but sample size is still small.
+- Late-US fade is useful but cost-sensitive; it dies around nightmare friction.
+- Next required validation is walk-forward / holdout, not more indicator gates.

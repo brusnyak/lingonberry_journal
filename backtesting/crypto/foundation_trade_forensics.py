@@ -50,6 +50,7 @@ def run_foundation_trade_forensics(
     concrete = select_concrete_execution(journal, cfg.target_model, cfg.management_model)
     events = enrich_events(concrete, cfg)
     rules = evaluate_windowed_rules(events, cfg)
+    stress = evaluate_stress_matrix(events, cfg)
     by_symbol = summarize_by_symbol(events)
     by_setup = summarize(events, ["setup_name", "mtf_mode"])
     management = compare_management_variants(journal)
@@ -57,13 +58,15 @@ def run_foundation_trade_forensics(
     output_dir.mkdir(parents=True, exist_ok=True)
     events.to_csv(output_dir / "foundation_physical_trade_journal.csv", index=False)
     rules.to_csv(output_dir / "foundation_rule_matrix.csv", index=False)
+    stress.to_csv(output_dir / "foundation_stress_matrix.csv", index=False)
     by_symbol.to_csv(output_dir / "foundation_frequency_by_symbol.csv", index=False)
     by_setup.to_csv(output_dir / "foundation_summary_by_setup.csv", index=False)
     management.to_csv(output_dir / "foundation_management_comparison.csv", index=False)
-    _write_report(events, rules, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
+    _write_report(events, rules, stress, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
     return {
         "events": events,
         "rules": rules,
+        "stress": stress,
         "by_symbol": by_symbol,
         "by_setup": by_setup,
         "management": management,
@@ -198,30 +201,7 @@ def post_exit_continuation(data: pd.DataFrame, row: dict, post_bars: tuple[int, 
 
 
 def evaluate_rules(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame:
-    specs = {
-        "all_physical_fixed2_hold": pd.Series(True, index=events.index),
-        "strict_candidates": events.apply(is_strict_candidate, axis=1),
-        "london_trend_aligned": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
-        & (events["mtf_mode"] == "trend_aligned"),
-        "london_trend_ema_bullish": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
-        & (events["mtf_mode"] == "trend_aligned")
-        & (events["ema_21_55_state"] == "bullish"),
-        "london_trend_rsi_not_overbought": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
-        & (events["mtf_mode"] == "trend_aligned")
-        & (pd.to_numeric(events["rsi_14"], errors="coerce") <= 70),
-        "ny_13_range_reversal": (events["setup_name"] == "ny_long_neutral_reversal_ce")
-        & (events["entry_hour_utc"].astype(int) == 13)
-        & (events["mtf_mode"] == "range_or_transition"),
-        "ny_13_expanded_or_opposing": (events["setup_name"] == "ny_long_neutral_reversal_ce")
-        & (events["entry_hour_utc"].astype(int) == 13)
-        & (events["mtf_mode"] == "range_or_transition")
-        & ((events["compression_state"] == "expanded") | (events["shock_alignment"] == "opposing_shock")),
-        "late_us_fade": (events["setup_name"] == "late_us_short_bull_flush_ce")
-        & (events["mtf_mode"].isin(["countertrend", "range_or_transition"])),
-        "late_us_fade_no_aligned_shock": (events["setup_name"] == "late_us_short_bull_flush_ce")
-        & (events["mtf_mode"].isin(["countertrend", "range_or_transition"]))
-        & (events["shock_alignment"] != "aligned_shock"),
-    }
+    specs = rule_masks(events)
     rows: list[dict] = []
     risk_cfg = PortfolioRiskConfig(
         risk_per_trade_pct=cfg.risk_per_trade_pct,
@@ -252,6 +232,116 @@ def evaluate_rules(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFram
         }
         rows.append(row)
     return pd.DataFrame(rows).sort_values(["gross_return_pct", "max_dd_pct"], ascending=[False, True]).reset_index(drop=True)
+
+
+def rule_masks(events: pd.DataFrame) -> dict[str, pd.Series]:
+    if events.empty:
+        return {"all_physical_fixed2_hold": pd.Series(dtype=bool)}
+    return {
+        "all_physical_fixed2_hold": pd.Series(True, index=events.index),
+        "strict_candidates": events.apply(is_strict_candidate, axis=1),
+        "london_trend_aligned": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
+        & (events["mtf_mode"] == "trend_aligned"),
+        "london_trend_ema_bullish": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
+        & (events["mtf_mode"] == "trend_aligned")
+        & (events["ema_21_55_state"] == "bullish"),
+        "london_trend_rsi_not_overbought": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
+        & (events["mtf_mode"] == "trend_aligned")
+        & (pd.to_numeric(events["rsi_14"], errors="coerce") <= 70),
+        "ny_13_range_reversal": (events["setup_name"] == "ny_long_neutral_reversal_ce")
+        & (events["entry_hour_utc"].astype(int) == 13)
+        & (events["mtf_mode"] == "range_or_transition"),
+        "ny_13_expanded_or_opposing": (events["setup_name"] == "ny_long_neutral_reversal_ce")
+        & (events["entry_hour_utc"].astype(int) == 13)
+        & (events["mtf_mode"] == "range_or_transition")
+        & ((events["compression_state"] == "expanded") | (events["shock_alignment"] == "opposing_shock")),
+        "late_us_fade": (events["setup_name"] == "late_us_short_bull_flush_ce")
+        & (events["mtf_mode"].isin(["countertrend", "range_or_transition"])),
+        "late_us_fade_no_aligned_shock": (events["setup_name"] == "late_us_short_bull_flush_ce")
+        & (events["mtf_mode"].isin(["countertrend", "range_or_transition"]))
+        & (events["shock_alignment"] != "aligned_shock"),
+    }
+
+
+def evaluate_stress_matrix(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame:
+    if events.empty:
+        return pd.DataFrame()
+    data = events.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True, errors="coerce")
+    max_ts = data["entry_ts"].max()
+    windows = [
+        ("60d", data),
+        ("30d", data[data["entry_ts"] >= max_ts - pd.Timedelta(days=30)].copy()),
+    ]
+    scenarios = [
+        ("baseline", 0.0, 0.0),
+        ("realistic_10bps", 6.0, 2.0),
+        ("high_22bps", 12.0, 5.0),
+        ("punitive_40bps", 20.0, 10.0),
+        ("nightmare_60bps", 30.0, 15.0),
+    ]
+    keep_rules = {
+        "all_physical_fixed2_hold",
+        "strict_candidates",
+        "ny_13_range_reversal",
+        "late_us_fade",
+        "london_trend_aligned",
+    }
+    risk_cfg = PortfolioRiskConfig(
+        risk_per_trade_pct=cfg.risk_per_trade_pct,
+        max_open_trades=cfg.max_open_trades,
+        max_open_per_symbol=cfg.max_open_per_symbol,
+        daily_loss_limit_pct=cfg.daily_loss_limit_pct,
+        tf_minutes=15,
+    )
+    rows: list[dict] = []
+    for window, subset in windows:
+        specs = rule_masks(subset)
+        for rule, mask in specs.items():
+            if rule not in keep_rules:
+                continue
+            selected = subset[mask.fillna(False)].copy()
+            for scenario, fee_round_trip_bps, slippage_side_bps in scenarios:
+                stressed = apply_cost_stress(
+                    selected,
+                    fee_round_trip_bps=fee_round_trip_bps,
+                    slippage_side_bps=slippage_side_bps,
+                )
+                accepted, portfolio = simulate_portfolio(stressed, risk_cfg)
+                avg_extra = _median(stressed, "extra_cost_r")
+                rows.append({
+                    "window": window,
+                    "rule": rule,
+                    "scenario": scenario,
+                    "fee_round_trip_bps": fee_round_trip_bps,
+                    "slippage_side_bps": slippage_side_bps,
+                    "candidates": int(len(stressed)),
+                    "accepted": int(len(accepted)),
+                    "median_extra_cost_r": avg_extra,
+                    "events_per_day": float(len(stressed) / _span_days(subset["entry_ts"])) if len(subset) else 0.0,
+                    **portfolio,
+                })
+    return pd.DataFrame(rows).sort_values(["window", "rule", "fee_round_trip_bps", "slippage_side_bps"]).reset_index(drop=True)
+
+
+def apply_cost_stress(
+    trades: pd.DataFrame,
+    *,
+    fee_round_trip_bps: float,
+    slippage_side_bps: float,
+) -> pd.DataFrame:
+    if trades.empty:
+        out = trades.copy()
+        out["extra_cost_r"] = pd.Series(dtype=float)
+        return out
+    out = trades.copy()
+    total_bps = float(fee_round_trip_bps) + 2.0 * float(slippage_side_bps)
+    entry = pd.to_numeric(out["entry"], errors="coerce").abs()
+    risk = pd.to_numeric(out["risk_price"], errors="coerce").abs().replace(0, np.nan)
+    extra_r = (total_bps / 10_000.0) * (entry / risk)
+    out["extra_cost_r"] = extra_r.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    out["net_r"] = pd.to_numeric(out["net_r"], errors="coerce").fillna(0.0) - out["extra_cost_r"]
+    return out
 
 
 def evaluate_windowed_rules(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame:
@@ -470,6 +560,7 @@ def _load_table(path: Path) -> pd.DataFrame:
 def _write_report(
     events: pd.DataFrame,
     rules: pd.DataFrame,
+    stress: pd.DataFrame,
     by_symbol: pd.DataFrame,
     by_setup: pd.DataFrame,
     management: pd.DataFrame,
@@ -492,6 +583,9 @@ def _write_report(
         "## Rule Matrix",
         *_markdown_table(_format_report_table(rules.head(20))),
         "",
+        "## Cost And Slippage Stress",
+        *_markdown_table(_format_report_table(_stress_report_slice(stress))),
+        "",
         "## Frequency By Symbol",
         *_markdown_table(_format_report_table(by_symbol.head(20))),
         "",
@@ -506,9 +600,33 @@ def _write_report(
         "- Frequency has to come from more independent setup families or lower-timeframe entry expansion, not from weakening the MTF filter.",
         "- EMA helps only if the rule matrix improves return/DD without starving trades; otherwise it is descriptive, not a gate.",
         "- Post-target continuation is measured because fixed 2R may be too short for clean London/NY winners.",
+        "- Stress scenarios convert extra bps into R, so tight-stop trades are penalized harder.",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _stress_report_slice(stress: pd.DataFrame) -> pd.DataFrame:
+    if stress.empty:
+        return stress
+    keep = stress[
+        (stress["window"].isin(["60d", "30d"]))
+        & (stress["rule"].isin(["strict_candidates", "ny_13_range_reversal", "late_us_fade", "london_trend_aligned"]))
+    ].copy()
+    cols = [
+        "window",
+        "rule",
+        "scenario",
+        "candidates",
+        "accepted",
+        "median_extra_cost_r",
+        "gross_return_pct",
+        "max_dd_pct",
+        "profit_factor",
+        "win_rate",
+        "return_to_dd",
+    ]
+    return keep[cols].head(40)
 
 
 def _format_report_table(df: pd.DataFrame) -> pd.DataFrame:

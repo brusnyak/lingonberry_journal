@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from backtesting.crypto.foundation_trade_forensics import (
+    apply_cost_stress,
     is_strict_candidate,
     profit_factor,
     rsi_bucket,
@@ -66,3 +67,16 @@ def test_indicator_buckets_are_stable():
 def test_profit_factor_handles_no_losses():
     assert profit_factor(pd.Series([1.0, 2.0])) == float("inf")
     assert profit_factor(pd.Series([1.0, -0.5])) == 2.0
+
+
+def test_apply_cost_stress_converts_bps_to_r_units():
+    trades = pd.DataFrame({
+        "entry": [100.0],
+        "risk_price": [1.0],
+        "net_r": [1.5],
+    })
+
+    stressed = apply_cost_stress(trades, fee_round_trip_bps=10.0, slippage_side_bps=5.0)
+
+    assert stressed.iloc[0]["extra_cost_r"] == 0.2
+    assert stressed.iloc[0]["net_r"] == 1.3
