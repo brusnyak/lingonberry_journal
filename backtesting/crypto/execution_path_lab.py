@@ -16,8 +16,10 @@ import pandas as pd
 
 from backtesting.crypto.direction_layer import (
     DirectionLayerConfig,
+    ema_state,
     has_direction_confirmation,
     has_opposing_spike,
+    recent_shock_state,
     structure_at,
 )
 from backtesting.crypto.event_atlas import _atr, _bar_delta, _next_round_number, _session_utc, _vol_bucket
@@ -40,7 +42,9 @@ class ExecutionConfig:
     expiry_haircut_r: float = 0.0
     include_raw_entries: bool = True
     include_structure_confirmed_entries: bool = True
+    include_ema_confirmed_entries: bool = False
     stale_retest_bars: int = 4
+    continuation_stale_retest_bars: int = 8
     min_target_r: float = 1.2
     target_models: tuple[str, ...] = ("fixed_1_5r", "fixed_2r", "structure_swing_low", "round_number")
     suppress_duplicate_zones: bool = True
@@ -203,7 +207,12 @@ def _entry_plans(
             plans.append({**plan, "confirmation_model": "none", "confirmation_ts": pd.NaT, "spike_filter": "none"})
     if cfg.include_structure_confirmed_entries:
         for plan in raw_plans:
-            confirmed = _confirmed_short_plan(data, i, plan, atr, entry_structure, cfg)
+            confirmed = _confirmed_short_plan(data, i, plan, atr, entry_structure, cfg, require_ema=False)
+            if confirmed is not None:
+                plans.append(confirmed)
+    if cfg.include_ema_confirmed_entries:
+        for plan in raw_plans:
+            confirmed = _confirmed_short_plan(data, i, plan, atr, entry_structure, cfg, require_ema=True)
             if confirmed is not None:
                 plans.append(confirmed)
     return plans
@@ -216,12 +225,20 @@ def _confirmed_short_plan(
     atr: pd.Series,
     entry_structure: pd.DataFrame,
     cfg: ExecutionConfig,
+    require_ema: bool = False,
 ) -> dict | None:
     entry_i = int(plan["entry_i"])
-    if int(plan["bars_to_entry"]) > cfg.stale_retest_bars:
-        return None
     entry_ts = data["ts"].iat[entry_i]
     signal_ts = data["ts"].iat[signal_i] + _bar_delta(data)
+    shock = recent_shock_state(data, entry_i=entry_i, atr=atr, config=cfg.direction_config)
+    stale = int(plan["bars_to_entry"]) > cfg.stale_retest_bars
+    if stale:
+        allow_continuation = (
+            shock["direction"] == "bearish"
+            and int(plan["bars_to_entry"]) <= cfg.continuation_stale_retest_bars
+        )
+        if not allow_continuation:
+            return None
     spike, spike_reason = has_opposing_spike(
         data,
         direction="short",
@@ -241,12 +258,24 @@ def _confirmed_short_plan(
     )
     if not ok:
         return None
+    if shock["direction"] == "bullish" and pd.notna(shock["shock_ts"]):
+        if pd.isna(confirmation_ts) or pd.Timestamp(confirmation_ts) <= pd.Timestamp(shock["shock_ts"]):
+            return None
+    ema = ema_state(data, entry_i=entry_i, config=cfg.direction_config)
+    if require_ema and ema["state"] != "bearish":
+        return None
+    prefix = "ema_structure_confirmed" if require_ema else "structure_confirmed"
     return {
         **plan,
-        "entry_model": f"structure_confirmed_{plan['entry_model']}",
+        "entry_model": f"{prefix}_{plan['entry_model']}",
         "confirmation_model": reason,
         "confirmation_ts": confirmation_ts,
         "spike_filter": spike_reason,
+        "shock_state": shock["direction"],
+        "shock_reason": shock["reason"],
+        "ema_state": ema["state"],
+        "ema_fast": ema["fast"],
+        "ema_slow": ema["slow"],
     }
 
 
@@ -286,6 +315,11 @@ def _score_short_path(
     confirmation_model: str = "none",
     confirmation_ts: pd.Timestamp | pd.NaT = pd.NaT,
     spike_filter: str = "none",
+    shock_state: str = "none",
+    shock_reason: str = "none",
+    ema_state: str = "unknown",
+    ema_fast: float = np.nan,
+    ema_slow: float = np.nan,
     entry_structure: pd.DataFrame | None = None,
 ) -> dict:
     min_stop = entry * cfg.min_stop_pct
@@ -304,9 +338,11 @@ def _score_short_path(
             continue
         for management_model in [
             "hold_target_expiry",
+            "be_after_half_target",
             "be_after_1r",
             "partial_1r_hold",
             "partial_1r_be",
+            "partial_1r_be_after_half_target",
             "time_stop",
             "market_expiry_haircut",
         ]:
@@ -325,6 +361,11 @@ def _score_short_path(
                 "confirmation_model": confirmation_model,
                 "confirmation_ts": confirmation_ts,
                 "spike_filter": spike_filter,
+                "shock_state": shock_state,
+                "shock_reason": shock_reason,
+                "ema_state": ema_state,
+                "ema_fast": ema_fast,
+                "ema_slow": ema_slow,
                 "gross_r": outcome["gross_r"],
                 "cost_r": outcome["cost_r"],
                 "net_r": outcome["net_r"],
@@ -395,6 +436,7 @@ def _managed_short_outcome(
     management_model: str,
 ) -> dict:
     one_r = entry - risk
+    half_target = entry - 0.5 * (entry - target)
     active_stop = stop
     hit_1r = False
     partial_taken = False
@@ -422,11 +464,13 @@ def _managed_short_outcome(
             hit_1r = True
             bars_to_exit = offset
             break
+        if low <= half_target and management_model in {"be_after_half_target", "partial_1r_be_after_half_target"}:
+            active_stop = entry
         if low <= one_r and not hit_1r:
             hit_1r = True
-            if management_model in {"be_after_1r", "partial_1r_be"}:
+            if management_model in {"be_after_1r", "partial_1r_be", "partial_1r_be_after_half_target"}:
                 active_stop = entry
-            if management_model in {"partial_1r_hold", "partial_1r_be"}:
+            if management_model in {"partial_1r_hold", "partial_1r_be", "partial_1r_be_after_half_target"}:
                 gross_locked = 0.5
                 partial_taken = True
 
@@ -504,6 +548,7 @@ def main() -> int:
     parser.add_argument("--tf", default="15")
     parser.add_argument("--expiry-haircut-r", type=float, default=0.10)
     parser.add_argument("--time-stop-bars", type=int, default=16)
+    parser.add_argument("--include-ema-confirmed", action="store_true")
     parser.add_argument("--output-dir", default="backtesting/results/event_atlas")
     args = parser.parse_args()
 
@@ -515,7 +560,11 @@ def main() -> int:
         days=args.days,
         tf=args.tf,
         output_dir=Path(args.output_dir),
-        config=ExecutionConfig(expiry_haircut_r=args.expiry_haircut_r, time_stop_bars=args.time_stop_bars),
+        config=ExecutionConfig(
+            expiry_haircut_r=args.expiry_haircut_r,
+            time_stop_bars=args.time_stop_bars,
+            include_ema_confirmed_entries=args.include_ema_confirmed,
+        ),
     )
     print(f"Execution rows: {len(trades)}")
     if not summary.empty:

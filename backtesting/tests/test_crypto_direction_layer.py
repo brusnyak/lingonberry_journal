@@ -6,8 +6,10 @@ import pandas as pd
 
 from backtesting.crypto.direction_layer import (
     DirectionLayerConfig,
+    ema_state,
     has_direction_confirmation,
     has_opposing_spike,
+    recent_shock_state,
     structure_at,
 )
 
@@ -87,3 +89,41 @@ def test_opposing_spike_blocks_short_after_bullish_displacement():
 
     assert blocked
     assert reason == "bullish_opposing_spike"
+
+
+def test_recent_shock_state_detects_latest_bearish_displacement():
+    ts = pd.date_range("2026-01-01", periods=6, freq="5min", tz="UTC")
+    data = pd.DataFrame({
+        "ts": ts,
+        "open": [100, 100, 100, 100, 100, 100],
+        "high": [101, 101, 101, 101, 101, 101],
+        "low": [99, 99, 99, 94, 99, 99],
+        "close": [100, 100, 100, 94.5, 100, 100],
+    })
+    atr = pd.Series([2.0] * len(data))
+
+    shock = recent_shock_state(
+        data,
+        entry_i=4,
+        atr=atr,
+        config=DirectionLayerConfig(shock_lookback_bars=2, shock_range_atr=2.0),
+    )
+
+    assert shock["direction"] == "bearish"
+    assert shock["reason"] == "bearish_shock"
+
+
+def test_ema_state_marks_bearish_alignment_causally():
+    ts = pd.date_range("2026-01-01", periods=80, freq="5min", tz="UTC")
+    close = [120 - i * 0.2 for i in range(80)]
+    data = pd.DataFrame({
+        "ts": ts,
+        "open": close,
+        "high": [p + 0.2 for p in close],
+        "low": [p - 0.2 for p in close],
+        "close": close,
+    })
+
+    state = ema_state(data, entry_i=70, config=DirectionLayerConfig(ema_fast=5, ema_slow=13))
+
+    assert state["state"] == "bearish"

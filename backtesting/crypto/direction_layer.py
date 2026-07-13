@@ -20,6 +20,12 @@ class DirectionLayerConfig:
     opposing_spike_lookback_bars: int = 4
     opposing_spike_atr: float = 1.75
     opposing_spike_close_frac: float = 0.25
+    shock_lookback_bars: int = 8
+    shock_range_atr: float = 2.5
+    shock_body_atr: float = 1.25
+    shock_close_frac: float = 0.25
+    ema_fast: int = 21
+    ema_slow: int = 55
 
 
 def structure_at(structure: pd.DataFrame, decision_ts: pd.Timestamp) -> pd.Series | None:
@@ -128,6 +134,74 @@ def has_opposing_spike(
         if direction == "long" and close < open_ and close_near_low:
             return True, "bearish_opposing_spike"
     return False, "none"
+
+
+def recent_shock_state(
+    data: pd.DataFrame,
+    *,
+    entry_i: int,
+    atr: pd.Series,
+    config: DirectionLayerConfig | None = None,
+) -> dict:
+    """Return the latest large displacement state known before an entry."""
+    cfg = config or DirectionLayerConfig()
+    if entry_i <= 0 or len(data) == 0:
+        return {"direction": "none", "reason": "none", "shock_i": -1, "shock_ts": pd.NaT}
+
+    start = max(0, entry_i - cfg.shock_lookback_bars)
+    end = min(entry_i, len(data) - 1)
+    latest = {"direction": "none", "reason": "none", "shock_i": -1, "shock_ts": pd.NaT}
+    for j in range(start, end + 1):
+        atr_now = float(atr.iat[j]) if j < len(atr) and np.isfinite(atr.iat[j]) else np.nan
+        if not np.isfinite(atr_now) or atr_now <= 0:
+            continue
+        open_ = float(data["open"].iat[j])
+        high = float(data["high"].iat[j])
+        low = float(data["low"].iat[j])
+        close = float(data["close"].iat[j])
+        candle_range = high - low
+        body = abs(close - open_)
+        if candle_range <= 0:
+            continue
+        is_large = candle_range >= cfg.shock_range_atr * atr_now or body >= cfg.shock_body_atr * atr_now
+        if not is_large:
+            continue
+        close_near_high = close >= high - candle_range * cfg.shock_close_frac
+        close_near_low = close <= low + candle_range * cfg.shock_close_frac
+        if close > open_ and close_near_high:
+            latest = {"direction": "bullish", "reason": "bullish_shock", "shock_i": j, "shock_ts": data["ts"].iat[j]}
+        elif close < open_ and close_near_low:
+            latest = {"direction": "bearish", "reason": "bearish_shock", "shock_i": j, "shock_ts": data["ts"].iat[j]}
+    return latest
+
+
+def ema_state(
+    data: pd.DataFrame,
+    *,
+    entry_i: int,
+    config: DirectionLayerConfig | None = None,
+) -> dict:
+    """Return causal EMA alignment at the entry bar."""
+    cfg = config or DirectionLayerConfig()
+    if entry_i <= 0 or "close" not in data.columns or len(data) <= max(cfg.ema_fast, cfg.ema_slow):
+        return {"state": "unknown", "fast": np.nan, "slow": np.nan, "fast_slope": np.nan}
+    close = pd.to_numeric(data["close"], errors="coerce")
+    fast = close.ewm(span=cfg.ema_fast, adjust=False).mean()
+    slow = close.ewm(span=cfg.ema_slow, adjust=False).mean()
+    fast_now = float(fast.iat[entry_i])
+    slow_now = float(slow.iat[entry_i])
+    fast_prev = float(fast.iat[entry_i - 1])
+    fast_slope = fast_now - fast_prev
+    price = float(close.iat[entry_i])
+    if not all(np.isfinite(x) for x in [fast_now, slow_now, fast_slope, price]):
+        state = "unknown"
+    elif price < fast_now <= slow_now and fast_slope <= 0:
+        state = "bearish"
+    elif price > fast_now >= slow_now and fast_slope >= 0:
+        state = "bullish"
+    else:
+        state = "mixed"
+    return {"state": state, "fast": fast_now, "slow": slow_now, "fast_slope": fast_slope}
 
 
 def _utc(ts: pd.Timestamp) -> pd.Timestamp:

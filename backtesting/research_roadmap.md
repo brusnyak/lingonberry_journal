@@ -1,6 +1,6 @@
 # Multi-Asset Research Roadmap
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-13.
 
 ## Objective
 
@@ -41,6 +41,8 @@ Done or implemented:
 11. First target/risk layer for the crypto survivor branch: explicit target
     models, stale-retest filtering, duplicate-zone suppression, and sizing
     proxy.
+12. First shock-aware execution layer: causal large-displacement state,
+    half-target breakeven management, and optional EMA research variants.
 
 Still needed:
 
@@ -110,6 +112,9 @@ Known gaps:
   throttling and walk-forward validation before strategy promotion.
 - The first portfolio-throttled candidate survived, but live/funded deployment
   is still blocked by execution walk-forward and demo/paper validation.
+- EMA is implemented as an optional research feature, not a promoted direction
+  gate. The first EMA-inclusive run reduced sample size and did not beat the
+  structure-confirmed FVG top-retest bucket.
 
 ## Event Atlas
 
@@ -371,6 +376,53 @@ Holdout interpretation:
   late US + high volatility`.
 - Do not promote any other bucket yet.
 
+Shock/EMA execution checkpoint on 2026-07-13:
+
+- Scope: reviewed `11`-symbol crypto basket, Binance+Bybit, `15m`, `60d`.
+- Shock-aware execution rows with EMA off by default: `78,744`.
+- Exploratory EMA-inclusive rows: `89,640`.
+- Best practical shock-aware bucket:
+  - entry: `structure_confirmed_fvg_top_retest`;
+  - target: `fixed_1_5r`;
+  - management: `partial_1r_be_after_half_target`;
+  - events: `192`;
+  - symbols/exchanges: `11` symbols, Binance+Bybit;
+  - avg R: `+0.371`;
+  - median R: `+0.466`;
+  - PF: `2.99`;
+  - target rate: `27.6%`;
+  - stop rate: `13.0%`;
+  - expiry rate: `39.6%`.
+- Prior comparable bucket without half-target shock management:
+  - entry: `structure_confirmed_fvg_top_retest`;
+  - target: `fixed_1_5r`;
+  - management: `partial_1r_be`;
+  - events: `192`;
+  - avg R: `+0.358`;
+  - PF: `2.56`;
+  - stop rate: `17.7%`.
+- Portfolio proxy for the new bucket with `max_open_trades=6`,
+  `max_open_per_symbol=1`, daily loss cap `0.50%`:
+  - `0.20%` risk/trade: `101` accepted, `+7.51%` return, `0.90%` max DD,
+    return/DD `8.33`, PF `2.82`;
+  - `0.25%` risk/trade: `97` accepted, `+9.21%` return, `1.13%` max DD,
+    return/DD `8.17`, PF `2.85`.
+- EMA verdict:
+  - structure-confirmed top-retest weighted avg R: `+0.326`;
+  - EMA+structure-confirmed top-retest weighted avg R: `+0.262`;
+  - EMA remains optional behind `--include-ema-confirmed`.
+
+Shock/EMA interpretation:
+
+- The manual UI review was correct: violent movement must change market state.
+- The stop model was not the main bug; entry state and management were.
+- Shock-aware management improves risk quality more than EMA improves direction.
+- The current promoted research bucket is shock-aware
+  `structure_confirmed_fvg_top_retest + fixed_1_5r +
+  partial_1r_be_after_half_target`.
+- This is still not deployable until shock-aware discovery/holdout and UI sample
+  review pass.
+
 Execution-path review:
 
 - The survivor is not a clean `2R` target strategy.
@@ -500,13 +552,12 @@ Do not code another strategy yet.
 
 Next concrete work:
 
-1. Add walk-forward symbol filtering to the CE/top retest execution model.
-2. Generate UI review samples for CE/top retest winners and losers.
-3. Promote to paper strategy only if CE/top retest survives symbol filtering
-   and realistic expiry assumptions.
-4. Add trade-frequency, overlap/correlation, and drawdown controls before
+1. Run shock-aware discovery/holdout for the promoted top-retest bucket.
+2. Add walk-forward symbol filtering to the shock-aware execution model.
+3. Generate UI review samples for accepted winners, accepted losers,
+   stale-continuation entries, and bullish-shock rejections.
+4. Promote to paper only if shock-aware top-retest survives symbol filtering and
+   realistic expiry assumptions.
+5. Add trade-frequency, overlap/correlation, and drawdown controls before
    judging returns.
-3. Add multi-asset refresh for FX/metals/indices before comparing asset classes.
-4. Reject event families that stay negative after basic context splits.
-5. Promote only buckets that survive cross-symbol, cross-exchange, and rolling
-   window checks.
+6. Add multi-asset refresh for FX/metals/indices before comparing asset classes.
