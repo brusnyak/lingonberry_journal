@@ -12,6 +12,7 @@ from backtesting.crypto.mtf_cascade_direction import (
     null_test_real_sltp,
     rolling_stability,
     rolling_stability_real_sltp,
+    sl_tp_geometry,
     structural_stop_target,
     structure_ema_direction,
     sweep_preceded,
@@ -178,3 +179,21 @@ def test_require_sweep_filters_to_disjoint_subsets():
     baseline = evaluate_real_sltp_series(ohlcv30.reset_index(drop=True), structure, combo)
     # the two filtered subsets should partition the baseline (no overlap, no gain)
     assert with_sweep["n"] + without_sweep["n"] == baseline["n"]
+
+
+def test_sl_tp_geometry_returns_one_row_per_entry_with_expected_columns():
+    ohlcv30 = make_staircase_series("up", bars=30000, tf_minutes=30, seed=11)
+    ohlcv240 = _resample(ohlcv30, 240)
+    dir_global = structure_ema_direction(ohlcv240)
+    dir_local = structure_ema_direction(ohlcv30)
+    g = asof_direction(ohlcv30["ts"], dir_global)
+    l = dir_local["direction"].to_numpy()
+    combo = np.where((g == l) & (g != "neutral"), g, "neutral")
+    from backtesting.features.structure import StructureConfig, build_structure_index
+    structure = build_structure_index(ohlcv30.reset_index(drop=True), StructureConfig(left=2, right=2))
+
+    geo = sl_tp_geometry(ohlcv30.reset_index(drop=True), structure, combo)
+    assert not geo.empty
+    assert {"stop_pct", "target_pct", "planned_rr", "stop_atr_mult"}.issubset(geo.columns)
+    assert (geo["stop_pct"] > 0).all()
+    assert (geo["planned_rr"] >= 1.49).all()  # min_rr floor is 1.5, small float slack

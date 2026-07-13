@@ -435,6 +435,36 @@ def evaluate_real_sltp_series(
     }
 
 
+def sl_tp_geometry(bars: pd.DataFrame, structure: pd.DataFrame, combo: np.ndarray, min_rr: float = 1.5, atr_period: int = 14) -> pd.DataFrame:
+    """Per-entry stop distance, target distance, and planned R:R -- as % of
+    price and as ATR multiples. CLEAN.md Phase 25: does BTC/DOGE's swing
+    geometry differ systematically from the pairs that clear the null test,
+    explaining the SL/TP-level gap now that direction itself is ruled out
+    (Phase 24: BTC/ETH direction calls agree 99.6% of the time)."""
+    combo_s = pd.Series(combo)
+    changed = combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"])
+    atr = _atr(bars, atr_period)
+    rows = []
+    for i in np.where(changed.to_numpy())[0]:
+        if i >= len(bars) - 1:
+            continue
+        direction = "long" if combo_s.iat[i] == "bull" else "short"
+        entry = float(bars["close"].iat[i])
+        sl, tp = structural_stop_target(structure.iloc[i], direction, entry, min_rr)
+        if not np.isfinite(sl):
+            continue
+        a = atr.iat[i] if i < len(atr) else np.nan
+        stop_dist = abs(entry - sl)
+        target_dist = abs(tp - entry)
+        rows.append({
+            "stop_pct": stop_dist / entry * 100,
+            "target_pct": target_dist / entry * 100,
+            "planned_rr": target_dist / stop_dist if stop_dist > 0 else np.nan,
+            "stop_atr_mult": stop_dist / a if a and a > 0 else np.nan,
+        })
+    return pd.DataFrame(rows)
+
+
 def null_test_real_sltp(
     bars: pd.DataFrame,
     structure: pd.DataFrame,
@@ -520,7 +550,7 @@ def build_full_cascade_series(symbol: str, config: CascadeConfig | None = None) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Configurable structure/direction cascade lab -- one tool, not a new script per question.")
-    parser.add_argument("--mode", required=True, choices=["direction-accuracy", "real-sltp", "null-test", "rolling-stability", "rolling-stability-sltp"])
+    parser.add_argument("--mode", required=True, choices=["direction-accuracy", "real-sltp", "null-test", "rolling-stability", "rolling-stability-sltp", "sl-tp-geometry"])
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--stage", default="plus_mini", choices=["global_local", "plus_mini"], help="Which cascade stage to evaluate (real-sltp/null-test modes).")
     parser.add_argument("--days", type=int, default=400)
@@ -569,6 +599,23 @@ def main() -> int:
                 continue
             result = null_test_real_sltp(bars, structure, combo, min_rr=args.min_rr, horizon=args.horizon, n_seeds=args.seeds)
             rows.append({"symbol": symbol, "stage": args.stage, **result})
+
+    elif args.mode == "sl-tp-geometry":
+        builder = build_global_local_series if args.stage == "global_local" else build_full_cascade_series
+        for symbol in symbols:
+            bars, structure, combo = builder(symbol, cfg)
+            if bars.empty:
+                continue
+            geo = sl_tp_geometry(bars, structure, combo, args.min_rr)
+            if geo.empty:
+                continue
+            rows.append({
+                "symbol": symbol, "stage": args.stage, "n": len(geo),
+                "median_stop_pct": geo["stop_pct"].median(),
+                "median_target_pct": geo["target_pct"].median(),
+                "median_planned_rr": geo["planned_rr"].median(),
+                "median_stop_atr_mult": geo["stop_atr_mult"].median(),
+            })
 
     elif args.mode in ("rolling-stability", "rolling-stability-sltp"):
         window_frames = []
