@@ -24,6 +24,34 @@ DEFAULT_INPUT = Path("backtesting/results/crypto_structure_regime_journal_reinde
 DEFAULT_OUTPUT_DIR = Path("backtesting/results/crypto_foundation_trade_forensics")
 DEFAULT_REVIEW_LABELS = Path("webapp/review_labels.json")
 
+BASE_VALIDATION_RULES = [
+    "strict_candidates",
+    "ny_13_range_reversal",
+    "late_us_fade",
+    "london_trend_aligned",
+]
+
+DIRECTION_VALIDATION_RULES = [
+    "strict_vwap_agrees",
+    "strict_ema_stack_confirmed",
+    "strict_late_us_vwap_agrees",
+    "strict_late_us_no_weak_ema",
+    "late_us_fade_vwap_agrees",
+    "strict_direction_quality",
+]
+
+VALIDATION_RULES = BASE_VALIDATION_RULES + DIRECTION_VALIDATION_RULES
+
+REPORT_RULES = [
+    "strict_candidates",
+    "strict_late_us_no_weak_ema",
+    "strict_late_us_vwap_agrees",
+    "strict_ema_stack_confirmed",
+    "strict_vwap_agrees",
+    "strict_direction_quality",
+    "late_us_fade",
+]
+
 
 @dataclass(frozen=True)
 class ForensicsRunConfig:
@@ -312,12 +340,33 @@ def rule_masks(events: pd.DataFrame) -> dict[str, pd.Series]:
     if events.empty:
         return {"all_physical_fixed2_hold": pd.Series(dtype=bool)}
     ema_state = events["ema_21_55_state"] if "ema_21_55_state" in events else pd.Series("", index=events.index)
+    ema_stack = _ema_stack_series(events)
+    confirmed_ema_stack = ema_stack.isin([
+        "bearish/bearish/mixed",
+        "mixed/bullish/bullish",
+        "bullish/bullish/bullish",
+    ])
+    weak_ema_stack = ema_stack == "bullish/bullish/mixed"
     rsi = pd.to_numeric(events["rsi_14"], errors="coerce") if "rsi_14" in events else pd.Series(np.nan, index=events.index)
     compression = events["compression_state"] if "compression_state" in events else pd.Series("", index=events.index)
     shock_alignment = events["shock_alignment"] if "shock_alignment" in events else pd.Series("", index=events.index)
+    vwap_agreement = (
+        events["vwap_direction_agreement"]
+        if "vwap_direction_agreement" in events
+        else events.apply(_vwap_direction_agreement, axis=1)
+    )
+    strict = events.apply(is_strict_candidate, axis=1)
+    late_us = events["setup_name"].astype(str) == "late_us_short_bull_flush_ce"
+    late_us_fade = late_us & events["mtf_mode"].isin(["countertrend", "range_or_transition"])
     return {
         "all_physical_fixed2_hold": pd.Series(True, index=events.index),
-        "strict_candidates": events.apply(is_strict_candidate, axis=1),
+        "strict_candidates": strict,
+        "strict_vwap_agrees": strict & (vwap_agreement == "agrees"),
+        "strict_ema_stack_confirmed": strict & confirmed_ema_stack,
+        "strict_late_us_vwap_agrees": strict & (~late_us | (vwap_agreement == "agrees")),
+        "strict_late_us_no_weak_ema": strict & (~late_us | ~weak_ema_stack),
+        "late_us_fade_vwap_agrees": late_us_fade & (vwap_agreement == "agrees"),
+        "strict_direction_quality": strict & (vwap_agreement == "agrees") & confirmed_ema_stack,
         "london_trend_aligned": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
         & (events["mtf_mode"] == "trend_aligned"),
         "london_trend_ema_bullish": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
@@ -333,11 +382,8 @@ def rule_masks(events: pd.DataFrame) -> dict[str, pd.Series]:
         & (events["entry_hour_utc"].astype(int) == 13)
         & (events["mtf_mode"] == "range_or_transition")
         & ((compression == "expanded") | (shock_alignment == "opposing_shock")),
-        "late_us_fade": (events["setup_name"] == "late_us_short_bull_flush_ce")
-        & (events["mtf_mode"].isin(["countertrend", "range_or_transition"])),
-        "late_us_fade_no_aligned_shock": (events["setup_name"] == "late_us_short_bull_flush_ce")
-        & (events["mtf_mode"].isin(["countertrend", "range_or_transition"]))
-        & (shock_alignment != "aligned_shock"),
+        "late_us_fade": late_us_fade,
+        "late_us_fade_no_aligned_shock": late_us_fade & (shock_alignment != "aligned_shock"),
     }
 
 
@@ -360,13 +406,7 @@ def evaluate_stress_matrix(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.
         ("punitive_40bps", 20.0, 10.0),
         ("nightmare_60bps", 30.0, 15.0),
     ]
-    keep_rules = {
-        "all_physical_fixed2_hold",
-        "strict_candidates",
-        "ny_13_range_reversal",
-        "late_us_fade",
-        "london_trend_aligned",
-    }
+    keep_rules = {"all_physical_fixed2_hold", *VALIDATION_RULES}
     risk_cfg = PortfolioRiskConfig(
         risk_per_trade_pct=cfg.risk_per_trade_pct,
         max_open_trades=cfg.max_open_trades,
@@ -431,7 +471,7 @@ def evaluate_extreme_config_matrix(events: pd.DataFrame, cfg: ForensicsRunConfig
         ("punitive_40bps", 20.0, 10.0),
         ("nightmare_60bps", 30.0, 15.0),
     ]
-    keep_rules = ["strict_candidates", "ny_13_range_reversal", "late_us_fade", "london_trend_aligned"]
+    keep_rules = VALIDATION_RULES
     rows: list[dict] = []
     for window, subset in windows:
         specs = rule_masks(subset)
@@ -483,7 +523,7 @@ def evaluate_rolling_validation(events: pd.DataFrame, cfg: ForensicsRunConfig) -
     if data.empty:
         return pd.DataFrame()
 
-    rules = ["strict_candidates", "ny_13_range_reversal", "late_us_fade", "london_trend_aligned"]
+    rules = VALIDATION_RULES
     scenarios = [
         ("baseline", 0.0, 0.0),
         ("high_22bps", 12.0, 5.0),
@@ -1513,6 +1553,8 @@ def _write_report(
         "- Frequency expansion rejects broad non-strict additions when they improve count but break punitive-cost expectancy.",
         "- Direction audit keeps legacy stops fixed and tests whether structure, EMA, VWAP, shock, and compression explain direction quality.",
         "- Legacy stop construction is intentionally unchanged; direction research treats stop quality as a dependent metric, not a tuning knob.",
+        "- Current direction-gate candidate: `strict_late_us_no_weak_ema`; it improves weak-window behavior without starving frequency as badly as pure VWAP agreement.",
+        "- Pure VWAP agreement is cleaner but too sparse for the main engine; keep it as a review/research slice until more setup families exist.",
         "- Concentration is measured on strict candidates with conservative risk under punitive costs.",
         "",
     ]
@@ -1523,8 +1565,9 @@ def _stress_report_slice(stress: pd.DataFrame) -> pd.DataFrame:
     if stress.empty:
         return stress
     keep = stress[
-        (stress["window"].isin(["60d", "first30d", "30d"]))
-        & (stress["rule"].isin(["strict_candidates", "ny_13_range_reversal", "late_us_fade", "london_trend_aligned"]))
+        (stress["window"].isin(["60d", "30d"]))
+        & (stress["rule"].isin(REPORT_RULES))
+        & (stress["scenario"].isin(["baseline", "punitive_40bps", "nightmare_60bps"]))
     ].copy()
     cols = [
         "window",
@@ -1546,10 +1589,10 @@ def _extreme_report_slice(extreme: pd.DataFrame) -> pd.DataFrame:
     if extreme.empty:
         return extreme
     keep = extreme[
-        (extreme["window"].isin(["60d", "first30d", "30d"]))
-        & (extreme["rule"].isin(["strict_candidates", "ny_13_range_reversal", "late_us_fade"]))
+        (extreme["window"].isin(["60d", "30d"]))
+        & (extreme["rule"].isin(REPORT_RULES))
         & (extreme["scenario"].isin(["baseline", "punitive_40bps", "nightmare_60bps"]))
-        & (extreme["config"].isin(["micro_risk_tight", "base", "aggressive", "prop_strict"]))
+        & (extreme["config"].isin(["conservative", "base", "prop_strict"]))
     ].copy()
     cols = [
         "window",
@@ -1574,9 +1617,10 @@ def _rolling_report_slice(rolling_summary: pd.DataFrame) -> pd.DataFrame:
     if rolling_summary.empty:
         return rolling_summary
     keep = rolling_summary[
-        (rolling_summary["rule"].isin(["strict_candidates", "ny_13_range_reversal", "late_us_fade"]))
+        (rolling_summary["window_days"].isin([30, 45]))
+        & (rolling_summary["rule"].isin(REPORT_RULES))
         & (rolling_summary["scenario"].isin(["baseline", "punitive_40bps", "nightmare_60bps"]))
-        & (rolling_summary["config"].isin(["micro_risk_tight", "conservative", "base", "prop_strict"]))
+        & (rolling_summary["config"].isin(["conservative", "base"]))
     ].copy()
     cols = [
         "window_days",

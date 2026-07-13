@@ -17,6 +17,7 @@ from backtesting.crypto.foundation_trade_forensics import (
     is_strict_candidate,
     profit_factor,
     rsi_bucket,
+    rule_masks,
     select_concrete_execution,
     session_vwap_snapshot,
     volume_bucket,
@@ -67,6 +68,30 @@ def test_strict_candidate_accepts_separate_setup_families():
         "mtf_mode": "pullback_in_uptrend",
         "entry_hour_utc": 9,
     })
+
+
+def test_rule_masks_include_direction_only_filters():
+    events = pd.DataFrame({
+        "setup_name": ["late_us_short_bull_flush_ce", "late_us_short_bull_flush_ce", "ny_long_neutral_reversal_ce"],
+        "mtf_mode": ["countertrend", "countertrend", "range_or_transition"],
+        "entry_hour_utc": [22, 22, 13],
+        "vwap_direction_agreement": ["agrees", "opposes", "agrees"],
+        "global_ema_state": ["bearish", "bullish", "bullish"],
+        "middle_ema_state": ["bearish", "bullish", "bullish"],
+        "local_ema_state": ["mixed", "mixed", "bullish"],
+        "ema_21_55_state": ["bearish", "mixed", "bullish"],
+        "rsi_14": [50.0, 50.0, 50.0],
+        "compression_state": ["normal", "normal", "normal"],
+        "shock_alignment": ["no_shock", "no_shock", "no_shock"],
+    })
+
+    masks = rule_masks(events)
+
+    assert masks["strict_candidates"].sum() == 3
+    assert masks["strict_vwap_agrees"].sum() == 2
+    assert masks["late_us_fade_vwap_agrees"].sum() == 1
+    assert masks["strict_late_us_vwap_agrees"].sum() == 2
+    assert masks["strict_late_us_no_weak_ema"].sum() == 2
 
 
 def test_indicator_buckets_are_stable():
