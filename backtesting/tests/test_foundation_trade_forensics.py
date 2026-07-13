@@ -4,6 +4,8 @@ import pandas as pd
 
 from backtesting.crypto.foundation_trade_forensics import (
     apply_cost_stress,
+    evaluate_extreme_config_matrix,
+    ForensicsRunConfig,
     is_strict_candidate,
     profit_factor,
     rsi_bucket,
@@ -80,3 +82,26 @@ def test_apply_cost_stress_converts_bps_to_r_units():
 
     assert stressed.iloc[0]["extra_cost_r"] == 0.2
     assert stressed.iloc[0]["net_r"] == 1.3
+
+
+def test_extreme_config_matrix_includes_portfolio_variants():
+    ts = pd.date_range("2026-01-01", periods=4, freq="1h", tz="UTC")
+    events = pd.DataFrame({
+        "exchange": ["binance"] * 4,
+        "symbol": ["BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT"],
+        "entry_ts": ts,
+        "exit_ts": ts + pd.Timedelta(hours=1),
+        "bars_to_exit": [4, 4, 4, 4],
+        "entry": [100.0, 100.0, 100.0, 100.0],
+        "risk_price": [1.0, 1.0, 1.0, 1.0],
+        "net_r": [1.0, -0.5, 1.5, -1.0],
+        "setup_name": ["ny_long_neutral_reversal_ce"] * 4,
+        "mtf_mode": ["range_or_transition"] * 4,
+        "entry_hour_utc": [13, 13, 13, 13],
+        "shock_alignment": ["no_shock"] * 4,
+    })
+
+    matrix = evaluate_extreme_config_matrix(events, ForensicsRunConfig())
+
+    assert {"base", "aggressive", "micro_risk_tight"}.issubset(set(matrix["config"]))
+    assert {"baseline", "punitive_40bps", "nightmare_60bps"}.issubset(set(matrix["scenario"]))

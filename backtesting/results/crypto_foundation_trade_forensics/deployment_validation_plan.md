@@ -12,6 +12,7 @@ Status: research candidate only. Not deployment-ready.
 - Structure context: `15m / 60m / 240m`.
 - Concrete execution currently tested: `fixed_2r` + `hold_target_expiry`.
 - Risk model in research report: `0.20%` per trade, max `6` open trades, max `1` open per symbol, `0.50%` daily loss cap.
+- Best current stress-test candidate: `prop_strict` at `0.25%` risk, max `4` open, max `1` per symbol, `0.40%` daily loss cap.
 
 ## Deployment-Ready Definition
 
@@ -42,6 +43,7 @@ A strategy is deployment-ready only after it passes all gates below. Good aggreg
 | Physical de-duplication | Pass | `foundation_trade_forensics` collapses physical entries. |
 | Walk-forward | Fail / incomplete | First 30d is weak; recent 30d is strong. Need rolling validation. |
 | Friction stress | Partial pass | 60d strict survives `40bps`, but first30d strict fails `40bps`. |
+| Extreme config stress | Partial pass | `prop_strict` survives recent 30d and 60d stress best, but first30d still fails punitive/nightmare. |
 | Worst-window control | Unknown | Need rolling windows beyond first/recent split. |
 | Daily loss | Partial | Research daily loss cap simulated, but not live fill based. |
 | Concentration | Unknown | Needs contribution report after walk-forward. |
@@ -55,6 +57,8 @@ A strategy is deployment-ready only after it passes all gates below. Good aggreg
 Do not deploy yet.
 
 The current strict crypto basket is good enough to continue. It is not stable enough yet because early 30d performance is weak and fails punitive friction. The right next work is rolling walk-forward and regime conditioning, not adding another indicator gate.
+
+Changing risk and concurrency does not solve the weak-window problem. It only changes how much capital we lose or gain while the same signal regime works or fails.
 
 ## Next Required Work
 

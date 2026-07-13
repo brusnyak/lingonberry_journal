@@ -290,3 +290,50 @@ Blunt interpretation:
   modules, but sample size is still small.
 - Late-US fade is useful but cost-sensitive; it dies around nightmare friction.
 - Next required validation is walk-forward / holdout, not more indicator gates.
+
+## 2026-07-13 Extreme Config Stress Update
+
+Added `foundation_extreme_config_matrix.csv` to test whether risk, concurrency,
+daily lockout, and worse fees/slippage change the conclusion.
+
+Configs tested:
+
+- `micro_risk_tight`: `0.10%` risk, max `3` open, max `1` per symbol, `0.25%`
+  daily loss cap.
+- `base`: `0.20%` risk, max `6` open, max `1` per symbol, `0.50%` daily loss
+  cap.
+- `conservative`: `0.15%` risk, max `4` open, max `1` per symbol, `0.35%`
+  daily loss cap.
+- `loose_concurrency`: `0.20%` risk, max `10` open, max `2` per symbol,
+  `0.75%` daily loss cap.
+- `aggressive`: `0.30%` risk, max `8` open, max `2` per symbol, `1.00%` daily
+  loss cap.
+- `prop_strict`: `0.25%` risk, max `4` open, max `1` per symbol, `0.40%` daily
+  loss cap.
+
+Strict candidate results:
+
+| Window | Scenario | Best practical config | Return | Max DD | PF | Win Rate |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 60d | baseline | `prop_strict` | +14.39% | 0.95% | 3.38 | 68.0% |
+| 60d | punitive 40 bps | `prop_strict` | +5.82% | 1.32% | 1.71 | 61.9% |
+| 60d | nightmare 60 bps | `prop_strict` | +2.23% | 1.71% | 1.24 | 53.7% |
+| first 30d | baseline | `base` | +1.08% | 0.64% | 1.60 | 53.8% |
+| first 30d | punitive 40 bps | `prop_strict` | -0.14% | 1.28% | 0.95 | 48.0% |
+| first 30d | nightmare 60 bps | `prop_strict` | -0.72% | 1.65% | 0.79 | 50.0% |
+| recent 30d | baseline | `prop_strict` | +12.87% | 0.95% | 4.39 | 73.0% |
+| recent 30d | punitive 40 bps | `prop_strict` | +5.71% | 1.32% | 2.08 | 66.7% |
+| recent 30d | nightmare 60 bps | `prop_strict` | +2.63% | 1.67% | 1.43 | 53.5% |
+
+Blunt interpretation:
+
+- Portfolio settings do not fix weak signal regimes. First 30d still fails
+  punitive and nightmare friction under every tested config.
+- Recent 30d survives all stress scenarios. This is promising, but it is also
+  exactly why we should not trust one aggregate result.
+- `aggressive` gives bigger headline return but is not the right deployment
+  candidate; it pushes drawdown too high when friction gets ugly.
+- `prop_strict` is the best research compromise: stronger recent returns than
+  `base`, controlled concurrency, and better stress survival.
+- Next useful work is rolling walk-forward plus regime gating. More random
+  indicators before that is noise.

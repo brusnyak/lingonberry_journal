@@ -51,6 +51,7 @@ def run_foundation_trade_forensics(
     events = enrich_events(concrete, cfg)
     rules = evaluate_windowed_rules(events, cfg)
     stress = evaluate_stress_matrix(events, cfg)
+    extreme = evaluate_extreme_config_matrix(events, cfg)
     by_symbol = summarize_by_symbol(events)
     by_setup = summarize(events, ["setup_name", "mtf_mode"])
     management = compare_management_variants(journal)
@@ -59,14 +60,16 @@ def run_foundation_trade_forensics(
     events.to_csv(output_dir / "foundation_physical_trade_journal.csv", index=False)
     rules.to_csv(output_dir / "foundation_rule_matrix.csv", index=False)
     stress.to_csv(output_dir / "foundation_stress_matrix.csv", index=False)
+    extreme.to_csv(output_dir / "foundation_extreme_config_matrix.csv", index=False)
     by_symbol.to_csv(output_dir / "foundation_frequency_by_symbol.csv", index=False)
     by_setup.to_csv(output_dir / "foundation_summary_by_setup.csv", index=False)
     management.to_csv(output_dir / "foundation_management_comparison.csv", index=False)
-    _write_report(events, rules, stress, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
+    _write_report(events, rules, stress, extreme, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
     return {
         "events": events,
         "rules": rules,
         "stress": stress,
+        "extreme": extreme,
         "by_symbol": by_symbol,
         "by_setup": by_setup,
         "management": management,
@@ -237,6 +240,10 @@ def evaluate_rules(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFram
 def rule_masks(events: pd.DataFrame) -> dict[str, pd.Series]:
     if events.empty:
         return {"all_physical_fixed2_hold": pd.Series(dtype=bool)}
+    ema_state = events["ema_21_55_state"] if "ema_21_55_state" in events else pd.Series("", index=events.index)
+    rsi = pd.to_numeric(events["rsi_14"], errors="coerce") if "rsi_14" in events else pd.Series(np.nan, index=events.index)
+    compression = events["compression_state"] if "compression_state" in events else pd.Series("", index=events.index)
+    shock_alignment = events["shock_alignment"] if "shock_alignment" in events else pd.Series("", index=events.index)
     return {
         "all_physical_fixed2_hold": pd.Series(True, index=events.index),
         "strict_candidates": events.apply(is_strict_candidate, axis=1),
@@ -244,22 +251,22 @@ def rule_masks(events: pd.DataFrame) -> dict[str, pd.Series]:
         & (events["mtf_mode"] == "trend_aligned"),
         "london_trend_ema_bullish": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
         & (events["mtf_mode"] == "trend_aligned")
-        & (events["ema_21_55_state"] == "bullish"),
+        & (ema_state == "bullish"),
         "london_trend_rsi_not_overbought": events["setup_name"].astype(str).str.contains("london_long_middle_local", na=False)
         & (events["mtf_mode"] == "trend_aligned")
-        & (pd.to_numeric(events["rsi_14"], errors="coerce") <= 70),
+        & (rsi <= 70),
         "ny_13_range_reversal": (events["setup_name"] == "ny_long_neutral_reversal_ce")
         & (events["entry_hour_utc"].astype(int) == 13)
         & (events["mtf_mode"] == "range_or_transition"),
         "ny_13_expanded_or_opposing": (events["setup_name"] == "ny_long_neutral_reversal_ce")
         & (events["entry_hour_utc"].astype(int) == 13)
         & (events["mtf_mode"] == "range_or_transition")
-        & ((events["compression_state"] == "expanded") | (events["shock_alignment"] == "opposing_shock")),
+        & ((compression == "expanded") | (shock_alignment == "opposing_shock")),
         "late_us_fade": (events["setup_name"] == "late_us_short_bull_flush_ce")
         & (events["mtf_mode"].isin(["countertrend", "range_or_transition"])),
         "late_us_fade_no_aligned_shock": (events["setup_name"] == "late_us_short_bull_flush_ce")
         & (events["mtf_mode"].isin(["countertrend", "range_or_transition"]))
-        & (events["shock_alignment"] != "aligned_shock"),
+        & (shock_alignment != "aligned_shock"),
     }
 
 
@@ -324,6 +331,75 @@ def evaluate_stress_matrix(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.
                     **portfolio,
                 })
     return pd.DataFrame(rows).sort_values(["window", "rule", "fee_round_trip_bps", "slippage_side_bps"]).reset_index(drop=True)
+
+
+def evaluate_extreme_config_matrix(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame:
+    """Stress portfolio mechanics while keeping signal rules fixed."""
+    if events.empty:
+        return pd.DataFrame()
+    data = events.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True, errors="coerce")
+    min_ts = data["entry_ts"].min()
+    max_ts = data["entry_ts"].max()
+    windows = [
+        ("60d", data),
+        ("first30d", data[data["entry_ts"] < min_ts + pd.Timedelta(days=30)].copy()),
+        ("30d", data[data["entry_ts"] >= max_ts - pd.Timedelta(days=30)].copy()),
+    ]
+    config_specs = [
+        ("micro_risk_tight", 0.001, 3, 1, 0.0025),
+        ("base", cfg.risk_per_trade_pct, cfg.max_open_trades, cfg.max_open_per_symbol, cfg.daily_loss_limit_pct),
+        ("conservative", 0.0015, 4, 1, 0.0035),
+        ("loose_concurrency", 0.002, 10, 2, 0.0075),
+        ("aggressive", 0.003, 8, 2, 0.0100),
+        ("prop_strict", 0.0025, 4, 1, 0.0040),
+    ]
+    scenario_specs = [
+        ("baseline", 0.0, 0.0),
+        ("high_22bps", 12.0, 5.0),
+        ("punitive_40bps", 20.0, 10.0),
+        ("nightmare_60bps", 30.0, 15.0),
+    ]
+    keep_rules = ["strict_candidates", "ny_13_range_reversal", "late_us_fade", "london_trend_aligned"]
+    rows: list[dict] = []
+    for window, subset in windows:
+        specs = rule_masks(subset)
+        for rule in keep_rules:
+            mask = specs.get(rule, pd.Series(False, index=subset.index))
+            selected = subset[mask.fillna(False)].copy()
+            for scenario, fee_round_trip_bps, slippage_side_bps in scenario_specs:
+                stressed = apply_cost_stress(
+                    selected,
+                    fee_round_trip_bps=fee_round_trip_bps,
+                    slippage_side_bps=slippage_side_bps,
+                )
+                for config_name, risk_pct, max_open, max_per_symbol, daily_limit in config_specs:
+                    risk_cfg = PortfolioRiskConfig(
+                        risk_per_trade_pct=risk_pct,
+                        max_open_trades=max_open,
+                        max_open_per_symbol=max_per_symbol,
+                        daily_loss_limit_pct=daily_limit,
+                        tf_minutes=15,
+                    )
+                    accepted, portfolio = simulate_portfolio(stressed, risk_cfg)
+                    rows.append({
+                        "window": window,
+                        "rule": rule,
+                        "scenario": scenario,
+                        "config": config_name,
+                        "risk_per_trade_pct": risk_pct,
+                        "max_open_trades": max_open,
+                        "max_open_per_symbol": max_per_symbol,
+                        "daily_loss_limit_pct": daily_limit,
+                        "candidates": int(len(stressed)),
+                        "accepted": int(len(accepted)),
+                        "median_extra_cost_r": _median(stressed, "extra_cost_r"),
+                        "events_per_day": float(len(stressed) / _span_days(subset["entry_ts"])) if len(subset) else 0.0,
+                        **portfolio,
+                    })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["window", "rule", "scenario", "config"]).reset_index(drop=True)
 
 
 def apply_cost_stress(
@@ -565,6 +641,7 @@ def _write_report(
     events: pd.DataFrame,
     rules: pd.DataFrame,
     stress: pd.DataFrame,
+    extreme: pd.DataFrame,
     by_symbol: pd.DataFrame,
     by_setup: pd.DataFrame,
     management: pd.DataFrame,
@@ -590,6 +667,9 @@ def _write_report(
         "## Cost And Slippage Stress",
         *_markdown_table(_format_report_table(_stress_report_slice(stress))),
         "",
+        "## Extreme Configuration Matrix",
+        *_markdown_table(_format_report_table(_extreme_report_slice(extreme))),
+        "",
         "## Frequency By Symbol",
         *_markdown_table(_format_report_table(by_symbol.head(20))),
         "",
@@ -605,6 +685,7 @@ def _write_report(
         "- EMA helps only if the rule matrix improves return/DD without starving trades; otherwise it is descriptive, not a gate.",
         "- Post-target continuation is measured because fixed 2R may be too short for clean London/NY winners.",
         "- Stress scenarios convert extra bps into R, so tight-stop trades are penalized harder.",
+        "- Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -626,6 +707,34 @@ def _stress_report_slice(stress: pd.DataFrame) -> pd.DataFrame:
         "median_extra_cost_r",
         "gross_return_pct",
         "max_dd_pct",
+        "profit_factor",
+        "win_rate",
+        "return_to_dd",
+    ]
+    return keep[cols]
+
+
+def _extreme_report_slice(extreme: pd.DataFrame) -> pd.DataFrame:
+    if extreme.empty:
+        return extreme
+    keep = extreme[
+        (extreme["window"].isin(["60d", "first30d", "30d"]))
+        & (extreme["rule"].isin(["strict_candidates", "ny_13_range_reversal", "late_us_fade"]))
+        & (extreme["scenario"].isin(["baseline", "punitive_40bps", "nightmare_60bps"]))
+        & (extreme["config"].isin(["micro_risk_tight", "base", "aggressive", "prop_strict"]))
+    ].copy()
+    cols = [
+        "window",
+        "rule",
+        "scenario",
+        "config",
+        "risk_per_trade_pct",
+        "max_open_trades",
+        "daily_loss_limit_pct",
+        "accepted",
+        "gross_return_pct",
+        "max_dd_pct",
+        "daily_max_dd_pct",
         "profit_factor",
         "win_rate",
         "return_to_dd",

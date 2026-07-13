@@ -98,6 +98,118 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | first30d | strict_candidates | punitive_40bps | 26 | 26 | 0.192 | -0.004 | 0.013 | 0.847 | 0.462 | -0.310 |
 | first30d | strict_candidates | nightmare_60bps | 26 | 25 | 0.288 | -0.008 | 0.016 | 0.715 | 0.480 | -0.504 |
 
+## Extreme Configuration Matrix
+| window | rule | scenario | config | risk_per_trade_pct | max_open_trades | daily_loss_limit_pct | accepted | gross_return_pct | max_dd_pct | daily_max_dd_pct | profit_factor | win_rate | return_to_dd |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 30d | late_us_fade | baseline | aggressive | 0.003 | 8 | 0.010 | 53 | 0.082 | 0.013 | 0.011 | 2.782 | 0.642 | 6.431 |
+| 30d | late_us_fade | baseline | base | 0.002 | 6 | 0.005 | 53 | 0.055 | 0.009 | 0.008 | 2.782 | 0.642 | 6.431 |
+| 30d | late_us_fade | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 37 | 0.018 | 0.004 | 0.004 | 2.555 | 0.622 | 4.182 |
+| 30d | late_us_fade | baseline | prop_strict | 0.003 | 4 | 0.004 | 42 | 0.059 | 0.011 | 0.009 | 3.059 | 0.667 | 5.528 |
+| 30d | late_us_fade | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 52 | -0.001 | 0.036 | 0.026 | 0.985 | 0.519 | -0.032 |
+| 30d | late_us_fade | nightmare_60bps | base | 0.002 | 6 | 0.005 | 50 | -0.000 | 0.023 | 0.017 | 0.993 | 0.520 | -0.014 |
+| 30d | late_us_fade | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 36 | -0.002 | 0.011 | 0.011 | 0.907 | 0.528 | -0.165 |
+| 30d | late_us_fade | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 40 | 0.006 | 0.021 | 0.021 | 1.136 | 0.550 | 0.292 |
+| 30d | late_us_fade | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 52 | 0.028 | 0.020 | 0.019 | 1.437 | 0.635 | 1.357 |
+| 30d | late_us_fade | punitive_40bps | base | 0.002 | 6 | 0.005 | 52 | 0.019 | 0.014 | 0.013 | 1.437 | 0.635 | 1.357 |
+| 30d | late_us_fade | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 36 | 0.005 | 0.008 | 0.008 | 1.325 | 0.611 | 0.663 |
+| 30d | late_us_fade | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 41 | 0.024 | 0.017 | 0.017 | 1.637 | 0.659 | 1.432 |
+| 30d | ny_13_range_reversal | baseline | aggressive | 0.003 | 8 | 0.010 | 20 | 0.063 | 0.004 | 0.001 | 11.780 | 0.800 | 15.181 |
+| 30d | ny_13_range_reversal | baseline | base | 0.002 | 6 | 0.005 | 20 | 0.042 | 0.003 | 0.001 | 11.780 | 0.800 | 15.181 |
+| 30d | ny_13_range_reversal | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 17 | 0.020 | 0.000 | 0.000 | 23.556 | 0.824 | 59.566 |
+| 30d | ny_13_range_reversal | baseline | prop_strict | 0.003 | 4 | 0.004 | 19 | 0.048 | 0.003 | 0.001 | 10.781 | 0.789 | 13.776 |
+| 30d | ny_13_range_reversal | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 20 | 0.020 | 0.011 | 0.011 | 2.487 | 0.600 | 1.762 |
+| 30d | ny_13_range_reversal | nightmare_60bps | base | 0.002 | 6 | 0.005 | 20 | 0.013 | 0.008 | 0.008 | 2.487 | 0.600 | 1.762 |
+| 30d | ny_13_range_reversal | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 17 | 0.007 | 0.002 | 0.002 | 3.382 | 0.588 | 3.156 |
+| 30d | ny_13_range_reversal | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 18 | 0.017 | 0.005 | 0.005 | 3.420 | 0.611 | 3.206 |
+| 30d | ny_13_range_reversal | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 20 | 0.034 | 0.008 | 0.007 | 4.422 | 0.700 | 4.484 |
+| 30d | ny_13_range_reversal | punitive_40bps | base | 0.002 | 6 | 0.005 | 20 | 0.023 | 0.005 | 0.005 | 4.422 | 0.700 | 4.484 |
+| 30d | ny_13_range_reversal | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 17 | 0.011 | 0.001 | 0.001 | 6.836 | 0.706 | 9.986 |
+| 30d | ny_13_range_reversal | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 19 | 0.025 | 0.006 | 0.006 | 3.955 | 0.684 | 3.872 |
+| 30d | strict_candidates | baseline | aggressive | 0.003 | 8 | 0.010 | 87 | 0.177 | 0.011 | 0.010 | 4.084 | 0.713 | 15.559 |
+| 30d | strict_candidates | baseline | base | 0.002 | 6 | 0.005 | 86 | 0.116 | 0.008 | 0.007 | 4.034 | 0.709 | 15.307 |
+| 30d | strict_candidates | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 67 | 0.045 | 0.004 | 0.003 | 4.168 | 0.716 | 11.808 |
+| 30d | strict_candidates | baseline | prop_strict | 0.003 | 4 | 0.004 | 74 | 0.129 | 0.009 | 0.006 | 4.394 | 0.730 | 13.593 |
+| 30d | strict_candidates | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 86 | 0.033 | 0.024 | 0.014 | 1.337 | 0.547 | 1.386 |
+| 30d | strict_candidates | nightmare_60bps | base | 0.002 | 6 | 0.005 | 84 | 0.018 | 0.017 | 0.012 | 1.276 | 0.536 | 1.043 |
+| 30d | strict_candidates | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 66 | 0.007 | 0.009 | 0.008 | 1.259 | 0.530 | 0.686 |
+| 30d | strict_candidates | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 71 | 0.026 | 0.017 | 0.012 | 1.427 | 0.535 | 1.570 |
+| 30d | strict_candidates | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 86 | 0.082 | 0.016 | 0.011 | 2.015 | 0.663 | 5.203 |
+| 30d | strict_candidates | punitive_40bps | base | 0.002 | 6 | 0.005 | 85 | 0.053 | 0.011 | 0.007 | 1.986 | 0.659 | 5.054 |
+| 30d | strict_candidates | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 66 | 0.020 | 0.007 | 0.004 | 1.969 | 0.652 | 3.003 |
+| 30d | strict_candidates | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 72 | 0.057 | 0.013 | 0.012 | 2.080 | 0.667 | 4.328 |
+| 60d | late_us_fade | baseline | aggressive | 0.003 | 8 | 0.010 | 70 | 0.086 | 0.013 | 0.011 | 2.335 | 0.600 | 6.727 |
+| 60d | late_us_fade | baseline | base | 0.002 | 6 | 0.005 | 70 | 0.057 | 0.009 | 0.008 | 2.335 | 0.600 | 6.727 |
+| 60d | late_us_fade | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 54 | 0.019 | 0.004 | 0.004 | 2.104 | 0.574 | 4.548 |
+| 60d | late_us_fade | baseline | prop_strict | 0.003 | 4 | 0.004 | 59 | 0.063 | 0.011 | 0.009 | 2.429 | 0.610 | 5.883 |
+| 60d | late_us_fade | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 69 | -0.010 | 0.036 | 0.026 | 0.906 | 0.493 | -0.271 |
+| 60d | late_us_fade | nightmare_60bps | base | 0.002 | 6 | 0.005 | 67 | -0.006 | 0.023 | 0.017 | 0.910 | 0.493 | -0.258 |
+| 60d | late_us_fade | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 53 | -0.005 | 0.011 | 0.011 | 0.830 | 0.491 | -0.442 |
+| 60d | late_us_fade | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 57 | -0.003 | 0.021 | 0.021 | 0.960 | 0.509 | -0.131 |
+| 60d | late_us_fade | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 69 | 0.023 | 0.020 | 0.019 | 1.264 | 0.580 | 1.140 |
+| 60d | late_us_fade | punitive_40bps | base | 0.002 | 6 | 0.005 | 69 | 0.016 | 0.014 | 0.013 | 1.264 | 0.580 | 1.140 |
+| 60d | late_us_fade | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 53 | 0.004 | 0.008 | 0.008 | 1.152 | 0.547 | 0.471 |
+| 60d | late_us_fade | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 58 | 0.020 | 0.017 | 0.017 | 1.335 | 0.586 | 1.158 |
+| 60d | ny_13_range_reversal | baseline | aggressive | 0.003 | 8 | 0.010 | 29 | 0.075 | 0.005 | 0.005 | 6.151 | 0.759 | 14.854 |
+| 60d | ny_13_range_reversal | baseline | base | 0.002 | 6 | 0.005 | 29 | 0.050 | 0.003 | 0.003 | 6.151 | 0.759 | 14.854 |
+| 60d | ny_13_range_reversal | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 25 | 0.024 | 0.002 | 0.002 | 7.208 | 0.760 | 13.963 |
+| 60d | ny_13_range_reversal | baseline | prop_strict | 0.003 | 4 | 0.004 | 28 | 0.058 | 0.004 | 0.004 | 5.752 | 0.750 | 13.704 |
+| 60d | ny_13_range_reversal | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 29 | 0.011 | 0.013 | 0.013 | 1.332 | 0.586 | 0.848 |
+| 60d | ny_13_range_reversal | nightmare_60bps | base | 0.002 | 6 | 0.005 | 29 | 0.007 | 0.009 | 0.009 | 1.332 | 0.586 | 0.848 |
+| 60d | ny_13_range_reversal | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 25 | 0.004 | 0.004 | 0.004 | 1.401 | 0.560 | 0.871 |
+| 60d | ny_13_range_reversal | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 27 | 0.010 | 0.011 | 0.011 | 1.414 | 0.593 | 0.906 |
+| 60d | ny_13_range_reversal | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 29 | 0.033 | 0.008 | 0.008 | 2.280 | 0.655 | 3.997 |
+| 60d | ny_13_range_reversal | punitive_40bps | base | 0.002 | 6 | 0.005 | 29 | 0.022 | 0.005 | 0.005 | 2.280 | 0.655 | 3.997 |
+| 60d | ny_13_range_reversal | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 25 | 0.010 | 0.003 | 0.003 | 2.481 | 0.640 | 3.842 |
+| 60d | ny_13_range_reversal | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 28 | 0.023 | 0.007 | 0.007 | 2.096 | 0.643 | 3.424 |
+| 60d | strict_candidates | baseline | aggressive | 0.003 | 8 | 0.010 | 113 | 0.193 | 0.011 | 0.010 | 3.285 | 0.673 | 16.981 |
+| 60d | strict_candidates | baseline | base | 0.002 | 6 | 0.005 | 112 | 0.127 | 0.008 | 0.007 | 3.251 | 0.670 | 16.729 |
+| 60d | strict_candidates | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 92 | 0.050 | 0.004 | 0.003 | 3.157 | 0.663 | 13.184 |
+| 60d | strict_candidates | baseline | prop_strict | 0.003 | 4 | 0.004 | 100 | 0.144 | 0.009 | 0.006 | 3.377 | 0.680 | 15.192 |
+| 60d | strict_candidates | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 112 | 0.016 | 0.029 | 0.025 | 1.110 | 0.527 | 0.550 |
+| 60d | strict_candidates | nightmare_60bps | base | 0.002 | 6 | 0.005 | 109 | 0.010 | 0.017 | 0.013 | 1.106 | 0.523 | 0.574 |
+| 60d | strict_candidates | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 90 | 0.003 | 0.009 | 0.007 | 1.085 | 0.522 | 0.386 |
+| 60d | strict_candidates | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 95 | 0.022 | 0.017 | 0.013 | 1.237 | 0.537 | 1.306 |
+| 60d | strict_candidates | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 112 | 0.076 | 0.020 | 0.016 | 1.629 | 0.616 | 3.843 |
+| 60d | strict_candidates | punitive_40bps | base | 0.002 | 6 | 0.005 | 111 | 0.049 | 0.013 | 0.011 | 1.609 | 0.613 | 3.724 |
+| 60d | strict_candidates | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 91 | 0.018 | 0.007 | 0.006 | 1.540 | 0.593 | 2.448 |
+| 60d | strict_candidates | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 97 | 0.058 | 0.013 | 0.012 | 1.705 | 0.619 | 4.416 |
+| first30d | late_us_fade | baseline | aggressive | 0.003 | 8 | 0.010 | 17 | 0.004 | 0.012 | 0.009 | 1.207 | 0.471 | 0.312 |
+| first30d | late_us_fade | baseline | base | 0.002 | 6 | 0.005 | 17 | 0.003 | 0.008 | 0.006 | 1.207 | 0.471 | 0.312 |
+| first30d | late_us_fade | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 17 | 0.001 | 0.004 | 0.003 | 1.207 | 0.471 | 0.312 |
+| first30d | late_us_fade | baseline | prop_strict | 0.003 | 4 | 0.004 | 17 | 0.003 | 0.010 | 0.007 | 1.207 | 0.471 | 0.312 |
+| first30d | late_us_fade | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 17 | -0.009 | 0.023 | 0.019 | 0.693 | 0.412 | -0.370 |
+| first30d | late_us_fade | nightmare_60bps | base | 0.002 | 6 | 0.005 | 17 | -0.006 | 0.015 | 0.013 | 0.693 | 0.412 | -0.370 |
+| first30d | late_us_fade | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 17 | -0.003 | 0.008 | 0.006 | 0.693 | 0.412 | -0.370 |
+| first30d | late_us_fade | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 17 | -0.007 | 0.019 | 0.016 | 0.693 | 0.412 | -0.370 |
+| first30d | late_us_fade | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 17 | -0.004 | 0.019 | 0.016 | 0.820 | 0.412 | -0.228 |
+| first30d | late_us_fade | punitive_40bps | base | 0.002 | 6 | 0.005 | 17 | -0.003 | 0.013 | 0.010 | 0.820 | 0.412 | -0.228 |
+| first30d | late_us_fade | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 17 | -0.001 | 0.006 | 0.005 | 0.820 | 0.412 | -0.228 |
+| first30d | late_us_fade | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 17 | -0.004 | 0.016 | 0.013 | 0.820 | 0.412 | -0.228 |
+| first30d | ny_13_range_reversal | baseline | aggressive | 0.003 | 8 | 0.010 | 9 | 0.012 | 0.005 | 0.005 | 2.409 | 0.667 | 2.441 |
+| first30d | ny_13_range_reversal | baseline | base | 0.002 | 6 | 0.005 | 9 | 0.008 | 0.003 | 0.003 | 2.409 | 0.667 | 2.441 |
+| first30d | ny_13_range_reversal | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 8 | 0.004 | 0.002 | 0.002 | 2.332 | 0.625 | 2.308 |
+| first30d | ny_13_range_reversal | baseline | prop_strict | 0.003 | 4 | 0.004 | 9 | 0.010 | 0.004 | 0.004 | 2.409 | 0.667 | 2.441 |
+| first30d | ny_13_range_reversal | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 9 | -0.009 | 0.013 | 0.013 | 0.568 | 0.556 | -0.664 |
+| first30d | ny_13_range_reversal | nightmare_60bps | base | 0.002 | 6 | 0.005 | 9 | -0.006 | 0.009 | 0.009 | 0.568 | 0.556 | -0.664 |
+| first30d | ny_13_range_reversal | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 8 | -0.003 | 0.004 | 0.004 | 0.564 | 0.500 | -0.666 |
+| first30d | ny_13_range_reversal | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 9 | -0.007 | 0.011 | 0.011 | 0.568 | 0.556 | -0.664 |
+| first30d | ny_13_range_reversal | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 9 | -0.002 | 0.008 | 0.008 | 0.889 | 0.556 | -0.210 |
+| first30d | ny_13_range_reversal | punitive_40bps | base | 0.002 | 6 | 0.005 | 9 | -0.001 | 0.005 | 0.005 | 0.889 | 0.556 | -0.210 |
+| first30d | ny_13_range_reversal | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 8 | -0.001 | 0.003 | 0.003 | 0.871 | 0.500 | -0.244 |
+| first30d | ny_13_range_reversal | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 9 | -0.001 | 0.007 | 0.007 | 0.889 | 0.556 | -0.210 |
+| first30d | strict_candidates | baseline | aggressive | 0.003 | 8 | 0.010 | 26 | 0.016 | 0.010 | 0.007 | 1.596 | 0.538 | 1.694 |
+| first30d | strict_candidates | baseline | base | 0.002 | 6 | 0.005 | 26 | 0.011 | 0.006 | 0.005 | 1.596 | 0.538 | 1.694 |
+| first30d | strict_candidates | baseline | micro_risk_tight | 0.001 | 3 | 0.003 | 25 | 0.004 | 0.003 | 0.002 | 1.463 | 0.520 | 1.316 |
+| first30d | strict_candidates | baseline | prop_strict | 0.003 | 4 | 0.004 | 26 | 0.013 | 0.008 | 0.006 | 1.596 | 0.538 | 1.694 |
+| first30d | strict_candidates | nightmare_60bps | aggressive | 0.003 | 8 | 0.010 | 26 | -0.017 | 0.029 | 0.025 | 0.641 | 0.462 | -0.589 |
+| first30d | strict_candidates | nightmare_60bps | base | 0.002 | 6 | 0.005 | 25 | -0.008 | 0.016 | 0.013 | 0.715 | 0.480 | -0.504 |
+| first30d | strict_candidates | nightmare_60bps | micro_risk_tight | 0.001 | 3 | 0.003 | 24 | -0.005 | 0.009 | 0.007 | 0.672 | 0.458 | -0.539 |
+| first30d | strict_candidates | nightmare_60bps | prop_strict | 0.003 | 4 | 0.004 | 24 | -0.007 | 0.017 | 0.013 | 0.785 | 0.500 | -0.411 |
+| first30d | strict_candidates | punitive_40bps | aggressive | 0.003 | 8 | 0.010 | 26 | -0.006 | 0.020 | 0.016 | 0.847 | 0.462 | -0.310 |
+| first30d | strict_candidates | punitive_40bps | base | 0.002 | 6 | 0.005 | 26 | -0.004 | 0.013 | 0.011 | 0.847 | 0.462 | -0.310 |
+| first30d | strict_candidates | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 25 | -0.003 | 0.007 | 0.006 | 0.786 | 0.440 | -0.385 |
+| first30d | strict_candidates | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 25 | -0.001 | 0.013 | 0.012 | 0.951 | 0.480 | -0.113 |
+
 ## Frequency By Symbol
 | symbol | events | events_per_day | events_per_week | avg_r | profit_factor | win_rate | median_duration_h | median_mfe_r | p75_mfe_r | median_mae_r | strict_events |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -154,3 +266,4 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 - EMA helps only if the rule matrix improves return/DD without starving trades; otherwise it is descriptive, not a gate.
 - Post-target continuation is measured because fixed 2R may be too short for clean London/NY winners.
 - Stress scenarios convert extra bps into R, so tight-stop trades are penalized harder.
+- Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.
