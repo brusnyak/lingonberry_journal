@@ -43,6 +43,8 @@ Done or implemented:
     proxy.
 12. First shock-aware execution layer: causal large-displacement state,
     half-target breakeven management, and optional EMA research variants.
+13. First trade-level forensic audit for the promoted shock-aware bucket,
+    including UI review packet generation and exchange-specific review loading.
 
 Still needed:
 
@@ -422,6 +424,55 @@ Shock/EMA interpretation:
   partial_1r_be_after_half_target`.
 - This is still not deployable until shock-aware discovery/holdout and UI sample
   review pass.
+
+Trade-level forensic checkpoint on 2026-07-13:
+
+- Scope: promoted shock-aware bucket with `0.20%` risk/trade, max `6` open
+  trades, max `1` per symbol, daily loss cap `0.50%`.
+- Accepted trades inspected: `101`.
+- Candle windows reconstructed: `101/101`.
+- Portfolio proxy: `+7.51%` return, `0.90%` max DD, PF `2.82`.
+- Winner rate among accepted trades: `67.3%`.
+- Median entry MAE: `-0.448R`.
+- Stop exits: `14.9%`.
+- Target exits: `27.7%`.
+- Expiry exits: `40.6%`.
+- Reached `1R`: `61.4%`.
+- Reached half-target: `68.3%`.
+
+Forensic failure split:
+
+- Working: `68` trades, avg `+0.856R`.
+- Direction/entry failure: `18` trades, avg `-0.684R`.
+- Management/target failure: `5` trades, avg `-0.687R`.
+- Entry/stop failure: `3` trades, avg `-1.055R`.
+- Target/time-exit failure: `3` trades, avg `-0.480R`.
+- Unknown: `4` trades, avg `-0.071R`.
+
+Forensic path split:
+
+- No follow-through: `32` trades, avg `-0.427R`.
+- Clean target path: `31` trades, avg `+1.043R`.
+- Expiry after progress: `20` trades, avg `+0.840R`.
+- Partial follow-through: `8` trades, avg `+0.374R`.
+- Gave back after `1R`: `6` trades, avg `+0.068R`.
+- Gave back after half-target: `4` trades, avg `-0.321R`.
+
+Forensic verdict:
+
+- Still not a stop-placement problem.
+- Biggest remaining failure is direction/entry: trades that never get even
+  half-target follow-through.
+- Management is improved but not finished. There are still giveback and expiry
+  cases worth manual review.
+- Weak accepted symbols in this portfolio sample: `1000PEPEUSDT`, `WLDUSDT`,
+  `NEARUSDT`, `AVAXUSDT`.
+- Stronger accepted symbols in this sample: `DOGEUSDT`, `ETHUSDT`, `XRPUSDT`,
+  `LINKUSDT`, `SUIUSDT`.
+- Generated UI packet:
+  `backtesting/results/review_samples/crypto_shock_forensics_review_samples.csv`.
+- The review UI now has exchange-specific loading for Binance/Bybit so manual
+  labels do not mix exchange candles.
 
 Execution-path review:
 

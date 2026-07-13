@@ -197,6 +197,13 @@
         <label>Context bars</label>
         <input type="number" id="cfg-context" value="150" min="20">
       </div>
+      <div>
+        <label>Exchange</label>
+        <select id="cfg-exchange">
+          <option value="binance" selected>binance</option>
+          <option value="bybit">bybit</option>
+        </select>
+      </div>
     </div>
     <div id="cfg-ict-fields" style="display:none">
       <div>
@@ -211,7 +218,7 @@
     <button id="run-btn" onclick="runBacktest()">▶ RUN BACKTEST</button>
     <button id="gold-events-btn" onclick="loadGoldEvents()">LOAD GOLD ICT EVENTS</button>
     <button id="crypto-events-btn" onclick="loadCryptoRetestEvents()" style="grid-column:1/-1;background:#047857;color:#fff;border:none;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">LOAD CRYPTO RETEST EVENTS</button>
-    <button id="crypto-portfolio-btn" onclick="loadCryptoPortfolioCandidateEvents()" style="grid-column:1/-1;background:#0f766e;color:#fff;border:none;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">LOAD PORTFOLIO CANDIDATE REVIEW</button>
+    <button id="crypto-portfolio-btn" onclick="loadCryptoPortfolioCandidateEvents()" style="grid-column:1/-1;background:#0f766e;color:#fff;border:none;padding:7px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">LOAD SHOCK FORENSIC REVIEW</button>
   </div>
 
   <div id="stats"></div>
@@ -549,17 +556,19 @@ async function loadCryptoPortfolioCandidateEvents() {
   const btn = document.getElementById('crypto-portfolio-btn');
   btn.disabled = true;
   const symbol = document.getElementById('cfg-symbol').value || 'LINKUSDT';
+  const exchange = document.getElementById('cfg-exchange').value || 'binance';
   showLoading('Loading crypto portfolio candidate review…');
 
   currentSymbol = symbol;
   currentTf = '15';
   currentStrategy = 'CryptoPortfolioCandidateReview';
   currentParams = {
-    source: 'crypto_portfolio_candidate_review_samples',
-    predictor: 'crypto_portfolio_candidate',
+    source: 'crypto_shock_forensics_review_samples',
+    predictor: 'crypto_shock_forensics',
     session: 'late_us',
     direction: 'short',
     target: '1.5r',
+    exchange,
   };
   document.getElementById('cfg-tf').value = '15';
 
@@ -570,12 +579,13 @@ async function loadCryptoPortfolioCandidateEvents() {
       body: JSON.stringify({
         symbol,
         tf: '15',
-        predictor: 'crypto_portfolio_candidate',
+        predictor: 'crypto_shock_forensics',
         session: 'late_us',
         direction: 'short',
         target: '1.5r',
+        exchange,
         limit: 20,
-        events_path: 'backtesting/results/review_samples/crypto_portfolio_candidate_review_samples.csv',
+        events_path: 'backtesting/results/review_samples/crypto_shock_forensics_review_samples.csv',
       }),
     });
     const data = await resp.json();

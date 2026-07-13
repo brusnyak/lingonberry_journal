@@ -2617,6 +2617,7 @@ def api_review_ict_events():
     session = str(body.get("session", "asia"))
     direction = str(body.get("direction", "short"))
     target = str(body.get("target", "1.5r"))
+    exchange = str(body.get("exchange", "")).lower().strip()
     limit = int(body.get("limit", 50))
 
     default_sample = Path(__file__).resolve().parent.parent / "backtesting" / "results" / "ict_review_samples_XAUUSD_bearish_bos_asia_1.5r.csv"
@@ -2640,9 +2641,13 @@ def api_review_ict_events():
             & (events["session"].astype(str) == session)
             & (events["direction"].astype(str) == direction)
         ].copy()
+        if exchange and "exchange" in filtered.columns:
+            filtered = filtered[filtered["exchange"].astype(str).str.lower() == exchange].copy()
         if filtered.empty:
             # A pre-filtered sample can omit one of these columns in future; fall back to symbol-only.
             filtered = events[events["symbol"].astype(str).str.upper() == symbol].copy()
+            if exchange and "exchange" in filtered.columns:
+                filtered = filtered[filtered["exchange"].astype(str).str.lower() == exchange].copy()
         if filtered.empty:
             return jsonify({"error": f"No matching events in {events_path.name}"}), 404
 
@@ -2667,6 +2672,8 @@ def api_review_ict_events():
             start=start_ts.isoformat(),
             end=end_ts.isoformat(),
             asset_type=_review_asset_type(symbol),
+            exchange=exchange or None,
+            crypto_source="exchange" if exchange and _review_asset_type(symbol) == "crypto" else None,
         )
         if df.empty:
             return jsonify({"error": f"No candle data for {symbol} {tf}"}), 404
