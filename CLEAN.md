@@ -3200,3 +3200,28 @@ accuracy. Still open: no walk-forward/rolling stability check on this specific
 not this real SL/TP; that's the natural next verification before trusting this further.
 Not committed as new code this round (ad hoc verification query); worth promoting to
 a proper module + test once rolling-stability confirms it holds across time.
+
+## Phase 22 -- Repo cleanup: removed 5 orphaned scripts, archived stale strategy doc
+
+Full crypto/ import-graph audit (32 files, 11,483 lines) found 5 scripts with zero
+cross-references anywhere -- not imported by any other module, not tested, only ever
+run standalone: `canonical_pattern_audit.py`, `fvg_execution_matrix.py`,
+`run_audit_sweep.py`, `session_frequency_audit.py`, `session_setup_lab.py` (1,968
+lines). User confirmed deletion. Their generated CSVs remain committed as static
+files under `backtesting/results/review_samples/` -- webapp review buttons unaffected,
+only regeneration capability for that (already Phase-12-superseded, flawed-47-day-
+window) analysis is gone. 378 tests unchanged, confirming nothing depended on them.
+
+Archived `docs/crypto-engine-strategy.md` -> `docs/archive/` (Phase 1-7 plan, stale
+relative to this file's living Phase 8-21 log).
+
+**Left alone, per user direction (frozen/legacy, not developed further)**: the larger
+interdependent FVG/foundation chain (~9,500 lines -- canonical_session_harness,
+foundation_validation, direction_filter_validation, structure_regime_journal,
+foundation_trade_forensics, portfolio_validation, event_atlas, index_structure,
+execution_path_lab, trend_session_matrix). Still backs 5 webapp review buttons via
+already-committed static CSVs.
+
+**Active stack going forward**: `data.py`, `config.py`, `direction_layer.py`,
+`mtf_cascade_direction.py` (the one configurable CLI, Phase 21), `mtf_cascade_review_export.py`,
+`structure_direction_accuracy.py`, `synthetic_ohlcv.py`.
