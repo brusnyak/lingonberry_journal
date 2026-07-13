@@ -15,6 +15,7 @@ import pandas as pd
 from backtesting.crypto.event_atlas import _atr
 from backtesting.crypto.portfolio_validation import PortfolioRiskConfig, simulate_portfolio
 from backtesting.engine.data import load_data
+from backtesting.crypto.config import DEFAULT_DAYS, DEFAULT_SOURCE
 
 
 DEFAULT_INPUT = Path("backtesting/results/crypto_fvg_execution_matrix_binance_15m/fvg_execution_trades.parquet")
@@ -66,10 +67,10 @@ def _attach_entry_features(trades: pd.DataFrame) -> pd.DataFrame:
         data = load_data(
             str(symbol),
             tf=str(tf),
-            days=400,
+            days=DEFAULT_DAYS,
             asset_type="crypto",
             exchange=str(exchange),
-            crypto_source="merged",
+            crypto_source=DEFAULT_SOURCE,
         ).sort_values("ts").reset_index(drop=True)
         data["ts"] = pd.to_datetime(data["ts"], utc=True)
         atr = _atr(data, 14)

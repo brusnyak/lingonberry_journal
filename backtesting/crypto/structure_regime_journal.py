@@ -15,6 +15,7 @@ import pandas as pd
 
 from backtesting.crypto.data import load_crypto
 from backtesting.crypto.direction_layer import DirectionLayerConfig, recent_shock_state, structure_at
+from backtesting.crypto.config import DEFAULT_DAYS, DEFAULT_SOURCE
 
 
 DEFAULT_ACCEPTED_TRADES = Path(
@@ -29,7 +30,7 @@ def build_structure_regime_journal(
     *,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     structure_root: Path = DEFAULT_STRUCTURE_ROOT,
-    days: int = 400,
+    days: int = DEFAULT_DAYS,
 ) -> dict[str, pd.DataFrame]:
     trades = _load_table(trades_path)
     if trades.empty:
@@ -64,7 +65,7 @@ def enrich_trades_with_structure(
     trades: pd.DataFrame,
     *,
     structure_root: Path = DEFAULT_STRUCTURE_ROOT,
-    days: int = 400,
+    days: int = DEFAULT_DAYS,
 ) -> pd.DataFrame:
     data = trades.copy()
     for col in ["entry_ts", "signal_ts", "bar_ts", "exit_ts"]:
@@ -445,7 +446,7 @@ def _cached_structure(cache: dict[tuple[str, str, str], pd.DataFrame], root: Pat
 def _cached_ohlcv(cache: dict[tuple[str, str, str], pd.DataFrame], exchange: str, symbol: str, tf: str, days: int) -> pd.DataFrame:
     key = (exchange, symbol, str(tf))
     if key not in cache:
-        cache[key] = load_crypto(symbol, tf=str(tf), days=days, exchange=exchange, source="merged")
+        cache[key] = load_crypto(symbol, tf=str(tf), days=days, exchange=exchange, source=DEFAULT_SOURCE)
     return cache[key]
 
 
@@ -588,7 +589,7 @@ def main() -> int:
     parser.add_argument("--trades", default=str(DEFAULT_ACCEPTED_TRADES))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--structure-root", default=str(DEFAULT_STRUCTURE_ROOT))
-    parser.add_argument("--days", type=int, default=400)
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     args = parser.parse_args()
 
     result = build_structure_regime_journal(

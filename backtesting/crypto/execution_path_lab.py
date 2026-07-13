@@ -26,6 +26,7 @@ from backtesting.crypto.event_atlas import _atr, _bar_delta, _next_round_number,
 from backtesting.crypto.index_structure import DEFAULT_SYMBOLS
 from backtesting.engine.data import load_data
 from backtesting.features.structure import build_structure_index
+from backtesting.crypto.config import DEFAULT_DAYS, DEFAULT_SOURCE
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,7 @@ def run_survivor_execution_lab(
     *,
     symbols: list[str],
     exchanges: list[str],
-    days: int = 400,
+    days: int = DEFAULT_DAYS,
     tf: str = "15",
     output_dir: Path = Path("backtesting/results/event_atlas"),
     config: ExecutionConfig | None = None,
@@ -66,7 +67,7 @@ def run_survivor_execution_lab(
     rows: list[pd.DataFrame] = []
     for exchange in exchanges:
         for symbol in symbols:
-            df = load_data(symbol, tf=tf, days=days, asset_type="crypto", exchange=exchange, crypto_source="merged")
+            df = load_data(symbol, tf=tf, days=days, asset_type="crypto", exchange=exchange, crypto_source=DEFAULT_SOURCE)
             structure = _load_structure_cache(exchange, symbol, cfg.context_tf)
             entry_structure = _load_structure_cache(exchange, symbol, tf)
             result = evaluate_bearish_fvg_survivor(
@@ -544,7 +545,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Execution-path lab for the holdout survivor bucket.")
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--exchange", default="both", choices=["binance", "bybit", "both"])
-    parser.add_argument("--days", type=int, default=400)
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--tf", default="15")
     parser.add_argument("--expiry-haircut-r", type=float, default=0.10)
     parser.add_argument("--time-stop-bars", type=int, default=16)

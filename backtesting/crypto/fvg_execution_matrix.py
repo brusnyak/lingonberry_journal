@@ -20,12 +20,13 @@ from backtesting.crypto.index_structure import DEFAULT_SYMBOLS
 from backtesting.crypto.trend_session_matrix import _attach_ema, _classify_trend, _ema_context, _ema_from_frame
 from backtesting.engine.data import load_data
 from backtesting.features.structure import build_structure_index
+from backtesting.crypto.config import DEFAULT_DAYS, DEFAULT_SOURCE
 
 
 @dataclass(frozen=True)
 class FvgExecutionMatrixConfig:
-    days: int = 400
-    crypto_source: str = "merged"
+    days: int = DEFAULT_DAYS
+    crypto_source: str = DEFAULT_SOURCE
     tf: str = "15"
     context_tf: str = "240"
     middle_tf: str = "60"
@@ -509,9 +510,9 @@ def main() -> int:
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--exchange", default="binance", choices=["binance", "bybit", "both"])
     parser.add_argument("--tf", default="15")
-    parser.add_argument("--days", type=int, default=400)
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--output-dir", default=str(FvgExecutionMatrixConfig.output_dir))
-    parser.add_argument("--source", default="merged", choices=["exchange", "legacy", "merged"],
+    parser.add_argument("--source", default=DEFAULT_SOURCE, choices=["exchange", "legacy", "merged"],
                          help="'exchange' caps history to exchange-scoped files (~90-120d); "
                               "'merged' pulls in deep legacy history (multi-year) too.")
     args = parser.parse_args()

@@ -16,6 +16,7 @@ import pandas as pd
 
 from backtesting.crypto.index_structure import DEFAULT_SYMBOLS
 from backtesting.engine.data import load_data
+from backtesting.crypto.config import DEFAULT_DAYS, DEFAULT_SOURCE
 
 
 DEFAULT_EVENTS = (
@@ -232,7 +233,7 @@ def run_atlas(
         for symbol in symbols:
             context = _load_structure_cache(exchange, symbol, context_tf)
             for tf in tfs:
-                df = load_data(symbol, tf=tf, days=days, asset_type="crypto", exchange=exchange, crypto_source="merged")
+                df = load_data(symbol, tf=tf, days=days, asset_type="crypto", exchange=exchange, crypto_source=DEFAULT_SOURCE)
                 events = build_event_atlas(
                     df,
                     symbol=symbol,
@@ -569,7 +570,7 @@ def main() -> int:
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--exchange", default="both", choices=["binance", "bybit", "both"])
     parser.add_argument("--tfs", default="5,15")
-    parser.add_argument("--days", type=int, default=400)
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--context-tf", default="240")
     parser.add_argument("--lookback-bars", type=int, default=24)
     parser.add_argument("--horizon-bars", type=int, default=24)

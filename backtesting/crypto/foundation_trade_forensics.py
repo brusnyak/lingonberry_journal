@@ -18,6 +18,7 @@ import pandas as pd
 from backtesting.crypto.data import load_crypto
 from backtesting.crypto.portfolio_validation import PortfolioRiskConfig, simulate_portfolio
 from backtesting.crypto.structure_regime_journal import average_true_range
+from backtesting.crypto.config import DEFAULT_DAYS, DEFAULT_SOURCE
 
 
 DEFAULT_INPUT = Path("backtesting/results/crypto_structure_regime_journal_reindexed/structure_regime_trade_journal.csv")
@@ -61,7 +62,7 @@ class ForensicsRunConfig:
     max_open_trades: int = 6
     max_open_per_symbol: int = 1
     daily_loss_limit_pct: float = 0.005
-    days: int = 400
+    days: int = DEFAULT_DAYS
     post_bars: tuple[int, ...] = (4, 8, 16, 24)
 
 
@@ -168,7 +169,7 @@ def enrich_events(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame
         tf = str(row.get("tf", "15"))
         key = (exchange, symbol, tf)
         if key not in cache:
-            cache[key] = load_crypto(symbol, tf=tf, days=cfg.days, exchange=exchange, source="merged")
+            cache[key] = load_crypto(symbol, tf=tf, days=cfg.days, exchange=exchange, source=DEFAULT_SOURCE)
         ohlcv = _prepare_ohlcv(cache[key])
         row.update(indicator_snapshot(ohlcv, pd.Timestamp(row["entry_ts"])))
         row.update(post_exit_continuation(ohlcv, row, cfg.post_bars))

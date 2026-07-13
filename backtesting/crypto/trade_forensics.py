@@ -17,6 +17,7 @@ import pandas as pd
 from backtesting.crypto.event_atlas import _atr
 from backtesting.crypto.portfolio_validation import PortfolioRiskConfig, filter_execution_bucket, simulate_portfolio
 from backtesting.engine.data import load_data
+from backtesting.crypto.config import DEFAULT_DAYS, DEFAULT_SOURCE
 
 
 DEFAULT_INPUT = Path("backtesting/results/event_atlas_shock_layer/survivor_execution_paths.csv")
@@ -33,7 +34,7 @@ class ForensicsConfig:
     max_open_trades: int = 6
     max_open_per_symbol: int = 1
     daily_loss_limit_pct: float = 0.005
-    days: int = 400
+    days: int = DEFAULT_DAYS
 
 
 def build_trade_forensics(
@@ -182,7 +183,7 @@ def _forensic_row(row: dict, cfg: ForensicsConfig) -> dict:
         entry_ts = entry_ts.tz_convert("UTC")
 
     try:
-        data = load_data(symbol, tf=tf, days=cfg.days, asset_type="crypto", exchange=exchange, crypto_source="merged")
+        data = load_data(symbol, tf=tf, days=cfg.days, asset_type="crypto", exchange=exchange, crypto_source=DEFAULT_SOURCE)
         data = data.sort_values("ts").reset_index(drop=True)
         data["ts"] = pd.to_datetime(data["ts"], utc=True)
     except Exception as exc:
