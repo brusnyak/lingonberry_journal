@@ -231,6 +231,66 @@ def rolling_stability(
     return pd.DataFrame(rows)
 
 
+def rolling_stability_real_sltp(
+    symbol: str,
+    *,
+    stage: str = "plus_mini",
+    window_days: int = 30,
+    step_days: int = 7,
+    config: CascadeConfig | None = None,
+    min_rr: float = 1.5,
+    horizon: int = 200,
+) -> pd.DataFrame:
+    """Same rolling-window idea as rolling_stability(), but with the real
+    structural SL/TP (Phase 17/20) instead of symmetric ATR R -- does the
+    win_rate/avg_r/pf result that cleared the null-test bar (4/6 pairs, Phase
+    20) hold up across time, or is it concentrated in one stretch."""
+    cfg = config or CascadeConfig()
+    builder = build_global_local_series if stage == "global_local" else build_full_cascade_series
+    bars, structure, combo = builder(symbol, cfg)
+    if bars.empty:
+        return pd.DataFrame()
+
+    ts = pd.to_datetime(bars["ts"], utc=True)
+    combo_series = pd.Series(combo)
+    changed = combo_series.ne(combo_series.shift(1)) & combo_series.isin(["bull", "bear"])
+
+    start = ts.min()
+    end_all = ts.max()
+    rows = []
+    while start + pd.Timedelta(days=window_days) <= end_all:
+        window_end = start + pd.Timedelta(days=window_days)
+        in_window = (ts >= start) & (ts < window_end)
+        idxs = np.where(changed.to_numpy() & in_window.to_numpy())[0]
+        r_multiples = []
+        for i in idxs:
+            if i >= len(bars) - 1:
+                continue
+            direction = "long" if combo_series.iat[i] == "bull" else "short"
+            entry = float(bars["close"].iat[i])
+            sl, tp = structural_stop_target(structure.iloc[i], direction, entry, min_rr)
+            if not np.isfinite(sl):
+                continue
+            outcome = walk_structural_outcome(bars, i, direction, sl, tp, horizon)
+            if outcome is not None:
+                r_multiples.append(outcome["r_multiple"])
+        r = np.array(r_multiples)
+        n = len(r)
+        gross_win = r[r > 0].sum() if n else 0.0
+        gross_loss = -r[r <= 0].sum() if n else 0.0
+        rows.append({
+            "window_start": start,
+            "window_end": window_end,
+            "n": n,
+            "win_rate": (r > 0).mean() if n else np.nan,
+            "avg_r": r.mean() if n else np.nan,
+            "pf": gross_win / gross_loss if gross_loss > 0 else (np.inf if gross_win > 0 else np.nan),
+        })
+        start += pd.Timedelta(days=step_days)
+
+    return pd.DataFrame(rows)
+
+
 # ── Real structural SL/target (reuses PropFirmStructureV1's existing fields --
 # not a new stop/target mechanism, see CLEAN.md Phase 17) ─────────────────────
 
@@ -417,7 +477,7 @@ def build_full_cascade_series(symbol: str, config: CascadeConfig | None = None) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Configurable structure/direction cascade lab -- one tool, not a new script per question.")
-    parser.add_argument("--mode", required=True, choices=["direction-accuracy", "real-sltp", "null-test", "rolling-stability"])
+    parser.add_argument("--mode", required=True, choices=["direction-accuracy", "real-sltp", "null-test", "rolling-stability", "rolling-stability-sltp"])
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--stage", default="plus_mini", choices=["global_local", "plus_mini"], help="Which cascade stage to evaluate (real-sltp/null-test modes).")
     parser.add_argument("--days", type=int, default=400)
@@ -467,12 +527,21 @@ def main() -> int:
             result = null_test_real_sltp(bars, structure, combo, min_rr=args.min_rr, horizon=args.horizon, n_seeds=args.seeds)
             rows.append({"symbol": symbol, "stage": args.stage, **result})
 
-    elif args.mode == "rolling-stability":
+    elif args.mode in ("rolling-stability", "rolling-stability-sltp"):
+        window_frames = []
         for symbol in symbols:
-            r = rolling_stability(symbol, window_days=args.window_days, step_days=args.step_days, config=cfg)
+            if args.mode == "rolling-stability":
+                r = rolling_stability(symbol, window_days=args.window_days, step_days=args.step_days, config=cfg)
+            else:
+                r = rolling_stability_real_sltp(
+                    symbol, stage=args.stage, window_days=args.window_days, step_days=args.step_days,
+                    config=cfg, min_rr=args.min_rr, horizon=args.horizon,
+                )
+            if r.empty:
+                continue
             r["symbol"] = symbol
-            rows.append(r)
-        result_df = pd.concat(rows, ignore_index=True) if rows and isinstance(rows[0], pd.DataFrame) else pd.DataFrame(rows)
+            window_frames.append(r)
+        result_df = pd.concat(window_frames, ignore_index=True) if window_frames else pd.DataFrame()
         print(result_df.to_string(index=False))
         if args.output:
             result_df.to_csv(args.output, index=False)
