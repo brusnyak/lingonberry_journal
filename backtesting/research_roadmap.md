@@ -52,6 +52,10 @@ Done or implemented:
 16. First promoted daytime module: London long with `1H+15m` bullish EMA,
     structure confirmation, fixed `2R`, and breakeven after half-target.
 17. First two-module crypto stack combining late-US short and London long.
+18. First London session frequency audit separating UI sampling scarcity,
+    strategy-filter scarcity, and raw executable-event frequency.
+19. First London setup lab testing candle/setup confirmation features as
+    frequency-quality gates.
 
 Still needed:
 
@@ -780,6 +784,85 @@ Session-module interpretation:
 - Next research target: rolling/discovery-holdout validation for the two-module
   stack, then optional Asia short promotion under the same gates.
 
+London frequency and setup checkpoint on 2026-07-13:
+
+- User review of the London-long sample was mostly positive:
+  - `11` saved London labels across `LINKUSDT`, `SOLUSDT`, and `XRPUSDT`;
+  - `7` explicit good labels;
+  - recurring notes: targets sometimes too far for intraday, entries sometimes
+    late, and consolidation/accumulation after big movement is not modeled.
+- Frequency problem split:
+  - UI sample scarcity: the prior London review packet was intentionally small.
+  - Engine scarcity: current module filters produce only `143` candidates and
+    `69` portfolio-accepted trades.
+  - Raw opportunity is not scarce: broad London-long `fixed_2r +
+    be_after_half_target` has `5,147` rows, but it loses money as a module.
+
+London filter funnel:
+
+| Stage | Candidates | Accepted | Avg R | PF | Return | Max DD | Stop | Expiry |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| all London long `2R` + BE half | `5,147` | `355` | `-0.017R` | `0.96` | `-1.21%` | `6.42%` | `32.1%` | `42.5%` |
+| + `4H` bull | `3,720` | `315` | `-0.004R` | `0.99` | `-0.25%` | `6.13%` | `33.0%` | `38.4%` |
+| + `1H+15m` bullish EMA | `627` | `78` | `+0.350R` | `2.26` | `+5.45%` | `1.82%` | `19.2%` | `46.2%` |
+| + structure-confirmed next open | `146` | `70` | `+0.345R` | `2.27` | `+4.83%` | `1.75%` | `18.6%` | `47.1%` |
+| current latest-bull-regime | `143` | `69` | `+0.347R` | `2.26` | `+4.78%` | `1.75%` | `18.8%` | `46.4%` |
+
+London setup lab:
+
+- Research file: `backtesting/crypto/session_setup_lab.py`.
+- Review packet:
+  `backtesting/results/review_samples/crypto_london_setup_lab_review_samples.csv`.
+- Tested causal entry-bar setup features:
+  - bullish body close near high;
+  - bullish engulfing;
+  - lower-wick rejection;
+  - micro-range break;
+  - pre-entry compression;
+  - early London timing;
+  - entry exhaustion filter.
+
+Setup-lab result:
+
+| Variant | Candidates | Accepted | Avg R | PF | Return | Max DD | Stop | Accepted/symbol/day |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `1H+15m` bullish EMA | `627` | `78` | `+0.350R` | `2.26` | `+5.45%` | `1.82%` | `19.2%` | `0.152` |
+| + any structure entry confirmation | `267` | `73` | `+0.373R` | `2.42` | `+5.45%` | `1.35%` | `17.8%` | `0.143` |
+| + rejection or micro-break | `118` | `35` | `+0.634R` | `5.63` | `+4.44%` | `0.69%` | `8.6%` | `0.068` |
+| + candle confirmation | `120` | `33` | `+0.632R` | `4.60` | `+4.17%` | `0.91%` | `12.1%` | `0.065` |
+| early London only | `243` | `46` | `+0.304R` | `2.18` | `+2.80%` | `0.95%` | `17.4%` | `0.090` |
+| all London long | `5,147` | `355` | `-0.017R` | `0.96` | `-1.21%` | `6.42%` | `32.1%` | `0.555` |
+
+Setup-lab interpretation:
+
+- Your frequency complaint is correct, but the fix is not simply allowing every
+  visible London entry. Broad London-long entries are low-quality.
+- Best current direction: use `1H+15m` bullish EMA as the core daytime direction
+  gate, then test candle/rejection/micro-break confirmation for quality.
+- Candle/setup confirmation improves trade quality sharply but lowers accepted
+  frequency to about `0.065-0.068` trades per symbol per day.
+- The frequency-quality compromise is currently `1H+15m` bullish EMA plus any
+  structure entry confirmation: `267` candidates, `73` accepted, `+0.373R`, PF
+  `2.42`, DD `1.35%`.
+- Weak symbols under the middle/local bullish London setup: `NEARUSDT`,
+  `SOLUSDT`, `AVAXUSDT`. Do not exclude them permanently yet; validate with
+  walk-forward symbol promotion.
+
+Research notes from external literature:
+
+- Bitcoin activity and volatility are not uniform through the day; European and
+  US daytime hours show higher volume/volatility in published intraday Bitcoin
+  research.
+- Crypto intraday predictability can flip between momentum and reversal, and
+  large jumps change the pattern. This supports explicit shock/consolidation
+  state instead of fixed SMC rules.
+- Candlestick evidence is mixed, but Bitcoin-specific work found engulfing
+  fertile among classical patterns. Treat this as a confirmation feature, not a
+  standalone strategy.
+- Opening-range/breakout literature supports testing range breakout as a
+  mechanical setup, but crypto needs session-defined pseudo-opens because it
+  trades `24/7`.
+
 ## Validation Gates
 
 Minimum gates before strategy construction:
@@ -798,12 +881,17 @@ Next concrete work:
 
 1. Run rolling/discovery-holdout validation for the late-US short + London long
    module stack.
-2. UI-review London long forensic edge cases using
-   `backtesting/results/review_samples/crypto_london_long_forensics_review_samples.csv`.
-3. Promote Asia short only if it survives the same execution, portfolio, and
+2. UI-review London setup lab samples using
+   `backtesting/results/review_samples/crypto_london_setup_lab_review_samples.csv`,
+   especially `setup_confirm_loser` and `no_confirm_winner`.
+3. Run holdout validation for London setup variants:
+   - `middle_local_bull_any_entry_confirm`;
+   - `middle_local_bull_rejection_or_break`;
+   - `middle_local_bull_candle_confirm`.
+4. Promote Asia short only if it survives the same execution, portfolio, and
    holdout gates.
-4. Add walk-forward symbol filtering to session modules instead of static
+5. Add walk-forward symbol filtering to session modules instead of static
    symbol exclusions.
-5. Add trade-frequency, overlap/correlation, and drawdown controls before
+6. Add trade-frequency, overlap/correlation, and drawdown controls before
    judging returns.
-6. Add multi-asset refresh for FX/metals/indices before comparing asset classes.
+7. Add multi-asset refresh for FX/metals/indices before comparing asset classes.
