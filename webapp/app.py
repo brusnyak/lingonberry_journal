@@ -2705,6 +2705,10 @@ def api_review_ict_events():
                 label_bits.append(str(row.get("entry_model")))
             if "management_model" in row and pd.notna(row.get("management_model")):
                 label_bits.append(str(row.get("management_model")))
+            if "rolling_fail_reason" in row and pd.notna(row.get("rolling_fail_reason")):
+                label_bits.append(str(row.get("rolling_fail_reason")))
+            if "notes_hint" in row and pd.notna(row.get("notes_hint")):
+                label_bits.append(str(row.get("notes_hint")))
             trades_json.append(
                 {
                     "id": idx + 1,

@@ -356,6 +356,24 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | punitive_failed_loser | 12 | 7 | -1.657 | -2.424 |
 | target_too_short_winner | 12 | 8 | 1.472 | 0.718 |
 
+## Concentration
+| dimension | value | events | total_r | share_of_total_r | avg_r | profit_factor | win_rate |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| session_utc | ny | 28 | 9.101 | 0.397 | 0.325 | 2.074 | 0.643 |
+| session_utc | late_us | 58 | 7.826 | 0.342 | 0.135 | 1.327 | 0.586 |
+| session_utc | london | 13 | 5.984 | 0.261 | 0.460 | 3.388 | 0.692 |
+| setup_name | ny_long_neutral_reversal_ce | 28 | 9.101 | 0.397 | 0.325 | 2.074 | 0.643 |
+| setup_name | late_us_short_bull_flush_ce | 58 | 7.826 | 0.342 | 0.135 | 1.327 | 0.586 |
+| setup_name | london_long_middle_local_retest | 13 | 5.984 | 0.261 | 0.460 | 3.388 | 0.692 |
+| symbol | WLDUSDT | 7 | 5.506 | 0.240 | 0.787 | 10.142 | 0.714 |
+| symbol | XRPUSDT | 11 | 4.406 | 0.192 | 0.401 | 2.237 | 0.727 |
+| symbol | ETHUSDT | 13 | 4.077 | 0.178 | 0.314 | 1.786 | 0.769 |
+| symbol | LINKUSDT | 7 | 2.880 | 0.126 | 0.411 | 3.228 | 0.714 |
+| symbol | 1000PEPEUSDT | 3 | 2.852 | 0.124 | 0.951 | inf | 1.000 |
+| symbol | AAVEUSDT | 10 | 2.360 | 0.103 | 0.236 | 1.848 | 0.400 |
+| symbol | DOGEUSDT | 9 | 2.099 | 0.092 | 0.233 | 1.646 | 0.556 |
+| symbol | NEARUSDT | 8 | 1.783 | 0.078 | 0.223 | 1.904 | 0.625 |
+
 ## Frequency By Symbol
 | symbol | events | events_per_day | events_per_week | avg_r | profit_factor | win_rate | median_duration_h | median_mfe_r | p75_mfe_r | median_mae_r | strict_events |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -415,3 +433,4 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 - Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.
 - Rolling validation is the promotion gate; aggregate 60d performance is not enough.
 - Review packet targets failed rolling windows and clean winners; it is not a random sample.
+- Concentration is measured on strict candidates with conservative risk under punitive costs.

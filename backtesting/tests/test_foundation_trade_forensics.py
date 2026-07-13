@@ -6,6 +6,7 @@ from backtesting.crypto.foundation_trade_forensics import (
     apply_cost_stress,
     build_foundation_review_packet,
     diagnose_rolling_failures,
+    evaluate_contribution_concentration,
     evaluate_extreme_config_matrix,
     evaluate_rolling_validation,
     ForensicsRunConfig,
@@ -178,3 +179,28 @@ def test_failure_diagnostics_and_review_packet_use_existing_review_schema():
     assert {"feature", "failed_avg_r", "passed_avg_r"} <= set(diagnostics.columns)
     assert {"ts", "predictor", "review_bucket", "notes_hint"} <= set(packet.columns)
     assert "punitive_failed_loser" in set(packet["review_bucket"])
+
+
+def test_contribution_concentration_reports_symbol_and_setup_share():
+    ts = pd.date_range("2026-01-01", periods=6, freq="1h", tz="UTC")
+    events = pd.DataFrame({
+        "exchange": ["binance"] * 6,
+        "symbol": ["BTCUSDT", "ETHUSDT", "BTCUSDT", "ETHUSDT", "SOLUSDT", "SOLUSDT"],
+        "entry_ts": ts,
+        "exit_ts": ts + pd.Timedelta(hours=1),
+        "bars_to_exit": [4] * 6,
+        "entry": [100.0] * 6,
+        "risk_price": [1.0] * 6,
+        "net_r": [1.5, 1.0, -0.5, 2.0, -1.0, 1.25],
+        "setup_name": ["ny_long_neutral_reversal_ce"] * 6,
+        "mtf_mode": ["range_or_transition"] * 6,
+        "entry_hour_utc": [13] * 6,
+        "session_utc": ["ny"] * 6,
+        "shock_alignment": ["no_shock"] * 6,
+    })
+
+    concentration = evaluate_contribution_concentration(events)
+
+    assert not concentration.empty
+    assert {"symbol", "setup_name", "session_utc"} <= set(concentration["dimension"])
+    assert "share_of_total_r" in concentration.columns

@@ -57,6 +57,7 @@ def run_foundation_trade_forensics(
     rolling_trades = collect_rolling_window_trades(events, rolling, cfg)
     failure_diagnostics = diagnose_rolling_failures(rolling_trades)
     review_packet = build_foundation_review_packet(rolling_trades)
+    contribution = evaluate_contribution_concentration(events)
     by_symbol = summarize_by_symbol(events)
     by_setup = summarize(events, ["setup_name", "mtf_mode"])
     management = compare_management_variants(journal)
@@ -71,10 +72,11 @@ def run_foundation_trade_forensics(
     rolling_trades.to_csv(output_dir / "foundation_rolling_window_trades.csv", index=False)
     failure_diagnostics.to_csv(output_dir / "foundation_failure_diagnostics.csv", index=False)
     review_packet.to_csv(output_dir / "foundation_review_packet.csv", index=False)
+    contribution.to_csv(output_dir / "foundation_contribution_concentration.csv", index=False)
     by_symbol.to_csv(output_dir / "foundation_frequency_by_symbol.csv", index=False)
     by_setup.to_csv(output_dir / "foundation_summary_by_setup.csv", index=False)
     management.to_csv(output_dir / "foundation_management_comparison.csv", index=False)
-    _write_report(events, rules, stress, extreme, rolling_summary, failure_diagnostics, review_packet, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
+    _write_report(events, rules, stress, extreme, rolling_summary, failure_diagnostics, review_packet, contribution, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
     return {
         "events": events,
         "rules": rules,
@@ -85,6 +87,7 @@ def run_foundation_trade_forensics(
         "rolling_trades": rolling_trades,
         "failure_diagnostics": failure_diagnostics,
         "review_packet": review_packet,
+        "contribution": contribution,
         "by_symbol": by_symbol,
         "by_setup": by_setup,
         "management": management,
@@ -773,6 +776,50 @@ def _review_key_series(trades: pd.DataFrame) -> pd.Series:
     return trades["exchange"].astype(str) + "|" + trades["symbol"].astype(str) + "|" + entry_ts + "|" + trades["entry"].astype(str)
 
 
+def evaluate_contribution_concentration(events: pd.DataFrame) -> pd.DataFrame:
+    """Measure whether strict candidate returns depend on one symbol/setup/session."""
+    if events.empty:
+        return pd.DataFrame()
+    masks = rule_masks(events)
+    strict = events[masks.get("strict_candidates", pd.Series(False, index=events.index)).fillna(False)].copy()
+    if strict.empty:
+        return pd.DataFrame()
+    stressed = apply_cost_stress(strict, fee_round_trip_bps=20.0, slippage_side_bps=10.0)
+    accepted, _portfolio = simulate_portfolio(
+        stressed,
+        PortfolioRiskConfig(
+            risk_per_trade_pct=0.0015,
+            max_open_trades=4,
+            max_open_per_symbol=1,
+            daily_loss_limit_pct=0.0035,
+            tf_minutes=15,
+        ),
+    )
+    if accepted.empty:
+        return pd.DataFrame()
+    total_r = float(pd.to_numeric(accepted["net_r"], errors="coerce").sum())
+    rows: list[dict] = []
+    for dim in ["symbol", "setup_name", "session_utc", "mtf_mode", "entry_hour_utc"]:
+        if dim not in accepted.columns:
+            continue
+        for value, group in accepted.groupby(dim, dropna=False):
+            net = pd.to_numeric(group["net_r"], errors="coerce")
+            contribution_r = float(net.sum())
+            rows.append({
+                "dimension": dim,
+                "value": value,
+                "events": int(len(group)),
+                "total_r": contribution_r,
+                "share_of_total_r": float(contribution_r / total_r) if total_r else 0.0,
+                "avg_r": float(net.mean()) if len(net) else 0.0,
+                "profit_factor": profit_factor(net),
+                "win_rate": float((net > 0).mean()) if len(net) else 0.0,
+            })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["dimension", "total_r"], ascending=[True, False]).reset_index(drop=True)
+
+
 def _rolling_gate(portfolio: dict, scenario: str, window_days: int) -> tuple[bool, str]:
     accepted = int(portfolio.get("accepted", 0))
     min_trades = 8 if window_days == 14 else 15 if window_days == 30 else 20
@@ -1043,6 +1090,7 @@ def _write_report(
     rolling_summary: pd.DataFrame,
     failure_diagnostics: pd.DataFrame,
     review_packet: pd.DataFrame,
+    contribution: pd.DataFrame,
     by_symbol: pd.DataFrame,
     by_setup: pd.DataFrame,
     management: pd.DataFrame,
@@ -1080,6 +1128,9 @@ def _write_report(
         "## Review Packet",
         *_markdown_table(_format_report_table(_review_packet_summary(review_packet))),
         "",
+        "## Concentration",
+        *_markdown_table(_format_report_table(_contribution_report_slice(contribution))),
+        "",
         "## Frequency By Symbol",
         *_markdown_table(_format_report_table(by_symbol.head(20))),
         "",
@@ -1098,6 +1149,7 @@ def _write_report(
         "- Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.",
         "- Rolling validation is the promotion gate; aggregate 60d performance is not enough.",
         "- Review packet targets failed rolling windows and clean winners; it is not a random sample.",
+        "- Concentration is measured on strict candidates with conservative risk under punitive costs.",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -1225,6 +1277,23 @@ def _review_packet_summary(review_packet: pd.DataFrame) -> pd.DataFrame:
             "worst_outcome_r": float(pd.to_numeric(group["outcome_1.5r"], errors="coerce").min()),
         })
     return pd.DataFrame(rows).sort_values(["review_bucket"]).reset_index(drop=True)
+
+
+def _contribution_report_slice(contribution: pd.DataFrame) -> pd.DataFrame:
+    if contribution.empty:
+        return contribution
+    keep = contribution[contribution["dimension"].isin(["symbol", "setup_name", "session_utc"])].copy()
+    cols = [
+        "dimension",
+        "value",
+        "events",
+        "total_r",
+        "share_of_total_r",
+        "avg_r",
+        "profit_factor",
+        "win_rate",
+    ]
+    return keep[cols].sort_values(["dimension", "total_r"], ascending=[True, False]).groupby("dimension").head(8).reset_index(drop=True)
 
 
 def _format_report_table(df: pd.DataFrame) -> pd.DataFrame:

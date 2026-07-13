@@ -46,7 +46,7 @@ A strategy is deployment-ready only after it passes all gates below. Good aggreg
 | Extreme config stress | Partial pass | `prop_strict` survives recent 30d and 60d stress best, but first30d still fails punitive/nightmare. |
 | Worst-window control | Partial | Rolling max DD stays < `2%` in tested strict windows, but this is still backtest-only. |
 | Daily loss | Partial pass | `conservative` lowers rolling DD materially; live fill-based enforcement still missing. |
-| Concentration | Unknown | Needs contribution report after walk-forward. |
+| Concentration | Partial pass | Conservative punitive contribution: top symbol WLD `24.0%`, XRP `19.2%`, ETH `17.8%`; no symbol above `25%`. Setup concentration still intentional but high. |
 | Frequency | Partial | Latest 30d strict: `2.94/day` basket, `1.47/symbol/week`; first30d weaker. |
 | UI review | Ready / not reviewed | De-duplicated packet exists at `foundation_review_packet.csv`; manual review not done. |
 | Paper run | Not done | No live/demo execution log. |
