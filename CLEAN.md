@@ -3253,3 +3253,69 @@ SL/TP (existing PropFirmStructureV1 fields, min_rr=1.5) -- validated on 4/6 pair
 (ETH, SOL, XRP, BNB) via synthetic gate (Phase 15), null test (Phase 20), and now
 rolling stability (this phase). BTC and DOGE consistently show no edge (50th
 percentile, twice). Next layer (consolidation) not yet started, per plan.
+
+## Phase 24 -- BTC/DOGE gap is not a direction problem (verified); sweep-confirmation filter added and tested
+
+User's instinct, checked directly: "market structure/direction shouldn't work on some
+symbols and not others -- weird given BTC/ETH correlation." Verified with real numbers.
+
+**BTC and ETH's direction calls are nearly identical.** 240m structure+EMA direction
+signal: when both give a non-neutral call, they agree **99.6% of the time** (n=746),
+consistent with their 0.85 raw-return correlation. This proves the Phase 20 BTC/DOGE
+null-test failure is **not a direction-signal problem** -- the direction layer treats
+correlated assets consistently, exactly as it should. The gap has to be downstream,
+most likely in how the structural SL/TP sizing interacts with each asset's specific
+swing amplitude/volatility, not in the structure/direction call itself.
+
+**Researched BOS/ChoCH/sweep properly** (practitioner sources only --
+[fluxcharts](https://www.fluxcharts.com/articles/break-of-structure-bos-explained),
+[chartinglens](https://chartinglens.com/blog/liquidity-sweeps-trading-guide) -- no
+peer-reviewed evidence found, flagged as such). Definitions: BOS = break WITH the
+trend (continuation), ChoCH = first break AGAINST the trend (reversal warning),
+liquidity sweep = brief wick past a level that closes back inside (stop hunt, no
+real break). Cross-checked against `features/structure.py`'s actual regime logic:
+**BOS/ChoCH are already implicit** -- `regime` flips to bull/bear via exactly a
+BOS-shaped event (close breaks the last swing high/low) and resets to neutral via
+exactly a ChoCH-shaped event (close breaks the last higher-low/lower-high). The one
+genuinely unused signal already computed (and tested) but never consumed by the
+cascade: liquidity sweep (`sweep_high`/`sweep_low`).
+
+**Built and tested**: `sweep_preceded()` + `require_sweep` on
+`evaluate_real_sltp_series()`/`null_test_real_sltp()` -- splits cascade entries into
+sweep-confirmed vs not, same real structural SL/TP, same null-test discipline. 3 new
+tests, 384 passing. Numbers below.
+
+**Result, full cascade (global+local+mini), 15-seed null test, all 6 pairs:**
+
+| Symbol | Baseline pctile | Sweep-confirmed pctile | No-sweep pctile | Sweep n / No-sweep n |
+|---|---|---|---|---|
+| BTCUSDT | 46.7 | 46.7 | 66.7 | 743 / 396 |
+| ETHUSDT | 100.0 | 100.0 | 86.7 | 820 / 395 |
+| SOLUSDT | 93.3 | 80.0 | 100.0 | 822 / 467 |
+| XRPUSDT | 100.0 | 93.3 | 100.0 | 878 / 482 |
+| DOGEUSDT | 46.7 | 66.7 | 53.3 | 773 / 463 |
+| BNBUSDT | 93.3 | 86.7 | 93.3 | 740 / 433 |
+
+**Honest negative result: sweep confirmation does not reliably help, and does not fix
+BTC specifically.** BTC's sweep-confirmed subset scores *exactly* the same percentile
+as the unfiltered baseline (46.7) -- no improvement at all. Across all 6 pairs, the
+sweep-confirmed subset is a wash against baseline (roughly equal, sometimes worse:
+SOL drops from 93.3 to 80.0 when restricted to sweep-confirmed entries). DOGE shows a
+modest bump (46.7 -> 66.7) but DOGE has never shown a consistent edge in any test this
+project has run, and at 15 seeds the percentile granularity is coarse (6.67% steps) --
+not strong enough evidence to trust on its own.
+
+**Conclusion**: liquidity-sweep confirmation was a reasonable, well-motivated
+hypothesis (classic ICT "stop hunt then reverse"), properly built (reused existing
+tested fields, not new detection logic) and properly tested (same null-test rigor as
+Phase 20) -- and it doesn't hold up. Rules out entry-timing/confirmation quality as
+the explanation for BTC/DOGE's gap. Combined with Phase 24's correlation finding
+(BTC/ETH direction calls agree 99.6% of the time), this narrows the real explanation
+for BTC/DOGE's null-test failure to the SL/TP sizing mechanics specifically (how
+structural stop/target distances play out relative to each asset's typical price
+action), not the direction or entry-confirmation layer -- consistent with the
+foundation (structure + direction) being genuinely universal across correlated
+assets, exactly as it should be. Next candidate investigation: compare structural
+stop/target distance (as % of price, or as multiple of ATR) across all 6 pairs to see
+if BTC/DOGE's swing geometry is systematically different in a way that explains the
+R:R mismatch -- not yet done.
