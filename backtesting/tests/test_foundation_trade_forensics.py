@@ -4,6 +4,8 @@ import pandas as pd
 
 from backtesting.crypto.foundation_trade_forensics import (
     apply_cost_stress,
+    build_foundation_review_packet,
+    diagnose_rolling_failures,
     evaluate_extreme_config_matrix,
     evaluate_rolling_validation,
     ForensicsRunConfig,
@@ -131,3 +133,48 @@ def test_rolling_validation_reports_windows_and_gate_status():
     assert {14, 30}.issubset(set(rows["window_days"]))
     assert {"base", "prop_strict"}.issubset(set(rows["config"]))
     assert rows["passed_gate"].isin([True, False]).all()
+
+
+def test_failure_diagnostics_and_review_packet_use_existing_review_schema():
+    ts = pd.date_range("2026-01-01", periods=6, freq="1h", tz="UTC")
+    trades = pd.DataFrame({
+        "exchange": ["binance"] * 6,
+        "symbol": ["BTCUSDT", "BTCUSDT", "ETHUSDT", "ETHUSDT", "SOLUSDT", "SOLUSDT"],
+        "tf": ["15"] * 6,
+        "entry_ts": ts,
+        "entry": [100.0] * 6,
+        "stop": [99.0] * 6,
+        "target": [102.0] * 6,
+        "risk_price": [1.0] * 6,
+        "net_r": [-1.0, 1.2, -0.5, 1.5, -0.2, 2.0],
+        "mfe_r": [0.2, 2.2, 0.4, 3.4, 0.8, 3.2],
+        "mae_r": [-1.0, -0.8, -0.6, -0.2, -0.9, -0.1],
+        "hit_target": [False, True, False, True, False, True],
+        "exit_reason": ["stop", "target", "expiry", "target", "expiry", "target"],
+        "setup_name": ["ny_long_neutral_reversal_ce"] * 6,
+        "mtf_mode": ["range_or_transition"] * 6,
+        "entry_model": ["ce_retest"] * 6,
+        "target_model": ["fixed_2r"] * 6,
+        "management_model": ["hold_target_expiry"] * 6,
+        "scenario": ["punitive_40bps"] * 3 + ["baseline"] * 3,
+        "window_days": [30] * 6,
+        "window_id": [1] * 3 + [2] * 3,
+        "rolling_passed_gate": [False] * 3 + [True] * 3,
+        "rolling_fail_reason": ["negative_return"] * 3 + ["pass"] * 3,
+        "rolling_window_return_pct": [-0.01] * 3 + [0.01] * 3,
+        "rolling_window_pf": [0.8] * 3 + [2.0] * 3,
+        "rsi_bucket": ["neutral_mid"] * 6,
+        "atr_pct_bucket": ["normal"] * 6,
+        "volume_bucket": ["normal"] * 6,
+        "ema_21_55_state": ["mixed"] * 6,
+        "compression_state": ["expanded"] * 6,
+        "shock_alignment": ["opposing_shock"] * 6,
+    })
+
+    diagnostics = diagnose_rolling_failures(trades)
+    packet = build_foundation_review_packet(trades, per_bucket=2)
+
+    assert not diagnostics.empty
+    assert {"feature", "failed_avg_r", "passed_avg_r"} <= set(diagnostics.columns)
+    assert {"ts", "predictor", "review_bucket", "notes_hint"} <= set(packet.columns)
+    assert "punitive_failed_loser" in set(packet["review_bucket"])

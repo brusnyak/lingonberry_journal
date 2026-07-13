@@ -380,3 +380,42 @@ Blunt interpretation:
   returns, but fails more rolling gates because daily/max DD is higher.
 - Next step is not more aggregate backtesting. It is a review packet focused on
   the failing punitive/nightmare windows and the low-return baseline windows.
+
+## 2026-07-13 Conservative Risk Update
+
+Expanded rolling validation from `base`/`prop_strict` to include:
+
+- `micro_risk_tight`: `0.10%` risk, max `3` open, `0.25%` daily cap.
+- `conservative`: `0.15%` risk, max `4` open, `0.35%` daily cap.
+
+Strict candidate 30d rolling:
+
+| Scenario | Config | Pass Rate | Median Return | Worst Return | Worst DD | Median PF |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | `base` | 100.0% | +4.41% | +1.08% | 0.76% | 3.24 |
+| baseline | `conservative` | 100.0% | +3.14% | +0.81% | 0.57% | 3.37 |
+| high 22 bps | `base` | 80.0% | +3.14% | +0.26% | 0.92% | 2.31 |
+| high 22 bps | `conservative` | 80.0% | +2.23% | +0.19% | 0.69% | 2.37 |
+| punitive 40 bps | `base` | 40.0% | +2.10% | -0.41% | 1.32% | 1.74 |
+| punitive 40 bps | `conservative` | 80.0% | +1.72% | -0.09% | 0.79% | 1.89 |
+| nightmare 60 bps | `micro_risk_tight` | 80.0% | +0.40% | -0.47% | 1.03% | 1.22 |
+
+Strict candidate 45d punitive:
+
+| Config | Pass Rate | Median Return | Worst Return | Worst DD | Median PF |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `conservative` | 100.0% | +2.35% | +1.08% | 0.79% | 1.68 |
+| `micro_risk_tight` | 100.0% | +1.27% | +0.41% | 0.74% | 1.55 |
+| `base` | 0.0% | +2.60% | +1.28% | 1.32% | 1.47 |
+| `prop_strict` | 0.0% | +3.54% | +1.41% | 1.32% | 1.61 |
+
+Blunt interpretation:
+
+- The current problem is more risk-model fragility than signal collapse.
+- `conservative` is now the best practical research candidate. It keeps useful
+  returns and fixes most punitive rolling-gate failures.
+- `micro_risk_tight` is the only profile that survives more nightmare windows,
+  but the returns are too small to be the main candidate.
+- `prop_strict` should be demoted to "return stress only"; it is not a
+  validation/deployment candidate.
+- The next UI review packet is ready and de-duplicated: `foundation_review_packet.csv`.

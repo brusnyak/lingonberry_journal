@@ -11,7 +11,7 @@ Status: research candidate only. Not deployment-ready.
 - Signal interval: `15m`.
 - Structure context: `15m / 60m / 240m`.
 - Concrete execution currently tested: `fixed_2r` + `hold_target_expiry`.
-- Best current validation config: `base` at `0.20%` risk, max `6` open trades, max `1` per symbol, `0.50%` daily loss cap.
+- Best current validation config: `conservative` at `0.15%` risk, max `4` open trades, max `1` per symbol, `0.35%` daily loss cap.
 - Best current return config: `prop_strict` at `0.25%` risk, max `4` open, max `1` per symbol, `0.40%` daily loss cap. It is not cleaner for deployment because rolling daily/max DD gates fail more often.
 
 ## Deployment-Ready Definition
@@ -41,14 +41,14 @@ A strategy is deployment-ready only after it passes all gates below. Good aggreg
 | Data freshness | Pass for crypto | Binance/Bybit OHLCV and structure are < `1` day stale. |
 | Causal features | Pass in tests | Structure lookup tests cover `known_after_ts`. |
 | Physical de-duplication | Pass | `foundation_trade_forensics` collapses physical entries. |
-| Walk-forward | Partial fail | Rolling validation exists. `base` strict passes 30d baseline 5/5 and high 4/5, but punitive only 2/5 and nightmare 0/5. |
-| Friction stress | Partial pass | 60d strict survives `40bps`, but first30d and rolling punitive windows are unstable. |
+| Walk-forward | Partial pass | `conservative` strict passes 30d baseline 5/5, high 4/5, punitive 4/5; 45d punitive 3/3. Nightmare still fails at useful return levels. |
+| Friction stress | Partial pass | Conservative risk fixes most `40bps` rolling failures; `60bps` remains too harsh for deployment sizing. |
 | Extreme config stress | Partial pass | `prop_strict` survives recent 30d and 60d stress best, but first30d still fails punitive/nightmare. |
 | Worst-window control | Partial | Rolling max DD stays < `2%` in tested strict windows, but this is still backtest-only. |
-| Daily loss | Partial fail | `prop_strict` fails more rolling gates because daily/max DD is higher; live fill-based enforcement still missing. |
+| Daily loss | Partial pass | `conservative` lowers rolling DD materially; live fill-based enforcement still missing. |
 | Concentration | Unknown | Needs contribution report after walk-forward. |
 | Frequency | Partial | Latest 30d strict: `2.94/day` basket, `1.47/symbol/week`; first30d weaker. |
-| UI review | Not done | No review packet loaded yet. |
+| UI review | Ready / not reviewed | De-duplicated packet exists at `foundation_review_packet.csv`; manual review not done. |
 | Paper run | Not done | No live/demo execution log. |
 | Kill switch | Not done | Research harness only. |
 
@@ -56,23 +56,23 @@ A strategy is deployment-ready only after it passes all gates below. Good aggreg
 
 Do not deploy yet.
 
-The current strict crypto basket is good enough to continue. It is not stable enough yet because rolling punitive and nightmare friction fail too often. The right next work is chart review of failure windows and regime conditioning, not adding another indicator gate.
+The current strict crypto basket is good enough to continue. Conservative risk gives decent rolling results under baseline, high, and punitive friction. It is still not deployment-ready because nightmare execution fails and the failure-window review has not been done.
 
-Changing risk and concurrency does not solve the weak-window problem. It only changes how much capital we lose or gain while the same signal regime works or fails.
+Changing risk did solve part of the gate problem. It did not solve signal quality under awful execution.
 
 ## Next Required Work
 
-1. Build review packet:
-   - best winners,
-   - worst losers,
-   - target-too-short winners,
+1. Review `foundation_review_packet.csv` in the UI:
+   - punitive failed losers,
+   - nightmare failed losers,
+   - low-return baseline windows,
    - high-MAE winners,
-   - first30d failures,
-   - failing punitive/nightmare rolling windows.
-2. Add regime/failure-window diagnosis:
+   - target-too-short winners,
+   - clean winners.
+2. Use the failure diagnostics to test one small gate only if chart review agrees:
    - trend vs range,
    - compression/expanded state,
    - shock alignment,
    - setup family contribution,
    - symbol concentration.
-3. Only after rolling punitive survival improves, run paper/demo for a week.
+3. Only after review confirms trade quality, run paper/demo at conservative risk for a week.

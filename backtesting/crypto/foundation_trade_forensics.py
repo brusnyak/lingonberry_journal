@@ -54,6 +54,9 @@ def run_foundation_trade_forensics(
     extreme = evaluate_extreme_config_matrix(events, cfg)
     rolling = evaluate_rolling_validation(events, cfg)
     rolling_summary = summarize_rolling_validation(rolling)
+    rolling_trades = collect_rolling_window_trades(events, rolling, cfg)
+    failure_diagnostics = diagnose_rolling_failures(rolling_trades)
+    review_packet = build_foundation_review_packet(rolling_trades)
     by_symbol = summarize_by_symbol(events)
     by_setup = summarize(events, ["setup_name", "mtf_mode"])
     management = compare_management_variants(journal)
@@ -65,10 +68,13 @@ def run_foundation_trade_forensics(
     extreme.to_csv(output_dir / "foundation_extreme_config_matrix.csv", index=False)
     rolling.to_csv(output_dir / "foundation_rolling_validation.csv", index=False)
     rolling_summary.to_csv(output_dir / "foundation_rolling_validation_summary.csv", index=False)
+    rolling_trades.to_csv(output_dir / "foundation_rolling_window_trades.csv", index=False)
+    failure_diagnostics.to_csv(output_dir / "foundation_failure_diagnostics.csv", index=False)
+    review_packet.to_csv(output_dir / "foundation_review_packet.csv", index=False)
     by_symbol.to_csv(output_dir / "foundation_frequency_by_symbol.csv", index=False)
     by_setup.to_csv(output_dir / "foundation_summary_by_setup.csv", index=False)
     management.to_csv(output_dir / "foundation_management_comparison.csv", index=False)
-    _write_report(events, rules, stress, extreme, rolling_summary, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
+    _write_report(events, rules, stress, extreme, rolling_summary, failure_diagnostics, review_packet, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
     return {
         "events": events,
         "rules": rules,
@@ -76,6 +82,9 @@ def run_foundation_trade_forensics(
         "extreme": extreme,
         "rolling": rolling,
         "rolling_summary": rolling_summary,
+        "rolling_trades": rolling_trades,
+        "failure_diagnostics": failure_diagnostics,
+        "review_packet": review_packet,
         "by_symbol": by_symbol,
         "by_setup": by_setup,
         "management": management,
@@ -426,6 +435,8 @@ def evaluate_rolling_validation(events: pd.DataFrame, cfg: ForensicsRunConfig) -
         ("nightmare_60bps", 30.0, 15.0),
     ]
     configs = [
+        ("micro_risk_tight", 0.001, 3, 1, 0.0025),
+        ("conservative", 0.0015, 4, 1, 0.0035),
         ("base", cfg.risk_per_trade_pct, cfg.max_open_trades, cfg.max_open_per_symbol, cfg.daily_loss_limit_pct),
         ("prop_strict", 0.0025, 4, 1, 0.0040),
     ]
@@ -511,6 +522,255 @@ def summarize_rolling_validation(rolling: pd.DataFrame) -> pd.DataFrame:
         ["pass_rate", "median_return_pct", "worst_return_pct"],
         ascending=[False, False, False],
     ).reset_index(drop=True)
+
+
+def collect_rolling_window_trades(events: pd.DataFrame, rolling: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame:
+    """Materialize accepted trades for the rolling validation rows worth diagnosing."""
+    if events.empty or rolling.empty:
+        return pd.DataFrame()
+    data = events.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True, errors="coerce")
+    data = data.dropna(subset=["entry_ts"]).sort_values("entry_ts").reset_index(drop=True)
+    focus = rolling[
+        (rolling["rule"] == "strict_candidates")
+        & (rolling["config"] == "base")
+        & (rolling["window_days"].isin([14, 30, 45]))
+        & (rolling["scenario"].isin(["baseline", "high_22bps", "punitive_40bps", "nightmare_60bps"]))
+    ].copy()
+    if focus.empty:
+        return pd.DataFrame()
+    scenario_costs = {
+        "baseline": (0.0, 0.0),
+        "high_22bps": (12.0, 5.0),
+        "punitive_40bps": (20.0, 10.0),
+        "nightmare_60bps": (30.0, 15.0),
+    }
+    risk_cfg = PortfolioRiskConfig(
+        risk_per_trade_pct=cfg.risk_per_trade_pct,
+        max_open_trades=cfg.max_open_trades,
+        max_open_per_symbol=cfg.max_open_per_symbol,
+        daily_loss_limit_pct=cfg.daily_loss_limit_pct,
+        tf_minutes=15,
+    )
+    rows: list[pd.DataFrame] = []
+    for row in focus.itertuples(index=False):
+        start = pd.Timestamp(row.window_start)
+        end = pd.Timestamp(row.window_end)
+        subset = data[(data["entry_ts"] >= start) & (data["entry_ts"] < end)].copy()
+        if subset.empty:
+            continue
+        mask = rule_masks(subset).get("strict_candidates", pd.Series(False, index=subset.index))
+        selected = subset[mask.fillna(False)].copy()
+        fee, slip = scenario_costs.get(str(row.scenario), (0.0, 0.0))
+        stressed = apply_cost_stress(selected, fee_round_trip_bps=fee, slippage_side_bps=slip)
+        accepted, _portfolio = simulate_portfolio(stressed, risk_cfg)
+        if accepted.empty:
+            continue
+        accepted = accepted.copy()
+        accepted["window_days"] = int(row.window_days)
+        accepted["window_id"] = int(row.window_id)
+        accepted["window_start"] = start
+        accepted["window_end"] = end
+        accepted["scenario"] = str(row.scenario)
+        accepted["rolling_passed_gate"] = bool(row.passed_gate)
+        accepted["rolling_fail_reason"] = str(row.fail_reason)
+        accepted["rolling_window_return_pct"] = float(row.gross_return_pct)
+        accepted["rolling_window_pf"] = float(row.profit_factor)
+        rows.append(accepted)
+    if not rows:
+        return pd.DataFrame()
+    out = pd.concat(rows, ignore_index=True)
+    return out.sort_values(["window_days", "scenario", "window_start", "entry_ts", "symbol"]).reset_index(drop=True)
+
+
+def diagnose_rolling_failures(rolling_trades: pd.DataFrame) -> pd.DataFrame:
+    if rolling_trades.empty:
+        return pd.DataFrame()
+    dims = [
+        "symbol",
+        "setup_name",
+        "mtf_mode",
+        "entry_hour_utc",
+        "ctx_240_regime",
+        "global_ema_state",
+        "middle_ema_state",
+        "local_ema_state",
+        "compression_state",
+        "shock_alignment",
+        "rsi_bucket",
+        "atr_pct_bucket",
+        "volume_bucket",
+        "exit_reason",
+    ]
+    rows: list[dict] = []
+    for scenario in ["high_22bps", "punitive_40bps", "nightmare_60bps"]:
+        data = rolling_trades[rolling_trades["scenario"] == scenario].copy()
+        if data.empty:
+            continue
+        for window_days in [14, 30, 45]:
+            scoped = data[data["window_days"] == window_days].copy()
+            if scoped.empty:
+                continue
+            for dim in dims:
+                if dim not in scoped.columns:
+                    continue
+                values = scoped[dim].fillna("unknown").astype(str)
+                scoped = scoped.assign(_dim_value=values)
+                for value, group in scoped.groupby("_dim_value", dropna=False):
+                    failed = group[~group["rolling_passed_gate"].astype(bool)]
+                    passed = group[group["rolling_passed_gate"].astype(bool)]
+                    if len(group) < 3:
+                        continue
+                    failed_net = pd.to_numeric(failed["net_r"], errors="coerce")
+                    passed_net = pd.to_numeric(passed["net_r"], errors="coerce")
+                    all_net = pd.to_numeric(group["net_r"], errors="coerce")
+                    rows.append({
+                        "scenario": scenario,
+                        "window_days": window_days,
+                        "feature": dim,
+                        "value": value,
+                        "events": int(len(group)),
+                        "failed_events": int(len(failed)),
+                        "passed_events": int(len(passed)),
+                        "failed_window_share": float(len(failed) / len(group)),
+                        "avg_r": float(all_net.mean()) if len(all_net) else 0.0,
+                        "failed_avg_r": float(failed_net.mean()) if len(failed_net) else 0.0,
+                        "passed_avg_r": float(passed_net.mean()) if len(passed_net) else 0.0,
+                        "failed_pf": profit_factor(failed_net),
+                        "passed_pf": profit_factor(passed_net),
+                        "win_rate": float((all_net > 0).mean()) if len(all_net) else 0.0,
+                        "failed_win_rate": float((failed_net > 0).mean()) if len(failed_net) else 0.0,
+                        "passed_win_rate": float((passed_net > 0).mean()) if len(passed_net) else 0.0,
+                    })
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows)
+    return out.sort_values(
+        ["scenario", "window_days", "failed_window_share", "failed_events", "failed_avg_r"],
+        ascending=[True, True, False, False, True],
+    ).reset_index(drop=True)
+
+
+def build_foundation_review_packet(rolling_trades: pd.DataFrame, per_bucket: int = 12) -> pd.DataFrame:
+    """Export targeted rolling-failure cases in the existing review UI schema."""
+    if rolling_trades.empty:
+        return pd.DataFrame()
+    data = rolling_trades.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True, errors="coerce")
+    data["net_r"] = pd.to_numeric(data["net_r"], errors="coerce")
+    data["mfe_r"] = pd.to_numeric(data.get("mfe_r"), errors="coerce")
+    data["mae_r"] = pd.to_numeric(data.get("mae_r"), errors="coerce")
+    post16 = pd.to_numeric(data["post_16_fav_r"], errors="coerce") if "post_16_fav_r" in data else pd.Series(np.nan, index=data.index)
+    samples: list[pd.DataFrame] = []
+    specs = [
+        ("punitive_failed_loser", data[(data["scenario"] == "punitive_40bps") & (~data["rolling_passed_gate"].astype(bool)) & (data["net_r"] <= 0)].sort_values("net_r")),
+        ("nightmare_failed_loser", data[(data["scenario"] == "nightmare_60bps") & (~data["rolling_passed_gate"].astype(bool)) & (data["net_r"] <= 0)].sort_values("net_r")),
+        ("low_return_baseline", data[(data["scenario"] == "baseline") & (data["rolling_window_return_pct"] < 0.015)].sort_values(["rolling_window_return_pct", "net_r"])),
+        ("high_mae_winner", data[(data["net_r"] > 0) & (data["mae_r"] <= -0.75)].sort_values("mae_r")),
+        ("target_too_short_winner", data[(data["net_r"] > 0) & (post16 >= 1.0)].assign(post_16_fav_r=post16).sort_values("post_16_fav_r", ascending=False)),
+        ("clean_winner", data[(data["scenario"] == "baseline") & (data["rolling_passed_gate"].astype(bool)) & (data["net_r"] > 0)].sort_values("net_r", ascending=False)),
+    ]
+    seen: set[str] = set()
+    for bucket, group in specs:
+        if group.empty:
+            continue
+        take = group.copy()
+        take["_review_key"] = _review_key_series(take)
+        take = take.drop_duplicates("_review_key", keep="first")
+        take = take[~take["_review_key"].isin(seen)].head(per_bucket).copy()
+        seen.update(take["_review_key"].astype(str))
+        if take.empty:
+            continue
+        take["review_bucket"] = bucket
+        samples.append(take.drop(columns=["_review_key"], errors="ignore"))
+    if not samples:
+        return pd.DataFrame()
+    return _foundation_to_review_schema(pd.concat(samples, ignore_index=True))
+
+
+def _foundation_to_review_schema(trades: pd.DataFrame) -> pd.DataFrame:
+    out = trades.copy()
+    out["ts"] = pd.to_datetime(out["entry_ts"], utc=True)
+    out["predictor"] = "crypto_foundation_rolling"
+    out["session"] = out.get("session_utc", "")
+    out["direction"] = out.get("direction", "short")
+    out["entry_price"] = out["entry"].astype(float)
+    out["sl"] = out["stop"].astype(float)
+    out["tp1"] = out["target"].astype(float)
+    out["risk_price"] = out["risk_price"].astype(float)
+    out["outcome_1.5r"] = out["net_r"].astype(float)
+    out["hit_1.5r"] = out["hit_target"].astype(bool)
+    out["notes_hint"] = out.apply(_foundation_notes_hint, axis=1)
+    cols = [
+        "ts",
+        "symbol",
+        "exchange",
+        "tf",
+        "predictor",
+        "session",
+        "direction",
+        "entry_price",
+        "sl",
+        "tp1",
+        "risk_price",
+        "outcome_1.5r",
+        "hit_1.5r",
+        "mfe_r",
+        "mae_r",
+        "exit_reason",
+        "review_bucket",
+        "setup_name",
+        "mtf_mode",
+        "entry_model",
+        "target_model",
+        "management_model",
+        "scenario",
+        "window_days",
+        "rolling_fail_reason",
+        "rolling_window_return_pct",
+        "rsi_bucket",
+        "atr_pct_bucket",
+        "volume_bucket",
+        "ema_21_55_state",
+        "compression_state",
+        "shock_alignment",
+        "notes_hint",
+    ]
+    for col in cols:
+        if col not in out.columns:
+            out[col] = np.nan
+    order = {
+        "punitive_failed_loser": 0,
+        "nightmare_failed_loser": 1,
+        "low_return_baseline": 2,
+        "high_mae_winner": 3,
+        "target_too_short_winner": 4,
+        "clean_winner": 5,
+    }
+    out["_bucket_order"] = out["review_bucket"].map(order).fillna(99)
+    return out.sort_values(["_bucket_order", "symbol", "ts"])[cols].reset_index(drop=True)
+
+
+def _foundation_notes_hint(row: pd.Series) -> str:
+    bucket = str(row.get("review_bucket", ""))
+    if bucket == "punitive_failed_loser":
+        return "Punitive-cost failed-window loser: decide if direction was wrong, entry was late, or stop/target too tight for fees."
+    if bucket == "nightmare_failed_loser":
+        return "Nightmare-cost failed-window loser: likely execution-fragile. Check if this trade should be gated out entirely."
+    if bucket == "low_return_baseline":
+        return "Low-return baseline window: find what made normal-cost edge weak here."
+    if bucket == "high_mae_winner":
+        return "High-MAE winner: direction eventually worked, but entry/stop may be weak."
+    if bucket == "target_too_short_winner":
+        return "Target-too-short winner: fixed 2R may leave continuation; check next liquidity target."
+    if bucket == "clean_winner":
+        return "Clean winner: extract what losing windows lacked."
+    return "Judge direction, entry confirmation, stop, target, management, and cost fragility."
+
+
+def _review_key_series(trades: pd.DataFrame) -> pd.Series:
+    entry_ts = pd.to_datetime(trades["entry_ts"], utc=True, errors="coerce").astype(str)
+    return trades["exchange"].astype(str) + "|" + trades["symbol"].astype(str) + "|" + entry_ts + "|" + trades["entry"].astype(str)
 
 
 def _rolling_gate(portfolio: dict, scenario: str, window_days: int) -> tuple[bool, str]:
@@ -781,6 +1041,8 @@ def _write_report(
     stress: pd.DataFrame,
     extreme: pd.DataFrame,
     rolling_summary: pd.DataFrame,
+    failure_diagnostics: pd.DataFrame,
+    review_packet: pd.DataFrame,
     by_symbol: pd.DataFrame,
     by_setup: pd.DataFrame,
     management: pd.DataFrame,
@@ -812,6 +1074,12 @@ def _write_report(
         "## Rolling Validation Summary",
         *_markdown_table(_format_report_table(_rolling_report_slice(rolling_summary))),
         "",
+        "## Rolling Failure Diagnostics",
+        *_markdown_table(_format_report_table(_failure_report_slice(failure_diagnostics))),
+        "",
+        "## Review Packet",
+        *_markdown_table(_format_report_table(_review_packet_summary(review_packet))),
+        "",
         "## Frequency By Symbol",
         *_markdown_table(_format_report_table(by_symbol.head(20))),
         "",
@@ -829,6 +1097,7 @@ def _write_report(
         "- Stress scenarios convert extra bps into R, so tight-stop trades are penalized harder.",
         "- Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.",
         "- Rolling validation is the promotion gate; aggregate 60d performance is not enough.",
+        "- Review packet targets failed rolling windows and clean winners; it is not a random sample.",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -891,7 +1160,7 @@ def _rolling_report_slice(rolling_summary: pd.DataFrame) -> pd.DataFrame:
     keep = rolling_summary[
         (rolling_summary["rule"].isin(["strict_candidates", "ny_13_range_reversal", "late_us_fade"]))
         & (rolling_summary["scenario"].isin(["baseline", "punitive_40bps", "nightmare_60bps"]))
-        & (rolling_summary["config"].isin(["base", "prop_strict"]))
+        & (rolling_summary["config"].isin(["micro_risk_tight", "conservative", "base", "prop_strict"]))
     ].copy()
     cols = [
         "window_days",
@@ -911,6 +1180,51 @@ def _rolling_report_slice(rolling_summary: pd.DataFrame) -> pd.DataFrame:
     return keep[cols].sort_values(
         ["window_days", "rule", "scenario", "config"]
     ).reset_index(drop=True)
+
+
+def _failure_report_slice(failure_diagnostics: pd.DataFrame) -> pd.DataFrame:
+    if failure_diagnostics.empty:
+        return failure_diagnostics
+    keep = failure_diagnostics[
+        (failure_diagnostics["scenario"].isin(["punitive_40bps", "nightmare_60bps"]))
+        & (failure_diagnostics["window_days"].isin([30, 45]))
+        & (failure_diagnostics["events"] >= 5)
+        & (failure_diagnostics["failed_events"] > 0)
+        & (failure_diagnostics["passed_events"] > 0)
+    ].copy()
+    cols = [
+        "scenario",
+        "window_days",
+        "feature",
+        "value",
+        "events",
+        "failed_events",
+        "failed_window_share",
+        "failed_avg_r",
+        "passed_avg_r",
+        "failed_pf",
+        "passed_pf",
+        "failed_win_rate",
+    ]
+    return keep[cols].sort_values(
+        ["failed_window_share", "failed_events", "failed_avg_r"],
+        ascending=[False, False, True],
+    ).head(20).reset_index(drop=True)
+
+
+def _review_packet_summary(review_packet: pd.DataFrame) -> pd.DataFrame:
+    if review_packet.empty:
+        return review_packet
+    rows = []
+    for bucket, group in review_packet.groupby("review_bucket", dropna=False):
+        rows.append({
+            "review_bucket": bucket,
+            "rows": int(len(group)),
+            "symbols": int(group["symbol"].nunique()),
+            "avg_outcome_r": float(pd.to_numeric(group["outcome_1.5r"], errors="coerce").mean()),
+            "worst_outcome_r": float(pd.to_numeric(group["outcome_1.5r"], errors="coerce").min()),
+        })
+    return pd.DataFrame(rows).sort_values(["review_bucket"]).reset_index(drop=True)
 
 
 def _format_report_table(df: pd.DataFrame) -> pd.DataFrame:
