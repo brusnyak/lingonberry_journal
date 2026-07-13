@@ -3110,3 +3110,20 @@ test) before being trusted, and this round it didn't pass.
 **Not committed as new code** -- ad hoc small test per user request, not promoted to a
 module. CLEAN.md-documented so the finding isn't lost, no repo changes to test/commit
 this round.
+
+## Phase 18 -- Cascade wired into review UI for manual visual verification (per user: visual review > statistical test for SL/TP correctness)
+
+Fixed typo'd webapp launch, then found and fixed an 11th occurrence of the exchange-
+only shallow-history bug: `/api/review/ict-events`' candle loader hardcoded
+`crypto_source="exchange"`, 404-ing any review whose signal timestamps fell outside
+the ~90-120d exchange-scoped window -- which the new cascade packet's full-year
+signals hit immediately. Fixed to `"merged"`.
+
+Built `mtf_cascade_review_export.py`: exports the global+local+mini cascade's signals
+(1963 rows, 6 pairs) as a review-UI CSV, reusing the same structural SL/target fields
+as Phase 17 (not a new mechanism). Added a "LOAD CASCADE (GLOBAL+LOCAL+MINI) REVIEW"
+button mirroring the existing foundation-review pattern. Verified live via browser:
+BTCUSDT 30m candles, entry/SL/TP levels, and structure overlay (HH/HL/LH/LL, ChoCH,
+BOS) render correctly -- ready for manual review, same workflow the user already
+trusts (used it to correctly spot-check the prior foundation-review packet).
+375 tests passing. No stops/targets touched.
