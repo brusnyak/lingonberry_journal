@@ -371,9 +371,38 @@ def walk_structural_outcome(
     return result
 
 
-def evaluate_real_sltp_series(bars: pd.DataFrame, structure: pd.DataFrame, combo: np.ndarray, min_rr: float = 1.5, horizon: int = 200) -> dict:
+def sweep_preceded(structure: pd.DataFrame, entry_i: int, direction: str, lookback_bars: int = 20) -> bool:
+    """True if a liquidity sweep in the reversal-supporting direction (sweep_low
+    for a long, sweep_high for a short -- price wicked past a swing level and
+    closed back inside it, the classic stop-hunt-then-reverse pattern) occurred
+    within `lookback_bars` before this entry. CLEAN.md Phase 24: sweep_high/
+    sweep_low are existing, already-tested fields (features/structure.py) --
+    this is a filter on top of them, not new detection logic."""
+    start = max(0, entry_i - lookback_bars)
+    window = structure.iloc[start:entry_i]
+    if window.empty:
+        return False
+    col = "sweep_low" if direction == "long" else "sweep_high"
+    if col not in window.columns:
+        return False
+    return bool(window[col].any())
+
+
+def evaluate_real_sltp_series(
+    bars: pd.DataFrame,
+    structure: pd.DataFrame,
+    combo: np.ndarray,
+    min_rr: float = 1.5,
+    horizon: int = 200,
+    *,
+    require_sweep: bool | None = None,
+    sweep_lookback: int = 20,
+) -> dict:
     """Same signal points as evaluate_direction_series, but real asymmetric
-    structural SL/TP instead of symmetric ATR R -- CLEAN.md Phase 17/20."""
+    structural SL/TP instead of symmetric ATR R -- CLEAN.md Phase 17/20.
+    require_sweep=True: only entries preceded by a liquidity sweep (Phase 24).
+    require_sweep=False: only entries NOT preceded by one (the control group).
+    require_sweep=None: no filter (all entries, the Phase 17/20 baseline)."""
     combo_s = pd.Series(combo)
     changed = combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"])
     r_multiples: list[float] = []
@@ -381,6 +410,10 @@ def evaluate_real_sltp_series(bars: pd.DataFrame, structure: pd.DataFrame, combo
         if i >= len(bars) - 1:
             continue
         direction = "long" if combo_s.iat[i] == "bull" else "short"
+        if require_sweep is not None:
+            has_sweep = sweep_preceded(structure, i, direction, sweep_lookback)
+            if has_sweep != require_sweep:
+                continue
         entry = float(bars["close"].iat[i])
         sl, tp = structural_stop_target(structure.iloc[i], direction, entry, min_rr)
         if not np.isfinite(sl):
@@ -410,17 +443,27 @@ def null_test_real_sltp(
     min_rr: float = 1.5,
     horizon: int = 200,
     n_seeds: int = 20,
+    require_sweep: bool | None = None,
+    sweep_lookback: int = 20,
 ) -> dict:
     """Randomize direction on the same signal timestamps, same real structural
     SL/TP mechanism -- tells apart a real directional edge from an R:R
     structure that rides drift regardless of direction (CLEAN.md Phase 17: the
     check that found symmetric-looking positive PF wasn't real for most
     pairs; Phase 20: the same check confirmed 4/6 pairs ARE real). Previously
-    only ever run as a one-off inline script -- this is that logic, reusable."""
-    real = evaluate_real_sltp_series(bars, structure, combo, min_rr, horizon)
+    only ever run as a one-off inline script -- this is that logic, reusable.
+    require_sweep filters WHICH timestamps qualify (checked against the real
+    direction, same entry set for both real and null legs, Phase 24) --
+    only the outcome walk's direction is randomized for the null leg."""
+    real = evaluate_real_sltp_series(bars, structure, combo, min_rr, horizon, require_sweep=require_sweep, sweep_lookback=sweep_lookback)
     combo_s = pd.Series(combo)
     changed = combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"])
     idxs = np.where(changed.to_numpy())[0]
+    if require_sweep is not None:
+        idxs = np.array([
+            i for i in idxs
+            if sweep_preceded(structure, i, "long" if combo_s.iat[i] == "bull" else "short", sweep_lookback) == require_sweep
+        ])
 
     null_means = []
     for seed in range(n_seeds):

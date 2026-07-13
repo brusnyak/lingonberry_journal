@@ -8,11 +8,13 @@ from backtesting.crypto.mtf_cascade_direction import (
     asof_direction,
     ema_only_direction,
     evaluate_direction_series,
+    evaluate_real_sltp_series,
     null_test_real_sltp,
     rolling_stability,
     rolling_stability_real_sltp,
     structural_stop_target,
     structure_ema_direction,
+    sweep_preceded,
     vec_ema_state,
     walk_structural_outcome,
 )
@@ -148,3 +150,31 @@ def test_null_test_real_sltp_shows_no_edge_on_random_walk():
 
     result = null_test_real_sltp(bars, structure, combo, n_seeds=5)
     assert 10 < result["percentile"] < 90, result  # not a decisive edge on pure noise
+
+
+def test_sweep_preceded_detects_sweep_in_lookback_window():
+    structure = pd.DataFrame({
+        "sweep_low": [False, False, True, False, False],
+        "sweep_high": [False, False, False, False, False],
+    })
+    assert sweep_preceded(structure, entry_i=4, direction="long", lookback_bars=3) is True
+    assert sweep_preceded(structure, entry_i=4, direction="short", lookback_bars=3) is False
+    assert sweep_preceded(structure, entry_i=2, direction="long", lookback_bars=1) is False  # sweep is AT i=2, not before it
+
+
+def test_require_sweep_filters_to_disjoint_subsets():
+    ohlcv30 = make_staircase_series("up", bars=30000, tf_minutes=30, seed=9)
+    ohlcv240 = _resample(ohlcv30, 240)
+    dir_global = structure_ema_direction(ohlcv240)
+    dir_local = structure_ema_direction(ohlcv30)
+    g = asof_direction(ohlcv30["ts"], dir_global)
+    l = dir_local["direction"].to_numpy()
+    combo = np.where((g == l) & (g != "neutral"), g, "neutral")
+    from backtesting.features.structure import StructureConfig, build_structure_index
+    structure = build_structure_index(ohlcv30.reset_index(drop=True), StructureConfig(left=2, right=2))
+
+    with_sweep = evaluate_real_sltp_series(ohlcv30.reset_index(drop=True), structure, combo, require_sweep=True)
+    without_sweep = evaluate_real_sltp_series(ohlcv30.reset_index(drop=True), structure, combo, require_sweep=False)
+    baseline = evaluate_real_sltp_series(ohlcv30.reset_index(drop=True), structure, combo)
+    # the two filtered subsets should partition the baseline (no overlap, no gain)
+    assert with_sweep["n"] + without_sweep["n"] == baseline["n"]
