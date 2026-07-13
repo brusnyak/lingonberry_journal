@@ -3348,3 +3348,40 @@ pairs is a small cross-section -- next step is to test it directly: does restric
 BTC and DOGE's own trade population to the 0.22-0.32% stop-range band recover a
 passing null-test result for them specifically, rather than just noting the
 cross-sectional correlation.
+
+## Phase 26 -- Sweet-spot hypothesis tested directly on BTC/DOGE: doesn't hold up cleanly
+
+Tested Phase 25's cross-sectional pattern directly rather than resting on the n=6
+correlation: restrict BTC and DOGE's own trade populations to the 0.22-0.32%
+stop-distance band (the range the 4 passing pairs cluster in) and re-run the null test.
+
+| Symbol | Baseline n / pctile | Sweet-spot-filtered n / pctile |
+|---|---|---|
+| BTCUSDT | 1139 / 46.7th | 185 / 66.7th |
+| DOGEUSDT | 1236 / 46.7th | 168 / 40.0th |
+
+**Mixed, not a clean fix.** BTC improves modestly (46.7 -> 66.7) but stays well short
+of the 95-100th bar ETH/SOL/XRP/BNB clear -- not "fixed." DOGE gets *worse*
+(46.7 -> 40.0). The sweet-spot pattern from Phase 25's cross-section doesn't
+generalize cleanly to a within-symbol filter. Also note: filtering to the band drops
+n by ~84-86% (1139->185, 1236->168) -- even if it had worked, the resulting sample
+would be too thin to trust on its own.
+
+### Standing conclusion after three tested hypotheses (Phase 24-26)
+Direction-signal universality: confirmed (BTC/ETH agree 99.6%). Entry-timing/
+confirmation via liquidity sweep: tested, doesn't help. Stop-distance "sweet spot":
+tested directly, partial/inconsistent (helps BTC a little, hurts DOGE). None of the
+three explains or fixes BTC/DOGE's gap. Real, honest state: **the structure/direction
+foundation is validated and universal (confirmed via the direction-agreement check);
+the REALIZED R:R payoff from that foundation is not equally exploitable on every
+pair**, and the reason remains genuinely unresolved after three targeted tests, not
+swept under a forced positive result.
+
+**Recommended next step**: stop iterating on BTC/DOGE-specific fixes for now (three
+real hypotheses tested, none worked) without dropping either pair (per user
+instruction) -- keep them in the roster, flagged as "foundation confirmed, R:R
+realization not yet working," and move forward building the next layer
+(consolidation) on the 4 pairs with a fully validated foundation (ETH, SOL, XRP,
+BNB). Revisit BTC/DOGE if/when a genuinely new angle presents itself (real cost
+modeling, a different structure definition, or more history), rather than continuing
+to guess at fixes for two pairs while the other four sit un-built-upon.
