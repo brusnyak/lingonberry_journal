@@ -1,0 +1,6 @@
+setup_name,tested_variants,promote_candidates,research_candidates,best_window,best_target_model,best_management_model,best_avg_r,best_return_to_dd,best_direction_accuracy,dominant_failure,confidence
+late_us_short_bearish_trend_ce,18,0,6,15m_60d,fixed_1_5r,hold_target_expiry,0.31228827723971175,2.2249342492009663,0.4642857142857143,direction,low
+ny_long_neutral_reversal_ce,18,0,6,15m_30d,fixed_2r,hold_target_expiry,0.19163625214578903,1.4782995726742614,0.5151515151515151,direction,low
+london_long_middle_local_next_open,18,6,13,15m_30d,fixed_2r,be_after_half_target,0.7963394195602685,15.323802830691797,0.6428571428571429,direction,medium
+london_long_middle_local_retest,18,6,13,15m_30d,fixed_2r,be_after_half_target,0.7580579884435932,14.934474132628488,0.627906976744186,direction,medium
+late_us_short_bull_flush_ce,18,9,14,15m_60d,fixed_1_5r,partial_1r_be_after_half_target,0.4443955377598296,12.433706719794426,0.5434782608695652,direction,medium_high
