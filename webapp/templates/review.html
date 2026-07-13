@@ -779,7 +779,15 @@ async function loadCryptoCanonicalPatternEvents() {
 async function loadCryptoFoundationReviewEvents() {
   const btn = document.getElementById('crypto-foundation-btn');
   btn.disabled = true;
-  const symbol = document.getElementById('cfg-symbol').value || 'XRPUSDT';
+  const foundationSymbols = new Set([
+    'XRPUSDT', 'BNBUSDT', 'ETHUSDT', 'DOGEUSDT', 'BTCUSDT', 'SOLUSDT',
+    'LINKUSDT', 'AAVEUSDT', 'SUIUSDT', 'NEARUSDT', '1000PEPEUSDT', 'HYPEUSDT', 'WLDUSDT'
+  ]);
+  let symbol = document.getElementById('cfg-symbol').value || 'XRPUSDT';
+  if (!foundationSymbols.has(symbol)) {
+    symbol = 'XRPUSDT';
+    document.getElementById('cfg-symbol').value = symbol;
+  }
   const exchange = document.getElementById('cfg-exchange').value || 'binance';
   showLoading('Loading foundation rolling review…');
 
