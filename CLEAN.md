@@ -3050,3 +3050,63 @@ confirms the direction call is stable across time, not that a tradeable strategy
 exists. Next: structural stop/target design (not symmetric ATR), per user instruction,
 since risk:reward shape changes what "accuracy" should mean here -- not yet started.
 375 tests passing. No stops/targets touched.
+
+## Phase 17 -- Existing structural SL/target layer found and reused (not reinvented); small test shows it doesn't clear a null-test bar yet
+
+User directive, correct: before designing any new stop/target logic, audit what
+already exists and reuse it -- this project already has a working structural
+stop/target layer, don't invent a parallel one.
+
+**Found it.** `build_structure_index` (`backtesting/features/structure.py:178-181`,
+the same function the cascade already calls for regime) computes, per bar, causally:
+`long_structural_sl` (last confirmed higher-low), `short_structural_sl` (last lower-
+high), `long_target_1`/`short_target_1` (nearest opposing swing high/low -- real
+liquidity levels, not an arbitrary R multiple). Already consumed by
+`PropFirmStructureV1` (`backtesting/strategies/prop_firm_structure_v1.py`) with a
+sensible fallback pattern: SL = structural level (buffered), TP = structural target
+floored at a minimum R:R if the nearest level is too close. Tested
+(`test_structure_features.py`). This is the reuse target -- nothing new needed here.
+
+**Small test**: applied this exact SL/TP mechanism (not symmetric ATR) to the
+global+local cascade's signal points, `min_rr=1.5` floor:
+
+| Symbol | n | Win rate | Avg R | PF |
+|---|---|---|---|---|
+| BTCUSDT | 312 | 41.0% | +0.065 | 1.11 |
+| ETHUSDT | 308 | 46.4% | +0.302 | 1.56 |
+| SOLUSDT | 325 | 52.3% | +0.365 | 1.76 |
+| XRPUSDT | 342 | 45.6% | +0.216 | 1.40 |
+| DOGEUSDT | 341 | 39.9% | +0.032 | 1.05 |
+| BNBUSDT | 315 | 46.9% | +0.221 | 1.42 |
+| **mean** | | **45.4%** | **+0.200** | **1.38** |
+
+All 6 pairs positive avg_r and PF>1 -- looked like a real improvement over the pure
+direction-accuracy framing. **Null-tested before trusting it** (lesson already
+internalized from this project's own prior false-positive pattern with wide-stop/
+narrow-target R:R structures riding drift regardless of direction skill): randomized
+direction on the exact same signal timestamps, same structural SL/TP mechanism, same
+walk-forward logic, 20 seeds.
+
+| Symbol | Real avg_r | Null mean avg_r | Percentile |
+|---|---|---|---|
+| BTCUSDT | +0.065 | +0.114 | 50th |
+| ETHUSDT | +0.302 | +0.278 | 60th |
+| SOLUSDT | +0.365 | +0.578 | **20th (null beats real)** |
+| XRPUSDT | +0.216 | +0.172 | 75th |
+| DOGEUSDT | +0.032 | +0.024 | 55th |
+| BNBUSDT | +0.221 | +0.257 | 35th |
+
+**Verdict: does not clear the null-test bar.** Percentiles 20th-75th, nothing near a
+convincing threshold, SOL's real result sits *below* its own null mean. The positive
+avg_r/PF shape in the small test is coming mostly from the structural SL/TP mechanism
+itself (real-liquidity targets vs tighter structural stops creates positive expectancy
+under near-random direction too), not from the cascade's directional call. This is the
+right mechanism to use (correctly reused, not reinvented) -- it just doesn't yet add
+validated edge beyond what Phase 15/16 already established: the symmetric-R,
+synthetic-gated, rolling-stable ~55% direction accuracy is still the honestly-supported
+result. Layering the real SL/TP on top needs the same rigor (synthetic gate + null
+test) before being trusted, and this round it didn't pass.
+
+**Not committed as new code** -- ad hoc small test per user request, not promoted to a
+module. CLEAN.md-documented so the finding isn't lost, no repo changes to test/commit
+this round.
