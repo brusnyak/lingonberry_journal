@@ -31,6 +31,18 @@ file. Modes (2026-07-13, CLEAN.md Phase 21):
                         Phase 20 (4/6 pairs pass) -- previously only ever run
                         as a one-off inline script, now reusable
   rolling-stability     rolling calendar-window stability check (Phase 16)
+  checklist-ablation    universal per-trade "good setup" checklist, ablated
+                         one criterion at a time across every pair (Phase 27)
+
+Phase 27 (2026-07-13): BTC/DOGE-specific stop-band tuning (Phase 25/26) was the
+wrong direction -- the user's correction is that foundation logic must be
+defined ONCE with universal thresholds and hold (or honestly not hold) across
+every asset, not re-fit per symbol. build_checklist()/summarize_checklist()/
+null_test_from_checklist() below replace that per-symbol search with a fixed
+set of checklist criteria (bos_confirmed, no_recent_choch, swing_fresh,
+sweep_preceded, stop_atr_sane), each with one threshold applied identically
+to all 6 pairs, ablation-tested one at a time (and combined) via the same
+null-test mechanism already validated in Phase 17/20.
 """
 
 from __future__ import annotations
@@ -473,6 +485,198 @@ def sl_tp_geometry(bars: pd.DataFrame, structure: pd.DataFrame, combo: np.ndarra
     return pd.DataFrame(rows)
 
 
+# ── Universal per-trade "good setup" checklist (Phase 27) ────────────────────
+# Every criterion below reuses existing structure.py fields (bos/choch/sweep,
+# structural SL/TP) -- no new detection mechanism. Thresholds are fixed
+# constants applied identically to every symbol; they must never be tuned per
+# asset (see memory: engine-must-generalize-across-assets).
+
+CHECKLIST_CRITERIA = ["bos_confirmed", "no_recent_choch", "swing_fresh", "sweep_preceded", "stop_atr_sane"]
+
+
+def _bar_delta(ts: pd.Series) -> pd.Timedelta:
+    diffs = pd.to_datetime(ts, utc=True).sort_values().diff().dropna()
+    return diffs.median() if not diffs.empty else pd.Timedelta(0)
+
+
+def build_checklist(
+    bars: pd.DataFrame,
+    structure: pd.DataFrame,
+    combo: np.ndarray,
+    *,
+    min_rr: float = 1.5,
+    horizon: int = 200,
+    atr_period: int = 14,
+    bos_lookback: int = 10,
+    choch_lookback: int = 10,
+    swing_recency_bars: int = 150,
+    sweep_lookback: int = 20,
+    stop_atr_range: tuple[float, float] = (0.5, 3.0),
+) -> pd.DataFrame:
+    """One row per candidate entry (fresh bull/bear cascade agreement) with the
+    foundation checklist flags plus the real structural-SL/TP outcome, so any
+    combination of criteria can be filtered and summarized without re-walking
+    outcomes. bos_confirmed: an actual break-of-structure event (not just
+    regime label) fired within bos_lookback bars in the trade direction.
+    no_recent_choch: structure hasn't just whipsawn (either direction) within
+    choch_lookback bars. swing_fresh: the anchor swing defining the stop isn't
+    stale (within swing_recency_bars). sweep_preceded: reuses the existing
+    sweep_preceded() check. stop_atr_sane: stop distance falls in a universal
+    ATR-multiple sanity band -- a broad data-quality bound, not a per-symbol
+    fitted range (that's what Phase 25/26's stop_pct_range search got wrong)."""
+    combo_s = pd.Series(combo)
+    changed = combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"])
+    atr = _atr(bars, atr_period)
+    ts_all = pd.to_datetime(bars["ts"], utc=True)
+    delta = _bar_delta(bars["ts"])
+    rows = []
+    for i in np.where(changed.to_numpy())[0]:
+        if i >= len(bars) - 1:
+            continue
+        direction = "long" if combo_s.iat[i] == "bull" else "short"
+        srow = structure.iloc[i]
+        entry = float(bars["close"].iat[i])
+        sl, tp = structural_stop_target(srow, direction, entry, min_rr)
+        if not np.isfinite(sl):
+            continue
+        outcome = walk_structural_outcome(bars, i, direction, sl, tp, horizon)
+        if outcome is None:
+            continue
+
+        a = atr.iat[i] if i < len(atr) else np.nan
+        stop_dist = abs(entry - sl)
+        stop_atr_mult = stop_dist / a if a and a > 0 else np.nan
+
+        bos_lo = max(0, i - bos_lookback)
+        bos_col = "bos_up" if direction == "long" else "bos_down"
+        bos_confirmed = bool(structure[bos_col].iloc[bos_lo:i + 1].any())
+
+        choch_lo = max(0, i - choch_lookback)
+        no_recent_choch = not bool(
+            (structure["choch_up"].iloc[choch_lo:i] | structure["choch_down"].iloc[choch_lo:i]).any()
+        )
+
+        anchor_ts = srow.get("last_hl_ts") if direction == "long" else srow.get("last_lh_ts")
+        if pd.isna(anchor_ts) or delta <= pd.Timedelta(0):
+            swing_fresh = False
+        else:
+            bars_since = (ts_all.iat[i] - pd.Timestamp(anchor_ts)) / delta
+            swing_fresh = bool(bars_since <= swing_recency_bars)
+
+        sweep_ok = sweep_preceded(structure, i, direction, sweep_lookback)
+        stop_sane = bool(np.isfinite(stop_atr_mult) and stop_atr_range[0] <= stop_atr_mult <= stop_atr_range[1])
+
+        rows.append({
+            "idx": i,
+            "ts": ts_all.iat[i],
+            "direction": direction,
+            "stop_atr_mult": stop_atr_mult,
+            "bos_confirmed": bos_confirmed,
+            "no_recent_choch": no_recent_choch,
+            "swing_fresh": swing_fresh,
+            "sweep_preceded": sweep_ok,
+            "stop_atr_sane": stop_sane,
+            "r_multiple": outcome["r_multiple"],
+            "hit": outcome["hit"],
+        })
+    return pd.DataFrame(rows)
+
+
+def summarize_checklist(checklist: pd.DataFrame, criteria: list[str] | None = None) -> dict:
+    """n/win_rate/avg_r/pf on checklist rows where ALL given criteria are True.
+    criteria=None or [] -> baseline, no filter (every candidate entry)."""
+    df = checklist
+    for c in criteria or []:
+        df = df[df[c]]
+    r = df["r_multiple"].to_numpy(dtype=float) if len(df) else np.array([])
+    n = len(r)
+    gross_win = r[r > 0].sum() if n else 0.0
+    gross_loss = -r[r <= 0].sum() if n else 0.0
+    return {
+        "n": n,
+        "win_rate": float((r > 0).mean()) if n else np.nan,
+        "avg_r": float(r.mean()) if n else np.nan,
+        "pf": float(gross_win / gross_loss) if gross_loss > 0 else (np.inf if gross_win > 0 else np.nan),
+    }
+
+
+def null_test_from_checklist(
+    bars: pd.DataFrame,
+    structure: pd.DataFrame,
+    checklist: pd.DataFrame,
+    *,
+    criteria: list[str] | None = None,
+    min_rr: float = 1.5,
+    horizon: int = 200,
+    n_seeds: int = 20,
+) -> dict:
+    """Generalized form of null_test_real_sltp: randomize direction on the same
+    (criteria-filtered) entry indices, same real structural SL/TP mechanism.
+    Works for any checklist criterion or combination, not just the one-off
+    sweep/stop-range params it replaces for this use (Phase 27)."""
+    df = checklist
+    for c in criteria or []:
+        df = df[df[c]]
+    real = summarize_checklist(df, [])
+    idxs = df["idx"].to_numpy() if len(df) else np.array([], dtype=int)
+
+    null_means = []
+    for seed in range(n_seeds):
+        rng = np.random.default_rng(seed)
+        r_multiples = []
+        for i in idxs:
+            if i >= len(bars) - 1:
+                continue
+            direction = "long" if rng.random() < 0.5 else "short"
+            entry = float(bars["close"].iat[i])
+            sl, tp = structural_stop_target(structure.iloc[i], direction, entry, min_rr)
+            if not np.isfinite(sl):
+                continue
+            outcome = walk_structural_outcome(bars, i, direction, sl, tp, horizon)
+            if outcome is not None:
+                r_multiples.append(outcome["r_multiple"])
+        null_means.append(np.mean(r_multiples) if r_multiples else np.nan)
+
+    null_mean = float(np.nanmean(null_means))
+    percentile = float((np.array(null_means) < real["avg_r"]).mean() * 100) if np.isfinite(real["avg_r"]) else np.nan
+    return {**real, "null_mean_avg_r": null_mean, "percentile": percentile}
+
+
+def checklist_ablation(
+    symbol: str,
+    config: CascadeConfig | None = None,
+    *,
+    stage: str = "plus_mini",
+    min_rr: float = 1.5,
+    horizon: int = 200,
+    n_seeds: int = 20,
+) -> pd.DataFrame:
+    """Baseline (no filter) + each single criterion + all-combined, run through
+    the same null test, for one symbol. One row per row-label; caller loops
+    over symbols to build the cross-asset ablation matrix (Phase 27)."""
+    cfg = config or CascadeConfig()
+    builder = build_global_local_series if stage == "global_local" else build_full_cascade_series
+    bars, structure, combo = builder(symbol, cfg)
+    if bars.empty:
+        return pd.DataFrame()
+    checklist = build_checklist(bars, structure, combo, min_rr=min_rr, horizon=horizon)
+    if checklist.empty:
+        return pd.DataFrame()
+
+    rows = []
+    labels = ["baseline"] + CHECKLIST_CRITERIA + ["all_combined"]
+    for label in labels:
+        if label == "baseline":
+            criteria = []
+        elif label == "all_combined":
+            criteria = CHECKLIST_CRITERIA
+        else:
+            criteria = [label]
+        result = null_test_from_checklist(bars, structure, checklist, criteria=criteria, min_rr=min_rr, horizon=horizon, n_seeds=n_seeds)
+        rows.append({"symbol": symbol, "criterion": label, **result})
+    return pd.DataFrame(rows)
+
+
 def null_test_real_sltp(
     bars: pd.DataFrame,
     structure: pd.DataFrame,
@@ -572,7 +776,7 @@ def build_full_cascade_series(symbol: str, config: CascadeConfig | None = None) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Configurable structure/direction cascade lab -- one tool, not a new script per question.")
-    parser.add_argument("--mode", required=True, choices=["direction-accuracy", "real-sltp", "null-test", "rolling-stability", "rolling-stability-sltp", "sl-tp-geometry"])
+    parser.add_argument("--mode", required=True, choices=["direction-accuracy", "real-sltp", "null-test", "rolling-stability", "rolling-stability-sltp", "sl-tp-geometry", "checklist-ablation"])
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--stage", default="plus_mini", choices=["global_local", "plus_mini"], help="Which cascade stage to evaluate (real-sltp/null-test modes).")
     parser.add_argument("--days", type=int, default=400)
@@ -638,6 +842,18 @@ def main() -> int:
                 "median_planned_rr": geo["planned_rr"].median(),
                 "median_stop_atr_mult": geo["stop_atr_mult"].median(),
             })
+
+    elif args.mode == "checklist-ablation":
+        frames = []
+        for symbol in symbols:
+            r = checklist_ablation(symbol, cfg, stage=args.stage, min_rr=args.min_rr, horizon=args.horizon, n_seeds=args.seeds)
+            if not r.empty:
+                frames.append(r)
+        result_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        print(result_df.to_string(index=False))
+        if args.output:
+            result_df.to_csv(args.output, index=False)
+        return 0
 
     elif args.mode in ("rolling-stability", "rolling-stability-sltp"):
         window_frames = []

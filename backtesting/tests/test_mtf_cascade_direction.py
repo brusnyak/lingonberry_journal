@@ -4,17 +4,22 @@ import numpy as np
 import pandas as pd
 
 from backtesting.crypto.mtf_cascade_direction import (
+    CHECKLIST_CRITERIA,
     CascadeConfig,
     asof_direction,
+    build_checklist,
+    checklist_ablation,
     ema_only_direction,
     evaluate_direction_series,
     evaluate_real_sltp_series,
+    null_test_from_checklist,
     null_test_real_sltp,
     rolling_stability,
     rolling_stability_real_sltp,
     sl_tp_geometry,
     structural_stop_target,
     structure_ema_direction,
+    summarize_checklist,
     sweep_preceded,
     vec_ema_state,
     walk_structural_outcome,
@@ -216,3 +221,82 @@ def test_stop_pct_range_filter_narrows_to_subset():
     lo, hi = geo["stop_pct"].quantile(0.25), geo["stop_pct"].quantile(0.75)
     filtered = evaluate_real_sltp_series(bars, structure, combo, stop_pct_range=(lo, hi))
     assert 0 < filtered["n"] < baseline["n"]
+
+
+def _build_synth_checklist_inputs(seed: int = 21):
+    ohlcv30 = make_staircase_series("up", bars=30000, tf_minutes=30, seed=seed)
+    ohlcv240 = _resample(ohlcv30, 240)
+    dir_global = structure_ema_direction(ohlcv240)
+    dir_local = structure_ema_direction(ohlcv30)
+    g = asof_direction(ohlcv30["ts"], dir_global)
+    l = dir_local["direction"].to_numpy()
+    combo = np.where((g == l) & (g != "neutral"), g, "neutral")
+    from backtesting.features.structure import StructureConfig, build_structure_index
+    bars = ohlcv30.reset_index(drop=True)
+    structure = build_structure_index(bars, StructureConfig(left=2, right=2))
+    return bars, structure, combo
+
+
+def test_build_checklist_returns_expected_columns_and_valid_flags():
+    bars, structure, combo = _build_synth_checklist_inputs()
+    checklist = build_checklist(bars, structure, combo)
+    assert not checklist.empty
+    assert set(CHECKLIST_CRITERIA).issubset(checklist.columns)
+    assert {"idx", "r_multiple", "hit", "stop_atr_mult"}.issubset(checklist.columns)
+    for c in CHECKLIST_CRITERIA:
+        assert checklist[c].dtype == bool
+
+
+def test_summarize_checklist_filters_to_all_criteria_true():
+    checklist = pd.DataFrame({
+        "idx": [0, 1, 2, 3],
+        "r_multiple": [2.0, -1.0, 1.5, -1.0],
+        "flag_a": [True, True, False, True],
+        "flag_b": [True, False, True, True],
+    })
+    baseline = summarize_checklist(checklist, [])
+    assert baseline["n"] == 4
+    only_a = summarize_checklist(checklist, ["flag_a"])
+    assert only_a["n"] == 3  # idx 0,1,3
+    both = summarize_checklist(checklist, ["flag_a", "flag_b"])
+    assert both["n"] == 2  # idx 0,3 -- both true
+
+
+def test_null_test_from_checklist_shows_no_edge_on_random_walk():
+    from unittest.mock import patch
+
+    ohlcv30 = make_random_walk_series(bars=30000, tf_minutes=30, seed=7)
+    ohlcv240 = _resample(ohlcv30, 240)
+    ohlcv5 = make_random_walk_series(bars=30000 * 6, tf_minutes=5, seed=7)
+
+    def fake_load_crypto(symbol, tf, days, exchange, source):
+        return {"240": ohlcv240, "30": ohlcv30, "5": ohlcv5}[tf]
+
+    with patch("backtesting.crypto.mtf_cascade_direction.load_crypto", fake_load_crypto):
+        from backtesting.crypto.mtf_cascade_direction import build_global_local_series
+        bars, structure, combo = build_global_local_series("SYNTH", CascadeConfig())
+
+    checklist = build_checklist(bars, structure, combo)
+    result = null_test_from_checklist(bars, structure, checklist, n_seeds=5)
+    assert 10 < result["percentile"] < 90, result  # not a decisive edge on pure noise
+
+
+def test_checklist_ablation_rows_are_baseline_plus_each_criterion_plus_combined():
+    from unittest.mock import patch
+
+    ohlcv30 = make_staircase_series("up", bars=30000, tf_minutes=30, seed=25)
+    ohlcv240 = _resample(ohlcv30, 240)
+    ohlcv5 = make_staircase_series("up", bars=30000 * 6, tf_minutes=5, seed=25)
+
+    def fake_load_crypto(symbol, tf, days, exchange, source):
+        return {"240": ohlcv240, "30": ohlcv30, "5": ohlcv5}[tf]
+
+    with patch("backtesting.crypto.mtf_cascade_direction.load_crypto", fake_load_crypto):
+        result = checklist_ablation("SYNTH", CascadeConfig(), stage="global_local", n_seeds=5)
+
+    assert not result.empty
+    expected_labels = {"baseline"} | set(CHECKLIST_CRITERIA) | {"all_combined"}
+    assert set(result["criterion"]) == expected_labels
+    baseline_n = result.loc[result["criterion"] == "baseline", "n"].iat[0]
+    # every filtered criterion is a subset of the baseline candidate set
+    assert (result.loc[result["criterion"] != "baseline", "n"] <= baseline_n).all()
