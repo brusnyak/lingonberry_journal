@@ -3,13 +3,16 @@ from __future__ import annotations
 import pandas as pd
 
 from backtesting.crypto.foundation_trade_forensics import (
+    analyze_foundation_review_labels,
     apply_cost_stress,
     build_foundation_review_packet,
     diagnose_rolling_failures,
     evaluate_contribution_concentration,
     evaluate_extreme_config_matrix,
+    evaluate_frequency_expansion,
     evaluate_rolling_validation,
     ForensicsRunConfig,
+    frequency_variant_masks,
     is_strict_candidate,
     profit_factor,
     rsi_bucket,
@@ -179,6 +182,71 @@ def test_failure_diagnostics_and_review_packet_use_existing_review_schema():
     assert {"feature", "failed_avg_r", "passed_avg_r"} <= set(diagnostics.columns)
     assert {"ts", "predictor", "review_bucket", "notes_hint"} <= set(packet.columns)
     assert "punitive_failed_loser" in set(packet["review_bucket"])
+
+
+def test_review_label_audit_matches_foundation_packet(tmp_path):
+    labels_path = tmp_path / "review_labels.json"
+    labels_path.write_text(
+        """
+{
+  "CryptoFoundationRollingReview_BTCUSDT_15_2026-01-01T00:00:00+00:00": {
+    "symbol": "BTCUSDT",
+    "tf": "15",
+    "entry_time": "2026-01-01T00:00:00+00:00",
+    "label": "bad",
+    "notes": "against trend without confirmation"
+  }
+}
+""".strip()
+    )
+    packet = pd.DataFrame({
+        "ts": [pd.Timestamp("2026-01-01 00:00Z")],
+        "symbol": ["BTCUSDT"],
+        "tf": ["15"],
+        "review_bucket": ["punitive_failed_loser"],
+        "setup_name": ["late_us_short_bull_flush_ce"],
+        "session": ["late_us"],
+    })
+
+    audit = analyze_foundation_review_labels(packet, labels_path)
+
+    assert len(audit) == 1
+    assert audit.iloc[0]["user_label"] == "bad"
+    assert "against trend" in audit.iloc[0]["user_notes"]
+
+
+def test_frequency_expansion_matrix_exposes_bad_more_trades_variant():
+    ts = pd.date_range("2026-01-01", periods=12, freq="1h", tz="UTC")
+    events = pd.DataFrame({
+        "exchange": ["binance"] * len(ts),
+        "symbol": ["BTCUSDT", "ETHUSDT"] * 6,
+        "entry_ts": ts,
+        "exit_ts": ts + pd.Timedelta(hours=1),
+        "bars_to_exit": [4] * len(ts),
+        "entry": [100.0] * len(ts),
+        "stop": [99.0] * len(ts),
+        "target": [102.0] * len(ts),
+        "risk_price": [1.0] * len(ts),
+        "net_r": [1.2, -0.3, 1.0, -0.2, 1.1, -0.4, -1.0, -0.8, -0.7, -0.6, -0.5, -0.4],
+        "setup_name": ["ny_long_neutral_reversal_ce"] * 6 + ["london_long_middle_local_retest"] * 6,
+        "mtf_mode": ["range_or_transition"] * 6 + ["mixed"] * 6,
+        "entry_hour_utc": [13] * 12,
+        "structure_confirmation": ["range_unconfirmed"] * 12,
+        "ema_21_55_state": ["bullish"] * 6 + ["mixed"] * 6,
+        "local_ema_state": ["bullish"] * 12,
+        "shock_alignment": ["no_shock"] * 12,
+        "hit_stop": [False, False, False, False, False, False, True, True, True, True, True, True],
+        "exit_reason": ["target"] * 6 + ["stop"] * 6,
+    })
+
+    masks = frequency_variant_masks(events)
+    matrix = evaluate_frequency_expansion(events, ForensicsRunConfig())
+
+    assert "ny_london_plus_non_strict_confirmed" in masks
+    assert "strict_current" in set(matrix["variant"])
+    bad_rows = matrix[matrix["variant"] == "ny_london_plus_non_strict_confirmed"]
+    assert not bad_rows.empty
+    assert "reject_more_trades_break_edge" in set(bad_rows["frequency_verdict"])
 
 
 def test_contribution_concentration_reports_symbol_and_setup_share():

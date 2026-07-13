@@ -22,6 +22,7 @@ from backtesting.crypto.structure_regime_journal import average_true_range
 
 DEFAULT_INPUT = Path("backtesting/results/crypto_structure_regime_journal_reindexed/structure_regime_trade_journal.csv")
 DEFAULT_OUTPUT_DIR = Path("backtesting/results/crypto_foundation_trade_forensics")
+DEFAULT_REVIEW_LABELS = Path("webapp/review_labels.json")
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,8 @@ def run_foundation_trade_forensics(
     rolling_trades = collect_rolling_window_trades(events, rolling, cfg)
     failure_diagnostics = diagnose_rolling_failures(rolling_trades)
     review_packet = build_foundation_review_packet(rolling_trades)
+    review_audit = analyze_foundation_review_labels(review_packet, DEFAULT_REVIEW_LABELS)
+    frequency_expansion = evaluate_frequency_expansion(events, cfg)
     contribution = evaluate_contribution_concentration(events)
     by_symbol = summarize_by_symbol(events)
     by_setup = summarize(events, ["setup_name", "mtf_mode"])
@@ -72,11 +75,13 @@ def run_foundation_trade_forensics(
     rolling_trades.to_csv(output_dir / "foundation_rolling_window_trades.csv", index=False)
     failure_diagnostics.to_csv(output_dir / "foundation_failure_diagnostics.csv", index=False)
     review_packet.to_csv(output_dir / "foundation_review_packet.csv", index=False)
+    review_audit.to_csv(output_dir / "foundation_manual_review_audit.csv", index=False)
+    frequency_expansion.to_csv(output_dir / "foundation_frequency_expansion_matrix.csv", index=False)
     contribution.to_csv(output_dir / "foundation_contribution_concentration.csv", index=False)
     by_symbol.to_csv(output_dir / "foundation_frequency_by_symbol.csv", index=False)
     by_setup.to_csv(output_dir / "foundation_summary_by_setup.csv", index=False)
     management.to_csv(output_dir / "foundation_management_comparison.csv", index=False)
-    _write_report(events, rules, stress, extreme, rolling_summary, failure_diagnostics, review_packet, contribution, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
+    _write_report(events, rules, stress, extreme, rolling_summary, failure_diagnostics, review_packet, review_audit, frequency_expansion, contribution, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
     return {
         "events": events,
         "rules": rules,
@@ -87,6 +92,8 @@ def run_foundation_trade_forensics(
         "rolling_trades": rolling_trades,
         "failure_diagnostics": failure_diagnostics,
         "review_packet": review_packet,
+        "review_audit": review_audit,
+        "frequency_expansion": frequency_expansion,
         "contribution": contribution,
         "by_symbol": by_symbol,
         "by_setup": by_setup,
@@ -776,6 +783,147 @@ def _review_key_series(trades: pd.DataFrame) -> pd.Series:
     return trades["exchange"].astype(str) + "|" + trades["symbol"].astype(str) + "|" + entry_ts + "|" + trades["entry"].astype(str)
 
 
+def _label_ts(value: object) -> str:
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return ""
+    return pd.Timestamp(ts).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+
+def analyze_foundation_review_labels(review_packet: pd.DataFrame, labels_path: Path = DEFAULT_REVIEW_LABELS) -> pd.DataFrame:
+    """Join saved UI labels to the current foundation review packet."""
+    if review_packet.empty or not labels_path.exists():
+        return pd.DataFrame()
+    import json
+
+    try:
+        labels = json.loads(labels_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return pd.DataFrame()
+    rows: list[dict] = []
+    for key, value in labels.items():
+        if not isinstance(value, dict) or not value.get("entry_time"):
+            continue
+        rows.append({
+            "label_key": key,
+            "symbol": value.get("symbol"),
+            "tf": str(value.get("tf")),
+            "ts_norm": _label_ts(value.get("entry_time")),
+            "user_label": value.get("label") if value.get("label") else "unlabeled",
+            "user_notes": value.get("notes", ""),
+        })
+    if not rows:
+        return pd.DataFrame()
+    label_df = pd.DataFrame(rows)
+    packet = review_packet.copy()
+    packet["tf"] = packet["tf"].astype(str)
+    packet["ts_norm"] = pd.to_datetime(packet["ts"], utc=True, errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    joined = packet.merge(label_df, on=["symbol", "tf", "ts_norm"], how="inner")
+    if joined.empty:
+        return pd.DataFrame()
+    return joined.sort_values(["symbol", "ts_norm", "label_key"]).reset_index(drop=True)
+
+
+def evaluate_frequency_expansion(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame:
+    """Compare frequency-improving variants against the current strict rule."""
+    if events.empty:
+        return pd.DataFrame()
+    data = events.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True, errors="coerce")
+    data = data.dropna(subset=["entry_ts"]).sort_values("entry_ts").reset_index(drop=True)
+    if data.empty:
+        return pd.DataFrame()
+    max_ts = data["entry_ts"].max()
+    windows = [
+        ("60d", data),
+        ("30d", data[data["entry_ts"] >= max_ts - pd.Timedelta(days=30)].copy()),
+    ]
+    scenarios = [
+        ("baseline", 0.0, 0.0),
+        ("punitive_40bps", 20.0, 10.0),
+    ]
+    risk_cfg = PortfolioRiskConfig(
+        risk_per_trade_pct=0.0015,
+        max_open_trades=4,
+        max_open_per_symbol=1,
+        daily_loss_limit_pct=0.0035,
+        tf_minutes=15,
+    )
+    rows: list[dict] = []
+    for window, subset in windows:
+        variants = frequency_variant_masks(subset)
+        span = _span_days(subset["entry_ts"]) if not subset.empty else 1.0
+        for variant, mask in variants.items():
+            selected = subset[mask.fillna(False)].copy() if not subset.empty else subset.copy()
+            symbols = int(selected["symbol"].nunique()) if not selected.empty else 0
+            for scenario, fee_round_trip_bps, slippage_side_bps in scenarios:
+                stressed = apply_cost_stress(
+                    selected,
+                    fee_round_trip_bps=fee_round_trip_bps,
+                    slippage_side_bps=slippage_side_bps,
+                )
+                accepted, portfolio = simulate_portfolio(stressed, risk_cfg)
+                rows.append({
+                    "window": window,
+                    "variant": variant,
+                    "scenario": scenario,
+                    "candidates": int(len(selected)),
+                    "accepted": int(len(accepted)),
+                    "symbols": symbols,
+                    "events_per_day": float(len(selected) / span) if span else 0.0,
+                    "events_per_symbol_week": float(len(selected) / max(symbols, 1) / (span / 7.0)) if span else 0.0,
+                    "median_extra_cost_r": _median(stressed, "extra_cost_r"),
+                    **portfolio,
+                    "frequency_verdict": _frequency_verdict(selected, portfolio, scenario),
+                })
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(
+        ["window", "scenario", "gross_return_pct", "events_per_symbol_week"],
+        ascending=[True, True, False, False],
+    ).reset_index(drop=True)
+
+
+def frequency_variant_masks(events: pd.DataFrame) -> dict[str, pd.Series]:
+    if events.empty:
+        return {}
+    strict = rule_masks(events).get("strict_candidates", pd.Series(False, index=events.index)).fillna(False)
+    setup = events["setup_name"].astype(str)
+    structure_confirmation = events.get("structure_confirmation", pd.Series("", index=events.index)).astype(str)
+    ema = events.get("ema_21_55_state", pd.Series("", index=events.index)).astype(str)
+    local_ema = events.get("local_ema_state", pd.Series("", index=events.index)).astype(str)
+    mtf_mode = events.get("mtf_mode", pd.Series("", index=events.index)).astype(str)
+    ny_or_london = setup.isin(["ny_long_neutral_reversal_ce", "london_long_middle_local_retest"])
+    confirmed_enough = structure_confirmation.isin(["mtf_and_local", "mtf_only", "local_only", "range_unconfirmed"])
+    late_us = setup == "late_us_short_bull_flush_ce"
+    return {
+        "strict_current": strict,
+        "strict_no_late_us": strict & ~late_us,
+        "strict_ema_not_mixed": strict & (ema != "mixed"),
+        "strict_late_us_no_mixed_ema": strict & (~late_us | (ema != "mixed")),
+        "strict_late_us_bearish_ema": strict & (~late_us | (ema == "bearish") | (local_ema == "bearish")),
+        "strict_no_countertrend": strict & (mtf_mode != "countertrend"),
+        "ny_london_plus_non_strict_confirmed": ny_or_london & confirmed_enough,
+        "all_foundation_physical": pd.Series(True, index=events.index),
+    }
+
+
+def _frequency_verdict(selected: pd.DataFrame, portfolio: dict, scenario: str) -> str:
+    if selected.empty:
+        return "reject_empty"
+    pf = float(portfolio.get("profit_factor", 0.0))
+    gross = float(portfolio.get("gross_return_pct", 0.0))
+    max_dd = float(portfolio.get("max_dd_pct", 0.0))
+    epsw = float(len(selected) / max(selected["symbol"].nunique(), 1) / (_span_days(selected["entry_ts"]) / 7.0))
+    if gross <= 0 or pf < 1.2:
+        return "reject_more_trades_break_edge"
+    if scenario == "punitive_40bps" and (max_dd > 0.02 or pf < 1.5):
+        return "research_only_fragile_costs"
+    if epsw < 1.0:
+        return "quality_ok_frequency_sparse"
+    return "candidate_frequency_improves"
+
+
 def evaluate_contribution_concentration(events: pd.DataFrame) -> pd.DataFrame:
     """Measure whether strict candidate returns depend on one symbol/setup/session."""
     if events.empty:
@@ -1090,6 +1238,8 @@ def _write_report(
     rolling_summary: pd.DataFrame,
     failure_diagnostics: pd.DataFrame,
     review_packet: pd.DataFrame,
+    review_audit: pd.DataFrame,
+    frequency_expansion: pd.DataFrame,
     contribution: pd.DataFrame,
     by_symbol: pd.DataFrame,
     by_setup: pd.DataFrame,
@@ -1128,6 +1278,12 @@ def _write_report(
         "## Review Packet",
         *_markdown_table(_format_report_table(_review_packet_summary(review_packet))),
         "",
+        "## Saved Manual Review Audit",
+        *_markdown_table(_format_report_table(_manual_review_summary(review_audit))),
+        "",
+        "## Frequency Expansion Matrix",
+        *_markdown_table(_format_report_table(_frequency_expansion_report_slice(frequency_expansion))),
+        "",
         "## Concentration",
         *_markdown_table(_format_report_table(_contribution_report_slice(contribution))),
         "",
@@ -1149,6 +1305,8 @@ def _write_report(
         "- Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.",
         "- Rolling validation is the promotion gate; aggregate 60d performance is not enough.",
         "- Review packet targets failed rolling windows and clean winners; it is not a random sample.",
+        "- Saved manual labels mostly flag direction/confirmation defects, especially late-US countertrend shorts.",
+        "- Frequency expansion rejects broad non-strict additions when they improve count but break punitive-cost expectancy.",
         "- Concentration is measured on strict candidates with conservative risk under punitive costs.",
         "",
     ]
@@ -1277,6 +1435,55 @@ def _review_packet_summary(review_packet: pd.DataFrame) -> pd.DataFrame:
             "worst_outcome_r": float(pd.to_numeric(group["outcome_1.5r"], errors="coerce").min()),
         })
     return pd.DataFrame(rows).sort_values(["review_bucket"]).reset_index(drop=True)
+
+
+def _manual_review_summary(review_audit: pd.DataFrame) -> pd.DataFrame:
+    if review_audit.empty:
+        return review_audit
+    rows: list[dict] = []
+    for keys, group in review_audit.groupby(["setup_name", "session"], dropna=False):
+        notes = group["user_notes"].fillna("").astype(str).str.lower()
+        rows.append({
+            "setup_name": keys[0],
+            "session": keys[1],
+            "reviewed": int(len(group)),
+            "good": int((group["user_label"] == "good").sum()),
+            "bad": int((group["user_label"] == "bad").sum()),
+            "skip": int((group["user_label"] == "skip").sum()),
+            "unlabeled": int((group["user_label"] == "unlabeled").sum()),
+            "mentions_against_trend": int(notes.str.contains("against", regex=False).sum()),
+            "mentions_confirmation": int(notes.str.contains("confirmation", regex=False).sum()),
+            "mentions_consolidation": int(notes.str.contains("consolidation", regex=False).sum()),
+            "mentions_target": int(notes.str.contains("target", regex=False).sum()),
+        })
+    return pd.DataFrame(rows).sort_values(["bad", "reviewed"], ascending=[False, False]).reset_index(drop=True)
+
+
+def _frequency_expansion_report_slice(frequency_expansion: pd.DataFrame) -> pd.DataFrame:
+    if frequency_expansion.empty:
+        return frequency_expansion
+    keep = frequency_expansion[
+        (frequency_expansion["window"].isin(["60d", "30d"]))
+        & (frequency_expansion["scenario"].isin(["baseline", "punitive_40bps"]))
+    ].copy()
+    cols = [
+        "window",
+        "variant",
+        "scenario",
+        "candidates",
+        "accepted",
+        "symbols",
+        "events_per_symbol_week",
+        "gross_return_pct",
+        "max_dd_pct",
+        "profit_factor",
+        "win_rate",
+        "frequency_verdict",
+    ]
+    return keep[cols].sort_values(
+        ["window", "scenario", "gross_return_pct"],
+        ascending=[True, True, False],
+    ).groupby(["window", "scenario"], group_keys=False).head(10).reset_index(drop=True)
 
 
 def _contribution_report_slice(contribution: pd.DataFrame) -> pd.DataFrame:

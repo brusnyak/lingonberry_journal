@@ -356,6 +356,49 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | punitive_failed_loser | 12 | 7 | -1.657 | -2.424 |
 | target_too_short_winner | 12 | 8 | 1.472 | 0.718 |
 
+## Saved Manual Review Audit
+| setup_name | session | reviewed | good | bad | skip | unlabeled | mentions_against_trend | mentions_confirmation | mentions_consolidation | mentions_target |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| late_us_short_bull_flush_ce | late_us | 15 | 7 | 6 | 1 | 1 | 7 | 7 | 1 | 2 |
+| ny_long_neutral_reversal_ce | ny | 15 | 10 | 3 | 2 | 0 | 4 | 3 | 2 | 1 |
+| london_long_middle_local_retest | london | 4 | 3 | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+
+## Frequency Expansion Matrix
+| window | variant | scenario | candidates | accepted | symbols | events_per_symbol_week | gross_return_pct | max_dd_pct | profit_factor | win_rate | frequency_verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 30d | all_foundation_physical | baseline | 238 | 173 | 14 | 4.021 | 0.077 | 0.019 | 2.028 | 0.584 | candidate_frequency_improves |
+| 30d | strict_current | baseline | 87 | 75 | 14 | 1.470 | 0.076 | 0.006 | 4.101 | 0.720 | candidate_frequency_improves |
+| 30d | strict_late_us_no_mixed_ema | baseline | 56 | 49 | 14 | 0.946 | 0.055 | 0.003 | 5.162 | 0.755 | quality_ok_frequency_sparse |
+| 30d | strict_ema_not_mixed | baseline | 47 | 42 | 14 | 0.794 | 0.049 | 0.005 | 4.909 | 0.762 | quality_ok_frequency_sparse |
+| 30d | strict_no_countertrend | baseline | 48 | 44 | 13 | 0.873 | 0.046 | 0.007 | 4.232 | 0.727 | quality_ok_frequency_sparse |
+| 30d | ny_london_plus_non_strict_confirmed | baseline | 151 | 121 | 14 | 2.551 | 0.046 | 0.017 | 1.895 | 0.562 | candidate_frequency_improves |
+| 30d | strict_no_late_us | baseline | 34 | 32 | 10 | 0.731 | 0.043 | 0.003 | 8.702 | 0.812 | quality_ok_frequency_sparse |
+| 30d | strict_late_us_bearish_ema | baseline | 34 | 32 | 10 | 0.731 | 0.043 | 0.003 | 8.702 | 0.812 | quality_ok_frequency_sparse |
+| 30d | strict_current | punitive_40bps | 87 | 74 | 14 | 1.470 | 0.034 | 0.008 | 1.974 | 0.662 | candidate_frequency_improves |
+| 30d | strict_late_us_no_mixed_ema | punitive_40bps | 56 | 49 | 14 | 0.946 | 0.025 | 0.006 | 2.161 | 0.653 | quality_ok_frequency_sparse |
+| 30d | strict_no_late_us | punitive_40bps | 34 | 32 | 10 | 0.731 | 0.024 | 0.005 | 3.712 | 0.688 | quality_ok_frequency_sparse |
+| 30d | strict_late_us_bearish_ema | punitive_40bps | 34 | 32 | 10 | 0.731 | 0.024 | 0.005 | 3.712 | 0.688 | quality_ok_frequency_sparse |
+| 30d | strict_no_countertrend | punitive_40bps | 48 | 43 | 13 | 0.873 | 0.022 | 0.008 | 2.160 | 0.628 | quality_ok_frequency_sparse |
+| 30d | strict_ema_not_mixed | punitive_40bps | 47 | 39 | 14 | 0.794 | 0.017 | 0.010 | 1.871 | 0.641 | quality_ok_frequency_sparse |
+| 30d | all_foundation_physical | punitive_40bps | 238 | 145 | 14 | 4.021 | -0.004 | 0.027 | 0.952 | 0.469 | reject_more_trades_break_edge |
+| 30d | ny_london_plus_non_strict_confirmed | punitive_40bps | 151 | 111 | 14 | 2.551 | -0.007 | 0.025 | 0.895 | 0.450 | reject_more_trades_break_edge |
+| 60d | strict_current | baseline | 113 | 101 | 14 | 0.953 | 0.085 | 0.006 | 3.233 | 0.673 | quality_ok_frequency_sparse |
+| 60d | all_foundation_physical | baseline | 378 | 274 | 14 | 3.188 | 0.078 | 0.019 | 1.590 | 0.544 | candidate_frequency_improves |
+| 60d | strict_late_us_no_mixed_ema | baseline | 71 | 64 | 13 | 0.599 | 0.067 | 0.004 | 4.325 | 0.719 | quality_ok_frequency_sparse |
+| 60d | strict_ema_not_mixed | baseline | 56 | 50 | 14 | 0.472 | 0.057 | 0.004 | 4.780 | 0.740 | quality_ok_frequency_sparse |
+| 60d | strict_no_countertrend | baseline | 60 | 56 | 13 | 0.545 | 0.052 | 0.007 | 3.562 | 0.714 | quality_ok_frequency_sparse |
+| 60d | strict_late_us_bearish_ema | baseline | 44 | 42 | 12 | 0.433 | 0.050 | 0.003 | 6.001 | 0.786 | quality_ok_frequency_sparse |
+| 60d | strict_no_late_us | baseline | 43 | 41 | 12 | 0.423 | 0.049 | 0.003 | 5.932 | 0.780 | quality_ok_frequency_sparse |
+| 60d | ny_london_plus_non_strict_confirmed | baseline | 244 | 203 | 14 | 2.058 | 0.048 | 0.017 | 1.491 | 0.522 | candidate_frequency_improves |
+| 60d | strict_current | punitive_40bps | 113 | 99 | 14 | 0.953 | 0.034 | 0.008 | 1.656 | 0.616 | quality_ok_frequency_sparse |
+| 60d | strict_late_us_no_mixed_ema | punitive_40bps | 71 | 63 | 13 | 0.599 | 0.030 | 0.006 | 2.024 | 0.635 | quality_ok_frequency_sparse |
+| 60d | strict_ema_not_mixed | punitive_40bps | 56 | 49 | 14 | 0.472 | 0.028 | 0.006 | 2.264 | 0.653 | quality_ok_frequency_sparse |
+| 60d | strict_late_us_bearish_ema | punitive_40bps | 44 | 42 | 12 | 0.433 | 0.024 | 0.005 | 2.445 | 0.667 | quality_ok_frequency_sparse |
+| 60d | strict_no_late_us | punitive_40bps | 43 | 41 | 12 | 0.423 | 0.023 | 0.005 | 2.409 | 0.659 | quality_ok_frequency_sparse |
+| 60d | strict_no_countertrend | punitive_40bps | 60 | 55 | 13 | 0.545 | 0.020 | 0.008 | 1.703 | 0.618 | quality_ok_frequency_sparse |
+| 60d | all_foundation_physical | punitive_40bps | 378 | 235 | 14 | 3.188 | -0.035 | 0.051 | 0.782 | 0.434 | reject_more_trades_break_edge |
+| 60d | ny_london_plus_non_strict_confirmed | punitive_40bps | 244 | 181 | 14 | 2.058 | -0.040 | 0.060 | 0.679 | 0.398 | reject_more_trades_break_edge |
+
 ## Concentration
 | dimension | value | events | total_r | share_of_total_r | avg_r | profit_factor | win_rate |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -433,4 +476,6 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 - Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.
 - Rolling validation is the promotion gate; aggregate 60d performance is not enough.
 - Review packet targets failed rolling windows and clean winners; it is not a random sample.
+- Saved manual labels mostly flag direction/confirmation defects, especially late-US countertrend shorts.
+- Frequency expansion rejects broad non-strict additions when they improve count but break punitive-cost expectancy.
 - Concentration is measured on strict candidates with conservative risk under punitive costs.
