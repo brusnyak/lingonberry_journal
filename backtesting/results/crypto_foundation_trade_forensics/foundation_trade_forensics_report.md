@@ -210,6 +210,64 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 | first30d | strict_candidates | punitive_40bps | micro_risk_tight | 0.001 | 3 | 0.003 | 25 | -0.003 | 0.007 | 0.006 | 0.786 | 0.440 | -0.385 |
 | first30d | strict_candidates | punitive_40bps | prop_strict | 0.003 | 4 | 0.004 | 25 | -0.001 | 0.013 | 0.012 | 0.951 | 0.480 | -0.113 |
 
+## Rolling Validation Summary
+| window_days | rule | scenario | config | windows | pass_rate | negative_windows | median_return_pct | worst_return_pct | worst_dd_pct | median_pf | min_accepted | median_events_per_day |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 14 | late_us_fade | baseline | base | 7 | 0.286 | 2 | 0.008 | -0.005 | 0.009 | 2.299 | 6 | 0.571 |
+| 14 | late_us_fade | baseline | prop_strict | 7 | 0.143 | 2 | 0.010 | -0.007 | 0.011 | 2.222 | 6 | 0.571 |
+| 14 | late_us_fade | nightmare_60bps | base | 7 | 0.286 | 3 | 0.003 | -0.009 | 0.021 | 1.506 | 6 | 0.571 |
+| 14 | late_us_fade | nightmare_60bps | prop_strict | 7 | 0.143 | 3 | 0.005 | -0.017 | 0.022 | 1.556 | 6 | 0.571 |
+| 14 | late_us_fade | punitive_40bps | base | 7 | 0.286 | 2 | 0.005 | -0.008 | 0.014 | 1.737 | 6 | 0.571 |
+| 14 | late_us_fade | punitive_40bps | prop_strict | 7 | 0.143 | 2 | 0.006 | -0.010 | 0.017 | 1.737 | 6 | 0.571 |
+| 14 | ny_13_range_reversal | baseline | base | 7 | 0.286 | 2 | 0.010 | -0.001 | 0.003 | 4.878 | 1 | 0.500 |
+| 14 | ny_13_range_reversal | baseline | prop_strict | 7 | 0.286 | 2 | 0.012 | -0.002 | 0.004 | 4.878 | 1 | 0.500 |
+| 14 | ny_13_range_reversal | nightmare_60bps | base | 7 | 0.000 | 3 | 0.002 | -0.007 | 0.008 | 1.271 | 1 | 0.500 |
+| 14 | ny_13_range_reversal | nightmare_60bps | prop_strict | 7 | 0.286 | 3 | 0.002 | -0.009 | 0.009 | 1.271 | 1 | 0.500 |
+| 14 | ny_13_range_reversal | punitive_40bps | base | 7 | 0.286 | 3 | 0.004 | -0.005 | 0.005 | 1.884 | 1 | 0.500 |
+| 14 | ny_13_range_reversal | punitive_40bps | prop_strict | 7 | 0.286 | 3 | 0.005 | -0.007 | 0.007 | 1.873 | 1 | 0.500 |
+| 14 | strict_candidates | baseline | base | 7 | 0.857 | 0 | 0.028 | 0.000 | 0.008 | 3.329 | 10 | 1.429 |
+| 14 | strict_candidates | baseline | prop_strict | 7 | 0.857 | 0 | 0.037 | 0.000 | 0.009 | 3.411 | 10 | 1.429 |
+| 14 | strict_candidates | nightmare_60bps | base | 7 | 0.143 | 3 | 0.007 | -0.013 | 0.017 | 1.160 | 10 | 1.429 |
+| 14 | strict_candidates | nightmare_60bps | prop_strict | 7 | 0.143 | 3 | 0.010 | -0.013 | 0.016 | 1.239 | 9 | 1.429 |
+| 14 | strict_candidates | punitive_40bps | base | 7 | 0.571 | 3 | 0.019 | -0.011 | 0.011 | 1.709 | 10 | 1.429 |
+| 14 | strict_candidates | punitive_40bps | prop_strict | 7 | 0.286 | 3 | 0.017 | -0.010 | 0.013 | 1.846 | 10 | 1.429 |
+| 30 | late_us_fade | baseline | base | 5 | 0.600 | 0 | 0.015 | 0.003 | 0.009 | 2.157 | 16 | 0.600 |
+| 30 | late_us_fade | baseline | prop_strict | 5 | 0.400 | 0 | 0.020 | 0.003 | 0.011 | 2.469 | 14 | 0.600 |
+| 30 | late_us_fade | nightmare_60bps | base | 5 | 0.400 | 2 | 0.001 | -0.006 | 0.024 | 1.070 | 16 | 0.600 |
+| 30 | late_us_fade | nightmare_60bps | prop_strict | 5 | 0.000 | 2 | 0.005 | -0.007 | 0.019 | 1.231 | 14 | 0.600 |
+| 30 | late_us_fade | punitive_40bps | base | 5 | 0.400 | 1 | 0.007 | -0.003 | 0.013 | 1.290 | 16 | 0.600 |
+| 30 | late_us_fade | punitive_40bps | prop_strict | 5 | 0.200 | 1 | 0.011 | -0.004 | 0.016 | 1.500 | 14 | 0.600 |
+| 30 | ny_13_range_reversal | baseline | base | 5 | 0.400 | 0 | 0.021 | 0.008 | 0.003 | 4.537 | 9 | 0.467 |
+| 30 | ny_13_range_reversal | baseline | prop_strict | 5 | 0.400 | 0 | 0.021 | 0.010 | 0.004 | 3.874 | 9 | 0.467 |
+| 30 | ny_13_range_reversal | nightmare_60bps | base | 5 | 0.000 | 2 | 0.002 | -0.006 | 0.009 | 1.176 | 9 | 0.467 |
+| 30 | ny_13_range_reversal | nightmare_60bps | prop_strict | 5 | 0.400 | 3 | -0.000 | -0.007 | 0.011 | 0.974 | 9 | 0.467 |
+| 30 | ny_13_range_reversal | punitive_40bps | base | 5 | 0.400 | 1 | 0.008 | -0.001 | 0.005 | 1.826 | 9 | 0.467 |
+| 30 | ny_13_range_reversal | punitive_40bps | prop_strict | 5 | 0.400 | 2 | 0.007 | -0.001 | 0.007 | 1.523 | 9 | 0.467 |
+| 30 | strict_candidates | baseline | base | 5 | 1.000 | 0 | 0.044 | 0.011 | 0.008 | 3.237 | 26 | 1.300 |
+| 30 | strict_candidates | baseline | prop_strict | 5 | 1.000 | 0 | 0.052 | 0.013 | 0.009 | 3.365 | 26 | 1.300 |
+| 30 | strict_candidates | nightmare_60bps | base | 5 | 0.000 | 1 | 0.013 | -0.008 | 0.017 | 1.239 | 25 | 1.300 |
+| 30 | strict_candidates | nightmare_60bps | prop_strict | 5 | 0.000 | 1 | 0.015 | -0.007 | 0.018 | 1.434 | 24 | 1.300 |
+| 30 | strict_candidates | punitive_40bps | base | 5 | 0.400 | 1 | 0.021 | -0.004 | 0.013 | 1.744 | 26 | 1.300 |
+| 30 | strict_candidates | punitive_40bps | prop_strict | 5 | 0.000 | 1 | 0.029 | -0.001 | 0.013 | 1.989 | 25 | 1.300 |
+| 45 | late_us_fade | baseline | base | 3 | 0.333 | 0 | 0.016 | 0.010 | 0.009 | 1.668 | 27 | 0.756 |
+| 45 | late_us_fade | baseline | prop_strict | 3 | 0.333 | 0 | 0.024 | 0.014 | 0.012 | 1.909 | 25 | 0.756 |
+| 45 | late_us_fade | nightmare_60bps | base | 3 | 0.000 | 3 | -0.005 | -0.012 | 0.024 | 0.809 | 27 | 0.756 |
+| 45 | late_us_fade | nightmare_60bps | prop_strict | 3 | 0.000 | 2 | -0.004 | -0.006 | 0.021 | 0.886 | 25 | 0.756 |
+| 45 | late_us_fade | punitive_40bps | base | 3 | 0.000 | 2 | -0.000 | -0.003 | 0.014 | 0.987 | 27 | 0.756 |
+| 45 | late_us_fade | punitive_40bps | prop_strict | 3 | 0.000 | 0 | 0.004 | 0.002 | 0.017 | 1.108 | 25 | 0.756 |
+| 45 | ny_13_range_reversal | baseline | base | 3 | 1.000 | 0 | 0.041 | 0.025 | 0.003 | 5.364 | 20 | 0.511 |
+| 45 | ny_13_range_reversal | baseline | prop_strict | 3 | 0.667 | 0 | 0.046 | 0.026 | 0.004 | 4.971 | 19 | 0.511 |
+| 45 | ny_13_range_reversal | nightmare_60bps | base | 3 | 0.000 | 1 | 0.004 | -0.002 | 0.009 | 1.201 | 20 | 0.511 |
+| 45 | ny_13_range_reversal | nightmare_60bps | prop_strict | 3 | 0.333 | 1 | 0.007 | -0.003 | 0.011 | 1.292 | 18 | 0.511 |
+| 45 | ny_13_range_reversal | punitive_40bps | base | 3 | 1.000 | 0 | 0.017 | 0.007 | 0.005 | 2.021 | 20 | 0.511 |
+| 45 | ny_13_range_reversal | punitive_40bps | prop_strict | 3 | 0.667 | 0 | 0.018 | 0.004 | 0.007 | 1.859 | 19 | 0.511 |
+| 45 | strict_candidates | baseline | base | 3 | 1.000 | 0 | 0.076 | 0.046 | 0.008 | 3.035 | 56 | 1.600 |
+| 45 | strict_candidates | baseline | prop_strict | 3 | 1.000 | 0 | 0.093 | 0.054 | 0.009 | 3.199 | 53 | 1.600 |
+| 45 | strict_candidates | nightmare_60bps | base | 3 | 0.000 | 1 | 0.002 | -0.003 | 0.018 | 1.026 | 54 | 1.600 |
+| 45 | strict_candidates | nightmare_60bps | prop_strict | 3 | 0.000 | 0 | 0.013 | 0.002 | 0.018 | 1.180 | 49 | 1.600 |
+| 45 | strict_candidates | punitive_40bps | base | 3 | 0.000 | 0 | 0.026 | 0.013 | 0.013 | 1.470 | 56 | 1.600 |
+| 45 | strict_candidates | punitive_40bps | prop_strict | 3 | 0.000 | 0 | 0.035 | 0.014 | 0.013 | 1.615 | 51 | 1.600 |
+
 ## Frequency By Symbol
 | symbol | events | events_per_day | events_per_week | avg_r | profit_factor | win_rate | median_duration_h | median_mfe_r | p75_mfe_r | median_mae_r | strict_events |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -267,3 +325,4 @@ Purpose: de-duplicate the MTF structure journal into physical trades and test si
 - Post-target continuation is measured because fixed 2R may be too short for clean London/NY winners.
 - Stress scenarios convert extra bps into R, so tight-stop trades are penalized harder.
 - Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.
+- Rolling validation is the promotion gate; aggregate 60d performance is not enough.

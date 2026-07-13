@@ -5,6 +5,7 @@ import pandas as pd
 from backtesting.crypto.foundation_trade_forensics import (
     apply_cost_stress,
     evaluate_extreme_config_matrix,
+    evaluate_rolling_validation,
     ForensicsRunConfig,
     is_strict_candidate,
     profit_factor,
@@ -105,3 +106,28 @@ def test_extreme_config_matrix_includes_portfolio_variants():
 
     assert {"base", "aggressive", "micro_risk_tight"}.issubset(set(matrix["config"]))
     assert {"baseline", "punitive_40bps", "nightmare_60bps"}.issubset(set(matrix["scenario"]))
+
+
+def test_rolling_validation_reports_windows_and_gate_status():
+    ts = pd.date_range("2026-01-01", periods=80, freq="12h", tz="UTC")
+    events = pd.DataFrame({
+        "exchange": ["binance"] * len(ts),
+        "symbol": ["BTCUSDT", "ETHUSDT"] * (len(ts) // 2),
+        "entry_ts": ts,
+        "exit_ts": ts + pd.Timedelta(hours=2),
+        "bars_to_exit": [8] * len(ts),
+        "entry": [100.0] * len(ts),
+        "risk_price": [1.0] * len(ts),
+        "net_r": [1.0, -0.25, 1.5, -0.5] * (len(ts) // 4),
+        "setup_name": ["ny_long_neutral_reversal_ce"] * len(ts),
+        "mtf_mode": ["range_or_transition"] * len(ts),
+        "entry_hour_utc": [13] * len(ts),
+        "shock_alignment": ["no_shock"] * len(ts),
+    })
+
+    rows = evaluate_rolling_validation(events, ForensicsRunConfig())
+
+    assert not rows.empty
+    assert {14, 30}.issubset(set(rows["window_days"]))
+    assert {"base", "prop_strict"}.issubset(set(rows["config"]))
+    assert rows["passed_gate"].isin([True, False]).all()

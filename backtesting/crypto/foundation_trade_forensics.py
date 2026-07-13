@@ -52,6 +52,8 @@ def run_foundation_trade_forensics(
     rules = evaluate_windowed_rules(events, cfg)
     stress = evaluate_stress_matrix(events, cfg)
     extreme = evaluate_extreme_config_matrix(events, cfg)
+    rolling = evaluate_rolling_validation(events, cfg)
+    rolling_summary = summarize_rolling_validation(rolling)
     by_symbol = summarize_by_symbol(events)
     by_setup = summarize(events, ["setup_name", "mtf_mode"])
     management = compare_management_variants(journal)
@@ -61,15 +63,19 @@ def run_foundation_trade_forensics(
     rules.to_csv(output_dir / "foundation_rule_matrix.csv", index=False)
     stress.to_csv(output_dir / "foundation_stress_matrix.csv", index=False)
     extreme.to_csv(output_dir / "foundation_extreme_config_matrix.csv", index=False)
+    rolling.to_csv(output_dir / "foundation_rolling_validation.csv", index=False)
+    rolling_summary.to_csv(output_dir / "foundation_rolling_validation_summary.csv", index=False)
     by_symbol.to_csv(output_dir / "foundation_frequency_by_symbol.csv", index=False)
     by_setup.to_csv(output_dir / "foundation_summary_by_setup.csv", index=False)
     management.to_csv(output_dir / "foundation_management_comparison.csv", index=False)
-    _write_report(events, rules, stress, extreme, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
+    _write_report(events, rules, stress, extreme, rolling_summary, by_symbol, by_setup, management, output_dir / "foundation_trade_forensics_report.md", cfg)
     return {
         "events": events,
         "rules": rules,
         "stress": stress,
         "extreme": extreme,
+        "rolling": rolling,
+        "rolling_summary": rolling_summary,
         "by_symbol": by_symbol,
         "by_setup": by_setup,
         "management": management,
@@ -402,6 +408,138 @@ def evaluate_extreme_config_matrix(events: pd.DataFrame, cfg: ForensicsRunConfig
     return pd.DataFrame(rows).sort_values(["window", "rule", "scenario", "config"]).reset_index(drop=True)
 
 
+def evaluate_rolling_validation(events: pd.DataFrame, cfg: ForensicsRunConfig) -> pd.DataFrame:
+    """Validate selected rules across rolling calendar windows."""
+    if events.empty:
+        return pd.DataFrame()
+    data = events.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True, errors="coerce")
+    data = data.dropna(subset=["entry_ts"]).sort_values("entry_ts").reset_index(drop=True)
+    if data.empty:
+        return pd.DataFrame()
+
+    rules = ["strict_candidates", "ny_13_range_reversal", "late_us_fade", "london_trend_aligned"]
+    scenarios = [
+        ("baseline", 0.0, 0.0),
+        ("high_22bps", 12.0, 5.0),
+        ("punitive_40bps", 20.0, 10.0),
+        ("nightmare_60bps", 30.0, 15.0),
+    ]
+    configs = [
+        ("base", cfg.risk_per_trade_pct, cfg.max_open_trades, cfg.max_open_per_symbol, cfg.daily_loss_limit_pct),
+        ("prop_strict", 0.0025, 4, 1, 0.0040),
+    ]
+    rows: list[dict] = []
+    first = data["entry_ts"].min().normalize()
+    last = data["entry_ts"].max().normalize() + pd.Timedelta(days=1)
+    for window_days, step_days in [(14, 7), (30, 7), (45, 7)]:
+        start = first
+        window_id = 0
+        while start + pd.Timedelta(days=window_days) <= last:
+            end = start + pd.Timedelta(days=window_days)
+            subset = data[(data["entry_ts"] >= start) & (data["entry_ts"] < end)].copy()
+            masks = rule_masks(subset) if not subset.empty else {}
+            for rule in rules:
+                mask = masks.get(rule, pd.Series(False, index=subset.index))
+                selected = subset[mask.fillna(False)].copy() if not subset.empty else subset.copy()
+                for scenario, fee_round_trip_bps, slippage_side_bps in scenarios:
+                    stressed = apply_cost_stress(
+                        selected,
+                        fee_round_trip_bps=fee_round_trip_bps,
+                        slippage_side_bps=slippage_side_bps,
+                    )
+                    for config_name, risk_pct, max_open, max_per_symbol, daily_limit in configs:
+                        risk_cfg = PortfolioRiskConfig(
+                            risk_per_trade_pct=risk_pct,
+                            max_open_trades=max_open,
+                            max_open_per_symbol=max_per_symbol,
+                            daily_loss_limit_pct=daily_limit,
+                            tf_minutes=15,
+                        )
+                        accepted, portfolio = simulate_portfolio(stressed, risk_cfg)
+                        passed, reason = _rolling_gate(portfolio, scenario, window_days)
+                        rows.append({
+                            "window_days": window_days,
+                            "step_days": step_days,
+                            "window_id": window_id,
+                            "window_start": start,
+                            "window_end": end,
+                            "rule": rule,
+                            "scenario": scenario,
+                            "config": config_name,
+                            "candidates": int(len(stressed)),
+                            "accepted": int(len(accepted)),
+                            "events_per_day": float(len(stressed) / window_days),
+                            "median_extra_cost_r": _median(stressed, "extra_cost_r"),
+                            "passed_gate": bool(passed),
+                            "fail_reason": reason,
+                            **portfolio,
+                        })
+            start += pd.Timedelta(days=step_days)
+            window_id += 1
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(
+        ["window_days", "window_start", "rule", "scenario", "config"]
+    ).reset_index(drop=True)
+
+
+def summarize_rolling_validation(rolling: pd.DataFrame) -> pd.DataFrame:
+    if rolling.empty:
+        return pd.DataFrame()
+    rows: list[dict] = []
+    groups = rolling.groupby(["window_days", "rule", "scenario", "config"], dropna=False)
+    for keys, group in groups:
+        rows.append({
+            "window_days": int(keys[0]),
+            "rule": keys[1],
+            "scenario": keys[2],
+            "config": keys[3],
+            "windows": int(len(group)),
+            "pass_rate": float(group["passed_gate"].mean()),
+            "passed_windows": int(group["passed_gate"].sum()),
+            "negative_windows": int((pd.to_numeric(group["gross_return_pct"], errors="coerce") <= 0).sum()),
+            "median_return_pct": _median(group, "gross_return_pct"),
+            "worst_return_pct": float(pd.to_numeric(group["gross_return_pct"], errors="coerce").min()),
+            "worst_dd_pct": float(pd.to_numeric(group["max_dd_pct"], errors="coerce").max()),
+            "median_pf": _median(group, "profit_factor"),
+            "median_win_rate": _median(group, "win_rate"),
+            "min_accepted": int(pd.to_numeric(group["accepted"], errors="coerce").min()),
+            "median_events_per_day": _median(group, "events_per_day"),
+        })
+    return pd.DataFrame(rows).sort_values(
+        ["pass_rate", "median_return_pct", "worst_return_pct"],
+        ascending=[False, False, False],
+    ).reset_index(drop=True)
+
+
+def _rolling_gate(portfolio: dict, scenario: str, window_days: int) -> tuple[bool, str]:
+    accepted = int(portfolio.get("accepted", 0))
+    min_trades = 8 if window_days == 14 else 15 if window_days == 30 else 20
+    gross = float(portfolio.get("gross_return_pct", 0.0))
+    max_dd = float(portfolio.get("max_dd_pct", 0.0))
+    daily_dd = float(portfolio.get("daily_max_dd_pct", 0.0))
+    pf = float(portfolio.get("profit_factor", 0.0))
+    required_pf = {
+        "baseline": 1.2,
+        "high_22bps": 1.5,
+        "punitive_40bps": 1.2,
+        "nightmare_60bps": 1.0,
+    }.get(scenario, 1.2)
+    failures: list[str] = []
+    if accepted < min_trades:
+        failures.append("low_trades")
+    if gross <= 0:
+        failures.append("negative_return")
+    if max_dd > 0.02:
+        failures.append("dd_gt_2pct")
+    if daily_dd > 0.0075:
+        failures.append("daily_dd_gt_0_75pct")
+    if pf < required_pf:
+        failures.append("pf_low")
+    return (not failures, "pass" if not failures else ",".join(failures))
+
+
 def apply_cost_stress(
     trades: pd.DataFrame,
     *,
@@ -642,6 +780,7 @@ def _write_report(
     rules: pd.DataFrame,
     stress: pd.DataFrame,
     extreme: pd.DataFrame,
+    rolling_summary: pd.DataFrame,
     by_symbol: pd.DataFrame,
     by_setup: pd.DataFrame,
     management: pd.DataFrame,
@@ -670,6 +809,9 @@ def _write_report(
         "## Extreme Configuration Matrix",
         *_markdown_table(_format_report_table(_extreme_report_slice(extreme))),
         "",
+        "## Rolling Validation Summary",
+        *_markdown_table(_format_report_table(_rolling_report_slice(rolling_summary))),
+        "",
         "## Frequency By Symbol",
         *_markdown_table(_format_report_table(by_symbol.head(20))),
         "",
@@ -686,6 +828,7 @@ def _write_report(
         "- Post-target continuation is measured because fixed 2R may be too short for clean London/NY winners.",
         "- Stress scenarios convert extra bps into R, so tight-stop trades are penalized harder.",
         "- Extreme configs vary risk, concurrency, daily lockout, and friction with fixed signal rules.",
+        "- Rolling validation is the promotion gate; aggregate 60d performance is not enough.",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -740,6 +883,34 @@ def _extreme_report_slice(extreme: pd.DataFrame) -> pd.DataFrame:
         "return_to_dd",
     ]
     return keep[cols]
+
+
+def _rolling_report_slice(rolling_summary: pd.DataFrame) -> pd.DataFrame:
+    if rolling_summary.empty:
+        return rolling_summary
+    keep = rolling_summary[
+        (rolling_summary["rule"].isin(["strict_candidates", "ny_13_range_reversal", "late_us_fade"]))
+        & (rolling_summary["scenario"].isin(["baseline", "punitive_40bps", "nightmare_60bps"]))
+        & (rolling_summary["config"].isin(["base", "prop_strict"]))
+    ].copy()
+    cols = [
+        "window_days",
+        "rule",
+        "scenario",
+        "config",
+        "windows",
+        "pass_rate",
+        "negative_windows",
+        "median_return_pct",
+        "worst_return_pct",
+        "worst_dd_pct",
+        "median_pf",
+        "min_accepted",
+        "median_events_per_day",
+    ]
+    return keep[cols].sort_values(
+        ["window_days", "rule", "scenario", "config"]
+    ).reset_index(drop=True)
 
 
 def _format_report_table(df: pd.DataFrame) -> pd.DataFrame:

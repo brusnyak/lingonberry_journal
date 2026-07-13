@@ -337,3 +337,46 @@ Blunt interpretation:
   `base`, controlled concurrency, and better stress survival.
 - Next useful work is rolling walk-forward plus regime gating. More random
   indicators before that is noise.
+
+## 2026-07-13 Rolling Validation Update
+
+Added rolling validation to `crypto_foundation_trade_forensics`.
+
+Method:
+
+- Windows: `14d`, `30d`, `45d`.
+- Step: `7d`.
+- Rules: `strict_candidates`, `ny_13_range_reversal`, `late_us_fade`,
+  `london_trend_aligned`.
+- Scenarios: baseline, `high_22bps`, `punitive_40bps`, `nightmare_60bps`.
+- Configs: `base` and `prop_strict`.
+- Gate: positive return, enough trades, PF threshold, max DD <= `2%`, daily DD
+  <= `0.75%`.
+
+Strict candidate summary:
+
+| Window | Scenario | Config | Pass Rate | Negative Windows | Median Return | Worst Return | Worst DD | Median PF |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 14d | baseline | `base` | 85.7% | 0 | +2.77% | +0.01% | 0.76% | 3.33 |
+| 14d | high 22 bps | `base` | 57.1% | 1 | +2.27% | -0.58% | 0.92% | 2.39 |
+| 14d | punitive 40 bps | `base` | 57.1% | 3 | +1.87% | -1.06% | 1.06% | 1.71 |
+| 14d | nightmare 60 bps | `base` | 14.3% | 3 | +0.69% | -1.26% | 1.75% | 1.16 |
+| 30d | baseline | `base` | 100.0% | 0 | +4.41% | +1.08% | 0.76% | 3.24 |
+| 30d | high 22 bps | `base` | 80.0% | 0 | +3.14% | +0.26% | 0.92% | 2.31 |
+| 30d | punitive 40 bps | `base` | 40.0% | 1 | +2.10% | -0.41% | 1.32% | 1.74 |
+| 30d | nightmare 60 bps | `base` | 0.0% | 1 | +1.27% | -0.82% | 1.75% | 1.24 |
+| 45d | baseline | `base` | 100.0% | 0 | +7.59% | +4.56% | 0.76% | 3.03 |
+| 45d | high 22 bps | `base` | 100.0% | 0 | +4.84% | +2.76% | 0.92% | 2.04 |
+| 45d | punitive 40 bps | `base` | 0.0% | 0 | +2.60% | +1.28% | 1.32% | 1.47 |
+| 45d | nightmare 60 bps | `base` | 0.0% | 1 | +0.17% | -0.30% | 1.78% | 1.03 |
+
+Blunt interpretation:
+
+- Baseline and high-friction performance are promising. The edge is not fake.
+- Punitive friction is unstable. Some windows make money, but pass rate is not
+  deployment-grade.
+- Nightmare friction fails. Do not pretend this is robust to awful execution.
+- `base` is now the cleaner validation config. `prop_strict` prints larger
+  returns, but fails more rolling gates because daily/max DD is higher.
+- Next step is not more aggregate backtesting. It is a review packet focused on
+  the failing punitive/nightmare windows and the low-return baseline windows.
