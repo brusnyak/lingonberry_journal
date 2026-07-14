@@ -3474,3 +3474,77 @@ direction cascade + structural SL/TP, no extra checklist gate) is the right
 building block: build the next layer (consolidation) on top of it for all 6 pairs,
 carrying BTC/DOGE forward with their gap still open and flagged, rather than
 gating any pair in/out by an entry filter that doesn't actually generalize.
+
+## Phase 28 -- First proper cost-modeled backtest: a real bug found, and the honest baseline
+
+User: "let's move on and then run some proper backtests to measure dd, rr, win rate
+and the rest to get the baseline and keep on developing." Everything through Phase 27
+measured the foundation frictionlessly (the null-test harness hardcodes -1R on any SL
+hit, no fees/funding/position-sizing) -- deliberately, to isolate signal quality from
+costs. This phase wires the same foundation logic into the real engine for the first
+time: `MtfCascadeFoundation` (`backtesting/crypto/strategies/mtf_cascade_foundation.py`)
+reuses `structure_ema_direction`/`asof_direction`/`build_structure_index`/
+`structural_stop_target` exactly as the offline tool calls them (no second mechanism),
+run through `engine.runner.run()` with real `CryptoCosts` (fees, leverage, liquidation)
+and real per-symbol exchange specs via `foundation_backtest.py`. Deliberately loads
+through `crypto.data.load_crypto(source="merged")` directly rather than
+`crypto.batch`'s `_run_one_crypto`, which goes through `engine.data.load_data` without
+`crypto_source` and silently reverts to the shallow ~90-120 day window (the Phase 12/13
+bug) -- reusing that helper would have reintroduced it.
+
+**Bug found by the first real run, invisible to every offline test so far:** BTC's
+worst trade showed entry=94999.99, sl=95000.00 -- a 1-cent stop on a $95k asset --
+and reported **r_multiple = -7601** for a completely ordinary $4.03 loss.
+`structural_stop_target`'s fallback chain can land a stop almost exactly at the
+current close when a swing point happens to sit there; `calc_lots` sizes off
+`risk_amount / stop_dist`, so a near-zero `stop_dist` blows the theoretical lot size
+past the leverage cap -- the position actually gets sized to the leverage cap, not
+the intended 0.5% risk, and the R-multiple computed from that same tiny `stop_dist`
+then explodes. Checked all 6 pairs directly against the raw trade tables (not
+inferred): **12-37% of trades per pair had a sub-0.1%-of-price stop** (BTC worst,
+238/639 = 37%). The offline null-test harness (Phase 17-27) never saw this because
+`walk_structural_outcome` hardcodes `r_multiple=-1.0` on any SL hit regardless of the
+actual stop distance -- this is exactly why `checklist-ablation`'s `stop_atr_sane`
+criterion (Phase 27) was a "mild no-op" on signal quality even though it was quietly
+dropping ~25% of these same degenerate trades the whole time: the offline metric
+literally cannot see this failure mode. Only running real dollars off the real stop
+exposed it. Fixed with the same guard TrIct already uses for the identical fragility
+(Phase 6E): `min_stop_pct=0.1` (10bps), one universal threshold for every symbol
+(well below every pair's median structural stop of 0.14-0.41%), default-on. 397
+tests passing.
+
+**Baseline after the fix** (400 days, 5m entries, `risk_pct=0.005`, `CRYPTO_300`
+account, real `CryptoCosts`, `min_stop_pct=0.1`, `min_rr=1.5`, `horizon_bars=200`):
+
+| symbol | trades | WR | PF | payoff | avg_r | return% (400d) | max DD% (400d) | roll median ret%/30d | roll worst ret%/30d | roll median DD%/30d | roll worst DD%/30d | breach rate |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| BTC | 537 | 48.2% | 0.940 | 1.009 | -0.028 | -9.43% | 13.80% | -0.76% | -10.26% | 3.42% | 10.72% | 2.3% |
+| ETH | 661 | 47.1% | 0.996 | 1.121 | +0.003 | -0.98% | 29.97% | -1.68% | -13.79% | 5.30% | 14.55% | 20.0% |
+| SOL | 701 | 44.5% | 0.927 | 1.156 | -0.046 | -16.34% | 22.26% | -0.49% | -11.64% | 5.29% | 11.87% | 6.4% |
+| XRP | 696 | 46.0% | 0.956 | 1.123 | -0.026 | -10.15% | 17.26% | -0.02% | -10.09% | 5.20% | 11.32% | 6.0% |
+| DOGE | 650 | 42.6% | 0.945 | 1.272 | -0.034 | -12.17% | 21.93% | -0.93% | -14.18% | 4.90% | 14.18% | 7.5% |
+| BNB | 591 | 47.2% | 0.931 | 1.041 | -0.045 | -13.98% | 20.70% | -1.18% | -8.25% | 4.24% | 8.57% | 0.0% |
+
+Full table: `backtesting/results/crypto_mtf_cascade_direction/
+foundation_backtest_baseline.csv`.
+
+**Read, plainly:** every pair sits at PF just under 1.0 after real costs -- this is a
+net-negative-to-flat system, not a profitable one, full stop. Cumulative return over
+400 days is negative on all 6 pairs (-0.98% to -16.34%). Checked against the project's
+own margin-of-safety bar (docs/archive plan: worst 30d DD < 2%, median 30d return >=
+6%) -- not close on either axis; worst 30d DD alone is 4-7x over the 2% bar on every
+pair. Payoff ratio (1.0-1.27) and win rate (42.6-48.2%) are individually not
+unreasonable -- this isn't a broken direction signal (matches Phase 20's frictionless
+finding that direction itself has real edge), it's that fees + realistic position
+sizing eat the whole thing and leave nothing. Breach rate against CRYPTO_300's rules
+ranges 0% (BNB) to 20% (ETH) of 30-day windows even at a conservative 0.5% risk.
+
+**This is the answer to "get the baseline."** It is not a green light to keep
+layering. The foundation as currently defined is not profitable after costs on any
+of the 6 pairs. The next layer (consolidation) has to be the thing that closes this
+gap -- e.g. filtering out the chop/low-quality-structure periods that are dragging
+PF under 1.0 -- not an optional refinement on top of an already-working system.
+Building consolidation and re-running this exact baseline script is the correct next
+checkpoint: if consolidation doesn't measurably lift PF above 1.0 with real costs
+included, the foundation needs to change (wider stops to dilute the fee drag, a
+different entry timeframe, or a different signal) before any more layers get added.
