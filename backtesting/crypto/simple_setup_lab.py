@@ -26,7 +26,9 @@ from backtesting.crypto.mtf_cascade_direction import (
 )
 from backtesting.crypto.portfolio_validation import PortfolioRiskConfig, simulate_portfolio
 from backtesting.crypto.structure_regime_journal import price_action_snapshot
+from backtesting.features.core import atr
 from backtesting.features.structure import StructureConfig, build_structure_index
+from backtesting.features.vwap import build_vwap_index
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,7 @@ class SimpleSetupConfig:
     max_stop_pct: float | None = None
     base_round_trip_pct: float = 0.0006
     stress_round_trip_pct: float = 0.0020
+    slippage_mode: str = "fixed"  # "fixed" or "atr_scaled"; when atr_scaled, base/stress are atr multipliers
     max_base_cost_r: float | None = None
     max_stress_cost_r: float | None = None
     sessions: tuple[str, ...] | None = None
@@ -52,6 +55,8 @@ class SimpleSetupConfig:
     consolidation_states: tuple[str, ...] | None = None
     shock_alignments: tuple[str, ...] | None = None
     dmi_alignments: tuple[str, ...] | None = None
+    vwap_alignments: tuple[str, ...] | None = None
+    ema_alignments: tuple[str, ...] | None = None
     entry_delay_bars: int = 0
     run_label: str = ""
 
@@ -303,6 +308,33 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
 
+    # Precompute VWAP index and EMA slope for the entry timeframe
+    vwap_df = build_vwap_index(entry_bars) if "volume" in entry_bars.columns else None
+    entry_close = pd.to_numeric(entry_bars["close"], errors="coerce").to_numpy(dtype=float)
+    ema21 = pd.Series(entry_close).ewm(span=21, adjust=False).mean().to_numpy(dtype=float)
+    ema21_slope = np.full(len(entry_close), np.nan, dtype=float)
+    ema21_slope[5:] = ema21[5:] - ema21[:-5]  # 5-bar slope
+    atr_arr = atr(
+        pd.to_numeric(entry_bars["high"], errors="coerce").to_numpy(dtype=float),
+        pd.to_numeric(entry_bars["low"], errors="coerce").to_numpy(dtype=float),
+        entry_close,
+        period=14,
+    )
+
+    # Trend-day override: detect if price has been above VWAP for 6+ bars with rising highs
+    # (suppresses mean-reversion shorts in strong uptrend)
+    vwap_trend_override = np.full(len(entry_close), False, dtype=bool)
+    if vwap_df is not None:
+        vwap_vals = vwap_df["vwap"].to_numpy(dtype=float)
+        high_arr = pd.to_numeric(entry_bars["high"], errors="coerce").to_numpy(dtype=float)
+        for i in range(6, len(entry_close)):
+            above_vwap = entry_close[i - 6:i] > vwap_vals[i - 6:i]
+            rising_highs = all(high_arr[i - 5:i + 1] > high_arr[i - 6:i])  # 6-bar trend of higher highs
+            if above_vwap.all() and rising_highs:
+                vwap_trend_override[i] = True
+    else:
+        vwap_vals = np.full(len(entry_close), np.nan)
+
     rows = []
     for i in signal_idx:
         if i >= len(entry_bars) - 1:
@@ -332,10 +364,28 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         )
         if outcome is None:
             continue
-        base_cost_r = cfg.base_round_trip_pct * entry / risk
-        stress_cost_r = cfg.stress_round_trip_pct * entry / risk
+        if cfg.slippage_mode == "atr_scaled" and i < len(atr_arr) and np.isfinite(atr_arr[i]) and atr_arr[i] > 0:
+            atr_pct = atr_arr[i] / entry
+            # base_round_trip_pct = ATR multiplier (e.g., 0.05 = 5% ATR)
+            base_slip_pct = cfg.base_round_trip_pct * atr_pct
+            stress_slip_pct = cfg.stress_round_trip_pct * atr_pct
+            base_cost_r = base_slip_pct * entry / risk
+            stress_cost_r = stress_slip_pct * entry / risk
+        else:
+            base_cost_r = cfg.base_round_trip_pct * entry / risk
+            stress_cost_r = cfg.stress_round_trip_pct * entry / risk
         gross_r = float(outcome["r_multiple"])
         pa = price_action_snapshot(entry_bars, entry_ts=pd.to_datetime(entry_bars["ts"].iat[i], utc=True), direction=direction)
+
+        # VWAP state
+        vwap_val = vwap_vals[i] if vwap_df is not None else np.nan
+        vwap_align = vwap_alignment(direction, entry, vwap_val, atr_val=atr_arr[i] if i < len(atr_arr) else None)
+        trend_overridden = bool(vwap_trend_override[i]) and direction == "short"
+
+        # EMA slope state
+        ema_sl = ema21_slope[i] if i < len(ema21_slope) else np.nan
+        ema_align = ema_slope_alignment(direction, ema_sl)
+
         rows.append(
             {
                 "symbol": symbol,
@@ -368,6 +418,12 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
                 "plus_di_14": pa.get("plus_di_14", np.nan),
                 "minus_di_14": pa.get("minus_di_14", np.nan),
                 "dmi_alignment": dmi_alignment(direction, pa.get("plus_di_14", np.nan), pa.get("minus_di_14", np.nan)),
+                "vwap_alignment": vwap_align,
+                "ema_alignment": ema_align,
+                "vwap_trend_overridden": trend_overridden,
+                "vwap_price": vwap_val,
+                "ema21_price": ema21[i] if i < len(ema21) else np.nan,
+                "ema21_slope": ema_sl,
             }
         )
     return pd.DataFrame(rows)
@@ -742,6 +798,10 @@ def apply_trade_filters(trades: pd.DataFrame, cfg: SimpleSetupConfig) -> pd.Data
         out = out[out["shock_alignment"].isin(cfg.shock_alignments)]
     if cfg.dmi_alignments:
         out = out[out["dmi_alignment"].isin(cfg.dmi_alignments)]
+    if cfg.vwap_alignments:
+        out = out[out["vwap_alignment"].isin(cfg.vwap_alignments)]
+    if cfg.ema_alignments:
+        out = out[out["ema_alignment"].isin(cfg.ema_alignments)]
     return out.reset_index(drop=True)
 
 
@@ -772,6 +832,8 @@ def summary_row(group: pd.DataFrame, *, setup: str, symbol: str) -> dict:
         "top_consolidation_state": mode_or_empty(group.get("consolidation_state")),
         "top_shock_alignment": mode_or_empty(group.get("shock_alignment")),
         "top_dmi_alignment": mode_or_empty(group.get("dmi_alignment")),
+        "top_vwap_alignment": mode_or_empty(group.get("vwap_alignment")),
+        "top_ema_alignment": mode_or_empty(group.get("ema_alignment")),
     }
 
 
@@ -793,6 +855,40 @@ def dmi_alignment(direction: str, plus_di: float, minus_di: float) -> str:
     if direction == "short":
         return "aligned" if not bullish else "opposed"
     return "unknown"
+
+
+def vwap_alignment(direction: str, entry: float, vwap_val: float, atr_val: float | None = None) -> str:
+    """Classify VWAP alignment relative to trade direction.
+    aligned  = long above VWAP or short below VWAP
+    opposed  = long below VWAP or short above VWAP
+    flat     = price within 0.5 ATR of VWAP (neutral zone)
+    """
+    if not np.isfinite(vwap_val) or not np.isfinite(entry):
+        return "unknown"
+    dist = entry - vwap_val
+    if atr_val is not None and np.isfinite(atr_val) and atr_val > 0:
+        dist_atr = abs(dist) / atr_val
+        if dist_atr < 0.5:
+            return "flat"
+    if (direction == "long" and dist > 0) or (direction == "short" and dist < 0):
+        return "aligned"
+    return "opposed"
+
+
+def ema_slope_alignment(direction: str, ema_slope: float) -> str:
+    """Classify EMA21 slope alignment relative to trade direction.
+    aligned  = long & rising EMA, or short & falling EMA
+    opposed  = long & falling EMA, or short & rising EMA
+    flat     = slope near zero
+    """
+    if not np.isfinite(ema_slope):
+        return "unknown"
+    if abs(ema_slope) < 0.001:  # near-zero slope
+        return "flat"
+    rising = ema_slope > 0
+    if (direction == "long" and rising) or (direction == "short" and not rising):
+        return "aligned"
+    return "opposed"
 
 
 def profit_factor(r: np.ndarray) -> float:
@@ -842,6 +938,12 @@ def rolling_window_summary(
 def summarize_windows(windows: pd.DataFrame) -> pd.DataFrame:
     if windows.empty:
         return pd.DataFrame()
+    worst_base = float(windows["base_return_r"].min())
+    worst_stress = float(windows["stress_return_r"].min())
+    base_returns = windows["base_return_r"].to_numpy(dtype=float)
+    stress_returns = windows["stress_return_r"].to_numpy(dtype=float)
+    base_sharpe = _sharpe_ratio(base_returns) if len(base_returns) > 1 else np.nan
+    stress_sharpe = _sharpe_ratio(stress_returns) if len(stress_returns) > 1 else np.nan
     return pd.DataFrame(
         [
             {
@@ -850,12 +952,25 @@ def summarize_windows(windows: pd.DataFrame) -> pd.DataFrame:
                 "positive_base_windows": float((windows["base_return_r"] > 0).mean()),
                 "positive_stress_windows": float((windows["stress_return_r"] > 0).mean()),
                 "median_base_pf": float(windows["base_pf"].replace([np.inf, -np.inf], np.nan).median()),
-                "worst_base_return_r": float(windows["base_return_r"].min()),
+                "worst_base_return_r": worst_base,
+                "worst_base_dd_pct": worst_base,  # R-based proxy for DD in window
                 "median_stress_pf": float(windows["stress_pf"].replace([np.inf, -np.inf], np.nan).median()),
-                "worst_stress_return_r": float(windows["stress_return_r"].min()),
+                "worst_stress_return_r": worst_stress,
+                "worst_stress_dd_pct": worst_stress,
+                "base_sharpe": base_sharpe,
+                "stress_sharpe": stress_sharpe,
             }
         ]
     )
+
+
+def _sharpe_ratio(returns: np.ndarray, risk_free: float = 0.0) -> float:
+    """Annualized Sharpe from period returns (assumes ~96 15m bars per day)."""
+    if len(returns) < 2 or np.std(returns) == 0:
+        return np.nan
+    periods_per_year = 365 * 24 * 60 / 15  # ~35040 for 15m bars
+    mean_excess = np.mean(returns) - risk_free
+    return float(mean_excess / np.std(returns) * np.sqrt(periods_per_year / len(returns)))
 
 
 def run_portfolio_validation(
@@ -1214,7 +1329,14 @@ def session_bucket(ts: pd.Timestamp) -> str:
     return "late_us"
 
 
-def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path, windows: pd.DataFrame | None = None) -> None:
+def write_report(
+    summary: pd.DataFrame,
+    trades: pd.DataFrame,
+    output: Path,
+    windows: pd.DataFrame | None = None,
+    windows_60d: pd.DataFrame | None = None,
+    windows_90d: pd.DataFrame | None = None,
+) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# Simple Crypto Setup Lab",
@@ -1236,7 +1358,7 @@ def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path, wind
             median_stop_pct=("stop_pct", "median"),
         ).reset_index()
         lines.append(dataframe_to_markdown(session))
-        context = trades.groupby(["trend_strength", "consolidation_state", "shock_alignment", "dmi_alignment"]).agg(
+        context = trades.groupby(["trend_strength", "consolidation_state", "shock_alignment", "dmi_alignment", "vwap_alignment", "ema_alignment"]).agg(
             trades=("base_net_r", "size"),
             stress_avg_r=("stress_net_r", "mean"),
             stress_pf=("stress_net_r", profit_factor),
@@ -1250,9 +1372,29 @@ def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path, wind
                 "",
                 "## Rolling Windows",
                 "",
+                "### 30-day windows",
+                "",
                 dataframe_to_markdown(summarize_windows(windows)),
             ]
         )
+        if not windows_60d.empty:
+            lines.extend(
+                [
+                    "",
+                    "### 60-day windows",
+                    "",
+                    dataframe_to_markdown(summarize_windows(windows_60d)),
+                ]
+            )
+        if not windows_90d.empty:
+            lines.extend(
+                [
+                    "",
+                    "### 90-day windows",
+                    "",
+                    dataframe_to_markdown(summarize_windows(windows_90d)),
+                ]
+            )
     lines.extend(
         [
             "",
@@ -1393,6 +1535,8 @@ def main() -> int:
     parser.add_argument("--consolidation-states", default="", help="Comma-separated consolidation states.")
     parser.add_argument("--shock-alignments", default="", help="Comma-separated shock states: no_shock,aligned_shock,opposing_shock")
     parser.add_argument("--dmi-alignments", default="", help="Comma-separated DMI direction states: aligned,opposed,flat,unknown")
+    parser.add_argument("--vwap-alignments", default="", help="Comma-separated VWAP alignment states: aligned,opposed,flat,unknown")
+    parser.add_argument("--ema-alignments", default="", help="Comma-separated EMA slope alignment states: aligned,opposed,flat,unknown")
     parser.add_argument("--entry-delay-bars", type=int, default=0, help="For context_change: wait N entry bars after a fresh context change.")
     parser.add_argument("--run-label", default="", help="Optional suffix label for output files, e.g. no-btc.")
     parser.add_argument("--window-days", type=int, default=30)
@@ -1407,6 +1551,7 @@ def main() -> int:
     parser.add_argument("--review-packet", action="store_true", help="When portfolio is enabled, export every accepted trade for the review UI.")
     parser.add_argument("--feature-table", action="store_true", help="Export filtered setup candidates with labels for later ranking/ML research.")
     parser.add_argument("--feature-report", action="store_true", help="Write feature bucket diagnostics from the exported candidate table.")
+    parser.add_argument("--slippage-mode", default="fixed", choices=["fixed", "atr_scaled"], help="fixed=flat bps cost; atr_scaled=base/stress are ATR multipliers")
     parser.add_argument("--feature-min-count", type=int, default=10, help="Minimum trades per feature bucket in the feature report.")
     parser.add_argument("--frequency-audit", action="store_true", help="Write a day-level audit explaining untraded days and blocked signals.")
     parser.add_argument("--output-dir", default="backtesting/results/crypto_simple_setup_lab")
@@ -1418,6 +1563,8 @@ def main() -> int:
     consolidation_states = tuple(s.strip() for s in args.consolidation_states.split(",") if s.strip()) or None
     shock_alignments = tuple(s.strip() for s in args.shock_alignments.split(",") if s.strip()) or None
     dmi_alignments = tuple(s.strip() for s in args.dmi_alignments.split(",") if s.strip()) or None
+    vwap_alignments = tuple(s.strip() for s in args.vwap_alignments.split(",") if s.strip()) or None
+    ema_alignments = tuple(s.strip() for s in args.ema_alignments.split(",") if s.strip()) or None
     cfg = SimpleSetupConfig(
         days=args.days,
         entry_tf=args.entry_tf,
@@ -1433,11 +1580,16 @@ def main() -> int:
         consolidation_states=consolidation_states,
         shock_alignments=shock_alignments,
         dmi_alignments=dmi_alignments,
+        vwap_alignments=vwap_alignments,
+        ema_alignments=ema_alignments,
         entry_delay_bars=args.entry_delay_bars,
+        slippage_mode=args.slippage_mode,
         run_label=args.run_label.strip(),
     )
     trades, summary = run_simple_setup_lab(symbols, config=cfg, setup=args.setup)
     windows = rolling_window_summary(trades, window_days=args.window_days, step_days=args.step_days)
+    windows_60d = rolling_window_summary(trades, window_days=60, step_days=14, min_trades=3)
+    windows_90d = rolling_window_summary(trades, window_days=90, step_days=21, min_trades=3)
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1445,7 +1597,7 @@ def main() -> int:
     trades.to_csv(out_dir / f"{suffix}_trades.csv", index=False)
     summary.to_csv(out_dir / f"{suffix}_summary.csv", index=False)
     windows.to_csv(out_dir / f"{suffix}_windows.csv", index=False)
-    write_report(summary, trades, out_dir / f"{suffix}_report.md", windows)
+    write_report(summary, trades, out_dir / f"{suffix}_report.md", windows, windows_60d, windows_90d)
     if args.feature_table:
         feature_path = out_dir / f"{suffix}_features.csv"
         features = build_candidate_feature_table(trades, output_path=feature_path)
@@ -1486,8 +1638,14 @@ def main() -> int:
             print(daily["primary_blocker"].value_counts().to_string())
     print(summary.to_string(index=False))
     if not windows.empty:
-        print("\nRolling windows")
+        print("\nRolling windows (30d)")
         print(summarize_windows(windows).to_string(index=False))
+        if not windows_60d.empty:
+            print("\nRolling windows (60d)")
+            print(summarize_windows(windows_60d).to_string(index=False))
+        if not windows_90d.empty:
+            print("\nRolling windows (90d)")
+            print(summarize_windows(windows_90d).to_string(index=False))
     return 0
 
 
@@ -1513,12 +1671,18 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append("shock-" + "-".join(cfg.shock_alignments))
     if cfg.dmi_alignments:
         parts.append("dmi-" + "-".join(cfg.dmi_alignments))
+    if cfg.vwap_alignments:
+        parts.append("vwap-" + "-".join(cfg.vwap_alignments))
+    if cfg.ema_alignments:
+        parts.append("ema-" + "-".join(cfg.ema_alignments))
     if cfg.entry_delay_bars:
         parts.append(f"delay{cfg.entry_delay_bars}b")
     if cfg.run_label:
         parts.append(cfg.run_label)
     if cfg.context_mode != "strict":
         parts.append(cfg.context_mode)
+    if cfg.slippage_mode != "fixed":
+        parts.append(f"slip-{cfg.slippage_mode}")
     return "_".join(parts).replace(".", "p")
 
 
