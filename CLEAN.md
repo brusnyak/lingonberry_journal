@@ -5148,3 +5148,64 @@ Next development should stay on foundation:
    states instead of treating all `neutral` as identical.
 3. Keep the costcap continuation setup as the current benchmark to beat, not as
    a deployable system.
+
+## Phase 53 -- Foundation direction-state report (2026-07-14)
+
+Built `foundation_direction_report.py` to score the direction foundation before
+any setup trigger:
+
+- Classifies each causal 15m decision point into:
+  - `confirmed_trend`
+  - `pullback_in_trend`
+  - `local_trend_htf_neutral`
+  - `htf_local_disagree`
+  - `range_or_unresolved`
+- Samples first state/direction per UTC day by default, so one persistent trend
+  is not counted 50 times.
+- Scores symmetric 1R forward paths over 24/48/96 bars.
+- Exports aggregate and per-symbol summaries.
+
+Tests added for state classification, daily sampling, forward scoring, and
+per-symbol accuracy.
+
+Validation: focused tests passed.
+
+### 6-symbol 360d direction-state result
+
+Strict context, daily-first samples:
+
+| State | 96-bar calls | Direction accuracy | Read |
+|-------|-------------:|-------------------:|------|
+| confirmed_trend | 1082 | 50.88% | weak/no edge |
+| local_trend_htf_neutral | 1892 | 49.05% | reject as direction source |
+| pullback_in_trend | 1021 | 47.50% | reject for naive continuation |
+
+Global-bias context (neutral 240m upgraded by EMA/VWAP/swing sequence) did not
+help:
+
+| State | 96-bar calls | Direction accuracy | Read |
+|-------|-------------:|-------------------:|------|
+| confirmed_trend | 1106 | 50.77% | no material improvement |
+| local_trend_htf_neutral | 1876 | 49.31% | still weak |
+| pullback_in_trend | 1044 | 48.28% | still weak |
+
+By-symbol, strict `confirmed_trend`, 96 bars:
+
+| Symbol | Calls | Accuracy |
+|--------|------:|---------:|
+| BTCUSDT | 179 | 54.19% |
+| SOLUSDT | 181 | 53.04% |
+| XRPUSDT | 178 | 51.98% |
+| BNBUSDT | 187 | 50.27% |
+| DOGEUSDT | 176 | 48.86% |
+| ETHUSDT | 181 | 46.96% |
+
+Read:
+
+- Generic MTF direction is not enough. It is roughly coin-flip before entry,
+  stop geometry, session, and cost filters.
+- Simple EMA/VWAP neutral upgrades are not a fix.
+- Do not build setups that depend on "direction is solved" because it is not.
+- The next useful foundation layer is not more trend labels; it is path/context
+  discrimination: expansion vs sweep/reclaim vs compression/range, then setup
+  rules tied to those path classes.
