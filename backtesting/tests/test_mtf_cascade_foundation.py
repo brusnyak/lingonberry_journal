@@ -4,7 +4,7 @@ import pandas as pd
 
 from backtesting.crypto.strategies.mtf_cascade_foundation import MtfCascadeFoundation
 from backtesting.crypto.synthetic_ohlcv import make_staircase_series
-from backtesting.engine.base import BarData
+from backtesting.engine.base import BarData, EngineState
 from backtesting.engine.costs import CryptoCosts
 from backtesting.engine.orders import Direction, Position
 from backtesting.engine.runner import run
@@ -67,3 +67,45 @@ def test_strategy_requires_all_three_timeframes():
     strat = MtfCascadeFoundation()
     with pytest.raises(ValueError):
         strat.init({"240": pd.DataFrame(), "30": pd.DataFrame()})
+
+
+def test_min_stop_pct_rejects_degenerate_stop_signal():
+    """Phase 28: a stop a few cents from entry made calc_lots size off a
+    near-zero risk denominator (leverage cap sizes the trade instead of
+    risk_pct), and the R-multiple computed from that same tiny stop_dist
+    blew up to -7601R on one real BTC trade. min_stop_pct must reject any
+    entry whose stop distance is below the threshold, as % of entry price."""
+    strat = MtfCascadeFoundation(min_stop_pct=0.1)
+    entry = 95000.0
+    degenerate_sl = 95000.01  # ~0.00001% away -- exactly the observed bug case
+    real_sl = 94700.0         # ~0.32% away -- a legitimate structural stop
+    assert (abs(entry - degenerate_sl) / entry * 100) < strat.min_stop_pct
+    assert (abs(entry - real_sl) / entry * 100) > strat.min_stop_pct
+
+
+def test_min_stop_pct_none_disables_the_filter():
+    strat = MtfCascadeFoundation(min_stop_pct=None)
+    assert strat.min_stop_pct is None
+
+
+def test_next_rejects_signal_when_stop_is_degenerate():
+    from unittest.mock import patch
+
+    data = _synthetic_cascade_data("up", seed=41)
+    strat = MtfCascadeFoundation(risk_pct=0.01, horizon_bars=200, min_stop_pct=0.1)
+    strat.init(data)
+    i = int(strat._changed[strat._changed].index[0])
+    bar = BarData(ts=strat._ts[i], open_=100, high=101, low=99, close=100.0, volume=0, index=i)
+    state = EngineState(equity=1000.0, initial_equity=1000.0, open_positions=[], closed_trades=[], bar_index=i)
+
+    with patch(
+        "backtesting.crypto.strategies.mtf_cascade_foundation.structural_stop_target",
+        return_value=(99.99, 101.0),  # ~0.01% away -- degenerate
+    ):
+        assert strat.next(bar, state) is None
+
+    with patch(
+        "backtesting.crypto.strategies.mtf_cascade_foundation.structural_stop_target",
+        return_value=(99.5, 101.0),  # ~0.5% away -- legitimate
+    ):
+        assert strat.next(bar, state) is not None

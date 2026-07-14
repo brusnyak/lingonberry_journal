@@ -52,12 +52,26 @@ class MtfCascadeFoundation(Strategy):
         horizon_bars: int = 200,
         structure_left: int = 2,
         structure_right: int = 2,
+        min_stop_pct: Optional[float] = 0.1,
     ):
         self.risk_pct = risk_pct
         self.min_rr = min_rr
         self.horizon_bars = horizon_bars
         self.structure_left = structure_left
         self.structure_right = structure_right
+        # Same fragility TrIct already guards against (Phase 6E): a stop a
+        # few cents from entry makes calc_lots size the position off a near-
+        # zero risk denominator, so the leverage cap -- not the intended
+        # risk_pct -- ends up sizing the trade, and the R-multiple computed
+        # from that same tiny stop_dist blows up (-7601R observed on one
+        # BTC trade with a 1-cent stop, Phase 28). The offline null-test
+        # harness never saw this because it hardcodes -1R on any SL hit;
+        # the real engine sizes real dollars off the real stop distance, so
+        # it can't be skipped here. min_stop_pct=0.1 (10bps) is universal --
+        # same threshold for every symbol, well below every pair's median
+        # structural stop (0.14-0.41%, Phase 25/28) -- drops only the
+        # degenerate tail, not real tight-but-legitimate stops.
+        self.min_stop_pct = min_stop_pct
 
         self._combo: pd.Series = pd.Series(dtype=object)
         self._changed: pd.Series = pd.Series(dtype=bool)
@@ -105,6 +119,8 @@ class MtfCascadeFoundation(Strategy):
         entry = bar.close
         sl, tp = structural_stop_target(srow, direction, entry, self.min_rr)
         if not np.isfinite(sl):
+            return None
+        if self.min_stop_pct is not None and (abs(entry - sl) / entry * 100) < self.min_stop_pct:
             return None
 
         return Signal(
