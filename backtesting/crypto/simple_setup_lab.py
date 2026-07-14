@@ -1552,6 +1552,8 @@ def main() -> int:
     parser.add_argument("--feature-table", action="store_true", help="Export filtered setup candidates with labels for later ranking/ML research.")
     parser.add_argument("--feature-report", action="store_true", help="Write feature bucket diagnostics from the exported candidate table.")
     parser.add_argument("--slippage-mode", default="fixed", choices=["fixed", "atr_scaled"], help="fixed=flat bps cost; atr_scaled=base/stress are ATR multipliers")
+    parser.add_argument("--base-cost-pct", type=float, default=0.0006, help="Base round-trip cost pct (fixed mode) or ATR multiplier (atr_scaled mode).")
+    parser.add_argument("--stress-cost-pct", type=float, default=0.0020, help="Stress round-trip cost pct (fixed mode) or ATR multiplier (atr_scaled mode).")
     parser.add_argument("--feature-min-count", type=int, default=10, help="Minimum trades per feature bucket in the feature report.")
     parser.add_argument("--frequency-audit", action="store_true", help="Write a day-level audit explaining untraded days and blocked signals.")
     parser.add_argument("--output-dir", default="backtesting/results/crypto_simple_setup_lab")
@@ -1584,6 +1586,8 @@ def main() -> int:
         ema_alignments=ema_alignments,
         entry_delay_bars=args.entry_delay_bars,
         slippage_mode=args.slippage_mode,
+        base_round_trip_pct=args.base_cost_pct,
+        stress_round_trip_pct=args.stress_cost_pct,
         run_label=args.run_label.strip(),
     )
     trades, summary = run_simple_setup_lab(symbols, config=cfg, setup=args.setup)
@@ -1683,6 +1687,10 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append(cfg.context_mode)
     if cfg.slippage_mode != "fixed":
         parts.append(f"slip-{cfg.slippage_mode}")
+    if cfg.base_round_trip_pct != 0.0006:
+        parts.append(f"basecostpct{cfg.base_round_trip_pct:g}")
+    if cfg.stress_round_trip_pct != 0.0020:
+        parts.append(f"stresscostpct{cfg.stress_round_trip_pct:g}")
     return "_".join(parts).replace(".", "p")
 
 
