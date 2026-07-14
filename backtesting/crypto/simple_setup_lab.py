@@ -407,6 +407,7 @@ def setup_signal(
         "micro_reclaim_context",
         "continuation_reclaim",
         "structure_confirmed_context",
+        "choch_bos_context",
     }:
         raise ValueError(f"unknown setup: {setup}")
     combo_s = pd.Series(combo)
@@ -427,6 +428,10 @@ def setup_signal(
         if structure is None or structure.empty:
             return np.zeros(len(combo_s), dtype=bool)
         return structure_confirmed_context_signal(combo_s, structure)
+    if setup == "choch_bos_context":
+        if structure is None or structure.empty:
+            return np.zeros(len(combo_s), dtype=bool)
+        return choch_bos_context_signal(combo_s, structure, entry_bars=entry_bars)
 
     close = pd.to_numeric(entry_bars["close"], errors="coerce")
     low = pd.to_numeric(entry_bars["low"], errors="coerce")
@@ -558,6 +563,130 @@ def structure_confirmed_context_signal(
         & ~bull_choch_recent
     )
     signal = long_confirm | short_confirm
+    return (signal & ~signal.shift(1, fill_value=False)).to_numpy()
+
+
+def choch_bos_context_signal(
+    combo_s: pd.Series,
+    structure: pd.DataFrame,
+    *,
+    entry_bars: pd.DataFrame | None = None,
+    choch_lookback: int = 12,
+    bos_lookback: int = 8,
+    min_context_bars: int = 1,
+    max_context_bars: int = 48,
+    gap_atr_mult: float = 0.0,
+) -> np.ndarray:
+    """Enter after a CHoCH AND a BOS in the new direction, in that order.
+
+    Requirements:
+      1. MTF direction context is active (bull/bear).
+      2. A CHoCH in the new direction fired within `choch_lookback` bars.
+      3. A BOS in the new direction fired within `bos_lookback` bars.
+      4. The CHoCH bar index < BOS bar index (right order: reversal warning
+         first, then trend continuation).
+      5. No opposing CHoCH within the lookback.
+      6. Context has been active for at least `min_context_bars` (optional).
+      7. If gap_atr_mult > 0 and entry_bars provided: skip entry for
+         `gap_cooldown_bars` after a candle > gap_atr_mult × ATR.
+
+    This is a stronger confirmation than just BOS alone — it requires
+    the market to first show a character change (CHoCH) and then confirm
+    with a break of structure (BOS), which filters out many false starts.
+    """
+    active = combo_s.isin(["bull", "bear"])
+    context_change = combo_s.ne(combo_s.shift(1)) & active
+    bars_since_context = _bars_since(context_change)
+
+    regime = structure["regime"].astype(str).reset_index(drop=True)
+
+    # CHoCH and BOS detection in the lookback window
+    bull_choch = _rolling_recent_bool(structure["choch_up"].astype(bool), choch_lookback)
+    bear_choch = _rolling_recent_bool(structure["choch_down"].astype(bool), choch_lookback)
+    bull_bos = _rolling_recent_bool(structure["bos_up"].astype(bool), bos_lookback)
+    bear_bos = _rolling_recent_bool(structure["bos_down"].astype(bool), bos_lookback)
+
+    # Opposing CHoCH would invalidate
+    bear_choch_recent = _rolling_recent_bool(structure["choch_down"].astype(bool), choch_lookback)
+    bull_choch_recent = _rolling_recent_bool(structure["choch_up"].astype(bool), choch_lookback)
+
+    # Verify CHoCH happened before BOS (correct order).
+    # Track the most recent CHoCH and BOS bar indices at each position.
+    n = len(combo_s)
+    st_n = len(structure)
+    # Build arrays tracking "how many bars ago was the last event" at each bar
+    bull_choch_ago = np.full(n, np.nan)
+    bull_bos_ago = np.full(n, np.nan)
+    bear_choch_ago = np.full(n, np.nan)
+    bear_bos_ago = np.full(n, np.nan)
+
+    last_bull_choch = -999
+    last_bull_bos = -999
+    last_bear_choch = -999
+    last_bear_bos = -999
+
+    for i in range(min(n, st_n)):
+        if i < len(structure):
+            if bool(structure["choch_up"].iat[i]):
+                last_bull_choch = i
+            if bool(structure["bos_up"].iat[i]):
+                last_bull_bos = i
+            if bool(structure["choch_down"].iat[i]):
+                last_bear_choch = i
+            if bool(structure["bos_down"].iat[i]):
+                last_bear_bos = i
+        bull_choch_ago[i] = i - last_bull_choch if last_bull_choch >= 0 else np.nan
+        bull_bos_ago[i] = i - last_bull_bos if last_bull_bos >= 0 else np.nan
+        bear_choch_ago[i] = i - last_bear_choch if last_bear_choch >= 0 else np.nan
+        bear_bos_ago[i] = i - last_bear_bos if last_bear_bos >= 0 else np.nan
+
+    # CHoCH before BOS check: choch_ago > bos_ago means the CHoCH happened
+    # LONGER ago than the BOS, i.e., CHoCH came first (reversal warning),
+    # then BOS followed (trend continuation). Correct order is CHoCH→BOS.
+    bull_order_ok = (~np.isnan(bull_choch_ago)) & (~np.isnan(bull_bos_ago)) & (bull_choch_ago > bull_bos_ago)
+    bear_order_ok = (~np.isnan(bear_choch_ago)) & (~np.isnan(bear_bos_ago)) & (bear_choch_ago > bear_bos_ago)
+
+    # Gap protection: skip entry after abnormally large candles
+    gap_filter = pd.Series(True, index=range(n))
+    if gap_atr_mult > 0 and entry_bars is not None:
+        high = pd.to_numeric(entry_bars["high"], errors="coerce")
+        low = pd.to_numeric(entry_bars["low"], errors="coerce")
+        candle_range = high - low
+        atr = candle_range.rolling(14, min_periods=14).mean()
+        large_candle = candle_range > gap_atr_mult * atr
+        gap_cooldown = 0
+        for i in range(n):
+            if gap_cooldown > 0:
+                gap_filter.iat[i] = False
+                gap_cooldown -= 1
+            if large_candle.iat[i] if i < len(large_candle) else False:
+                # Large candle detected — cool down for 3 bars
+                gap_cooldown = 3
+                gap_filter.iat[i] = False if gap_cooldown > 0 else True
+
+    # Combine all conditions
+    valid_window = bars_since_context.between(min_context_bars, max_context_bars)
+    long_signal = (
+        (combo_s == "bull")
+        & valid_window
+        & bull_choch
+        & bull_bos
+        & bull_order_ok
+        & ~bear_choch_recent
+        & regime.eq("bull")
+        & gap_filter
+    )
+    short_signal = (
+        (combo_s == "bear")
+        & valid_window
+        & bear_choch
+        & bear_bos
+        & bear_order_ok
+        & ~bull_choch_recent
+        & regime.eq("bear")
+        & gap_filter
+    )
+    signal = long_signal | short_signal
     return (signal & ~signal.shift(1, fill_value=False)).to_numpy()
 
 
@@ -1247,6 +1376,7 @@ def main() -> int:
             "micro_reclaim_context",
             "continuation_reclaim",
             "structure_confirmed_context",
+            "choch_bos_context",
         ],
     )
     parser.add_argument("--days", type=int, default=400)
