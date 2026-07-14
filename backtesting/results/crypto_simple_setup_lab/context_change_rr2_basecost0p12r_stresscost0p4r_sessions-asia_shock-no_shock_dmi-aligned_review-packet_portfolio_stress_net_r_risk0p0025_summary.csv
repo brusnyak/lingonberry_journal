@@ -1,0 +1,2 @@
+candidates,accepted,acceptance_rate,symbols,exchanges,total_r,avg_r,median_r,profit_factor,gross_return_pct,max_dd_pct,daily_max_dd_pct,return_to_dd,win_rate,stop_rate,expiry_rate,risk_per_trade_pct,max_open_trades,max_open_per_symbol,daily_loss_limit_pct
+94,77,0.8191489361702128,6,1,48.83306055824415,0.6341955916655084,1.6739351870374037,2.4305314783182554,0.12208265139561034,0.021121309038036815,0.01384631550606473,5.78007031551666,0.5844155844155844,0.36363636363636365,0.05194805194805195,0.0025,3,1,0.005
