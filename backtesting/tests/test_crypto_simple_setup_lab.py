@@ -70,6 +70,9 @@ def test_summarize_trades_reports_cost_fragility_fields():
             "exit_kind": ["target", "stop"],
             "mfe_r": [1.6, 0.4],
             "mae_r": [-0.2, -1.0],
+            "trend_strength": ["trend", "transition"],
+            "consolidation_state": ["directional", "transition"],
+            "shock_alignment": ["no_shock", "aligned_shock"],
         }
     )
 
@@ -78,6 +81,7 @@ def test_summarize_trades_reports_cost_fragility_fields():
     assert {"base_avg_r", "base_pf", "stress_avg_r", "median_base_cost_r"}.issubset(summary.columns)
     assert summary.iloc[0]["trades"] == 2
     assert summary.iloc[0]["median_stop_pct"] == 0.4
+    assert summary.iloc[0]["top_trend_strength"] == "transition"
 
 
 def test_apply_trade_filters_cost_and_session_gate():
@@ -86,9 +90,19 @@ def test_apply_trade_filters_cost_and_session_gate():
             "base_cost_r": [0.10, 0.20, 0.10],
             "stress_cost_r": [0.30, 0.40, 0.60],
             "session_utc": ["ny", "ny", "late_us"],
+            "trend_strength": ["trend", "weak_or_range", "trend"],
+            "consolidation_state": ["directional", "range", "directional"],
+            "shock_alignment": ["no_shock", "no_shock", "opposing_shock"],
         }
     )
-    cfg = SimpleSetupConfig(max_base_cost_r=0.15, max_stress_cost_r=0.50, sessions=("ny",))
+    cfg = SimpleSetupConfig(
+        max_base_cost_r=0.15,
+        max_stress_cost_r=0.50,
+        sessions=("ny",),
+        trend_strengths=("trend",),
+        consolidation_states=("directional",),
+        shock_alignments=("no_shock",),
+    )
 
     out = apply_trade_filters(trades, cfg)
 

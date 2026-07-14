@@ -25,6 +25,7 @@ from backtesting.crypto.mtf_cascade_direction import (
     walk_structural_outcome,
 )
 from backtesting.crypto.portfolio_validation import PortfolioRiskConfig, simulate_portfolio
+from backtesting.crypto.structure_regime_journal import price_action_snapshot
 from backtesting.features.structure import StructureConfig, build_structure_index
 
 
@@ -44,6 +45,9 @@ class SimpleSetupConfig:
     max_base_cost_r: float | None = None
     max_stress_cost_r: float | None = None
     sessions: tuple[str, ...] | None = None
+    trend_strengths: tuple[str, ...] | None = None
+    consolidation_states: tuple[str, ...] | None = None
+    shock_alignments: tuple[str, ...] | None = None
 
 
 def run_simple_setup_lab(
@@ -105,6 +109,7 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         base_cost_r = cfg.base_round_trip_pct * entry / risk
         stress_cost_r = cfg.stress_round_trip_pct * entry / risk
         gross_r = float(outcome["r_multiple"])
+        pa = price_action_snapshot(entry_bars, entry_ts=pd.to_datetime(entry_bars["ts"].iat[i], utc=True), direction=direction)
         rows.append(
             {
                 "symbol": symbol,
@@ -127,6 +132,12 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
                 "mae_r": float(outcome.get("mae_r", np.nan)),
                 "bars_to_exit": int(outcome.get("bars_to_exit", cfg.horizon_bars)),
                 "exit_kind": str(outcome.get("exit_reason", exit_kind(gross_r))),
+                "trend_strength": pa.get("trend_strength", "unknown"),
+                "consolidation_state": pa.get("consolidation_state", "unknown"),
+                "shock_alignment": pa.get("shock_alignment", "no_shock"),
+                "compression_state": pa.get("compression_state", "unknown"),
+                "pre_range_atr_16": pa.get("pre_range_atr_16", np.nan),
+                "adx_14": pa.get("adx_14", np.nan),
             }
         )
     return pd.DataFrame(rows)
@@ -182,6 +193,12 @@ def apply_trade_filters(trades: pd.DataFrame, cfg: SimpleSetupConfig) -> pd.Data
         out = out[out["stress_cost_r"] <= cfg.max_stress_cost_r]
     if cfg.sessions:
         out = out[out["session_utc"].isin(cfg.sessions)]
+    if cfg.trend_strengths:
+        out = out[out["trend_strength"].isin(cfg.trend_strengths)]
+    if cfg.consolidation_states:
+        out = out[out["consolidation_state"].isin(cfg.consolidation_states)]
+    if cfg.shock_alignments:
+        out = out[out["shock_alignment"].isin(cfg.shock_alignments)]
     return out.reset_index(drop=True)
 
 
@@ -208,7 +225,17 @@ def summary_row(group: pd.DataFrame, *, setup: str, symbol: str) -> dict:
         "expiry_rate": float((group["exit_kind"] == "expiry").mean()),
         "median_mfe_r": float(group["mfe_r"].median()),
         "median_mae_r": float(group["mae_r"].median()),
+        "top_trend_strength": mode_or_empty(group.get("trend_strength")),
+        "top_consolidation_state": mode_or_empty(group.get("consolidation_state")),
+        "top_shock_alignment": mode_or_empty(group.get("shock_alignment")),
     }
+
+
+def mode_or_empty(values: pd.Series | None) -> str:
+    if values is None or values.empty:
+        return ""
+    mode = values.astype(str).mode(dropna=True)
+    return "" if mode.empty else str(mode.iat[0])
 
 
 def profit_factor(r: np.ndarray) -> float:
@@ -367,6 +394,12 @@ def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path, wind
             median_stop_pct=("stop_pct", "median"),
         ).reset_index()
         lines.append(dataframe_to_markdown(session))
+        context = trades.groupby(["trend_strength", "consolidation_state", "shock_alignment"]).agg(
+            trades=("base_net_r", "size"),
+            stress_avg_r=("stress_net_r", "mean"),
+            stress_pf=("stress_net_r", profit_factor),
+        ).reset_index().sort_values(["stress_avg_r", "trades"], ascending=[False, False])
+        lines.extend(["", "## Context Split", "", dataframe_to_markdown(context.head(20))])
     else:
         lines.append("No trades.")
     if windows is not None and not windows.empty:
@@ -455,6 +488,9 @@ def main() -> int:
     parser.add_argument("--max-base-cost-r", type=float, default=None)
     parser.add_argument("--max-stress-cost-r", type=float, default=None)
     parser.add_argument("--sessions", default="", help="Comma-separated UTC session buckets: asia,london,ny,late_us")
+    parser.add_argument("--trend-strengths", default="", help="Comma-separated trend buckets: weak_or_range,transition,trend,strong_trend")
+    parser.add_argument("--consolidation-states", default="", help="Comma-separated consolidation states.")
+    parser.add_argument("--shock-alignments", default="", help="Comma-separated shock states: no_shock,aligned_shock,opposing_shock")
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--step-days", type=int, default=7)
     parser.add_argument("--portfolio", action="store_true")
@@ -469,12 +505,18 @@ def main() -> int:
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     sessions = tuple(s.strip() for s in args.sessions.split(",") if s.strip()) or None
+    trend_strengths = tuple(s.strip() for s in args.trend_strengths.split(",") if s.strip()) or None
+    consolidation_states = tuple(s.strip() for s in args.consolidation_states.split(",") if s.strip()) or None
+    shock_alignments = tuple(s.strip() for s in args.shock_alignments.split(",") if s.strip()) or None
     cfg = SimpleSetupConfig(
         days=args.days,
         min_rr=args.min_rr,
         max_base_cost_r=args.max_base_cost_r,
         max_stress_cost_r=args.max_stress_cost_r,
         sessions=sessions,
+        trend_strengths=trend_strengths,
+        consolidation_states=consolidation_states,
+        shock_alignments=shock_alignments,
     )
     trades, summary = run_simple_setup_lab(symbols, config=cfg, setup=args.setup)
     windows = rolling_window_summary(trades, window_days=args.window_days, step_days=args.step_days)
@@ -517,6 +559,12 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append(f"stresscost{cfg.max_stress_cost_r:g}r")
     if cfg.sessions:
         parts.append("sessions-" + "-".join(cfg.sessions))
+    if cfg.trend_strengths:
+        parts.append("trend-" + "-".join(cfg.trend_strengths))
+    if cfg.consolidation_states:
+        parts.append("state-" + "-".join(cfg.consolidation_states))
+    if cfg.shock_alignments:
+        parts.append("shock-" + "-".join(cfg.shock_alignments))
     return "_".join(parts).replace(".", "p")
 
 

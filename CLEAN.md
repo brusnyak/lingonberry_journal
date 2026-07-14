@@ -3880,3 +3880,85 @@ readiness because:
 Next meaningful step: export review samples for the worst stress windows of the
 5-symbol no-BNB candidate. Do not add entry logic until those losses are visually
 understood.
+
+## Phase 33 -- No-shock + stricter cost gate improves stress stability and drawdown
+
+User asked to continue improving RR/direction accuracy/drawdown before UI review.
+Added causal price-action context filters to `simple_setup_lab.py`, reusing existing
+repo diagnostics from `structure_regime_journal.price_action_snapshot()`:
+
+- `--trend-strengths`
+- `--consolidation-states`
+- `--shock-alignments`
+
+These are filters on the same simple setup, not a new engine. Tested only against the
+active candidate family: 5 symbols (`BTC, ETH, SOL, XRP, DOGE`), `context_change`,
+2R, asia/london/ny, stress-mode portfolio.
+
+Validation:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_simple_setup_lab.py \
+  backtesting/tests/test_mtf_cascade_direction.py \
+  backtesting/tests/test_mtf_cascade_foundation.py \
+  backtesting/tests/test_crypto_portfolio_validation.py -q
+# 41 passed
+```
+
+Filter comparison:
+
+| Variant | Candidates | Stress PF | Positive stress windows | Worst stress window | Portfolio risk | Return | Max DD | Daily DD | Return/DD |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Phase 32 baseline: cost `0.15R/0.50R`, no shock filter | 1,200 | 1.219 | 63.5% | -31.5R | 0.15% | +22.8% | 4.40% | 4.40% | 5.17 |
+| `no_shock`, cost `0.15R/0.50R` | 659 | 1.365 | 65.4% | -25.1R | 0.15% | +17.7% | 2.44% | 2.11% | 7.25 |
+| trend-only (`trend,strong_trend`) | 778 | 1.176 | 59.6% | -24.4R | 0.15% | +12.0% | 3.93% | 3.89% | 3.05 |
+| directional-state only | 775 | 1.179 | 59.6% | -24.4R | 0.15% | +12.2% | 3.93% | 3.89% | 3.10 |
+| `no_shock`, 2.5R | 659 | 1.301 | 63.5% | -25.1R | 0.15% | +12.1% | 3.48% | 2.90% | 3.47 |
+| `no_shock`, stricter cost `0.12R/0.40R` | 556 | 1.486 | 73.1% | -21.7R | 0.15% | +17.5% | 2.26% | 1.98% | 7.75 |
+| **same strict no-shock, risk 0.20%** | **556** | **1.486** | **73.1%** | **-21.7R** | **0.20%** | **+23.1%** | **2.77%** | **2.41%** | **8.34** |
+
+New best candidate:
+
+```bash
+PYTHONPATH=. python -m backtesting.crypto.simple_setup_lab \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT \
+  --setup context_change \
+  --days 400 \
+  --min-rr 2.0 \
+  --max-base-cost-r 0.12 \
+  --max-stress-cost-r 0.40 \
+  --sessions asia,london,ny \
+  --shock-alignments no_shock \
+  --portfolio \
+  --portfolio-net stress_net_r \
+  --risk-pct 0.002 \
+  --max-open 3 \
+  --max-open-per-symbol 1 \
+  --daily-loss-limit-pct 0.005 \
+  --cooldown-after-loss-bars 4
+```
+
+Result:
+
+- candidates: `556`;
+- accepted after portfolio throttles: `413`;
+- stress PF: `1.486`;
+- stress positive windows: `73.1%`;
+- stress median PF: `1.50`;
+- worst stress window: `-21.7R`;
+- portfolio return: `+23.1%`;
+- max DD: `2.77%`;
+- daily DD: `2.41%`;
+- return/DD: `8.34`.
+
+**Read:** this is the first variant that clears the earlier stress-window bar and
+materially reduces drawdown. The useful improvement came from **excluding recent
+shock context** and tightening cost-per-R, not from trend-strength or directional
+state filters. This is meaningful enough to prepare UI review samples next.
+
+Still not live-approved:
+
+- no UI review of worst windows yet;
+- no live fill/slippage sample;
+- the daily loss cap is still realized-trade based, not mark-to-market intraday;
+- no out-of-universe test beyond the five selected core crypto pairs.
