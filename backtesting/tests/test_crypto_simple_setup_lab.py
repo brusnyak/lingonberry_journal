@@ -9,9 +9,12 @@ from backtesting.crypto.simple_setup_lab import (
     apply_trade_filters,
     build_full_review_packet,
     delayed_context_signal,
+    daily_first_context_signal,
+    direction_context,
     dmi_alignment,
     exit_kind,
     profit_factor,
+    primary_daily_blocker,
     rolling_window_summary,
     run_portfolio_validation,
     session_bucket,
@@ -19,6 +22,7 @@ from backtesting.crypto.simple_setup_lab import (
     structure_confirmed_context_signal,
     summarize_trades,
     summarize_windows,
+    write_frequency_report,
 )
 
 
@@ -37,6 +41,38 @@ def test_delayed_context_signal_waits_for_context_to_hold():
     signal = delayed_context_signal(combo, delay_bars=2)
 
     assert signal.tolist() == [False, False, False, False, False, True]
+
+
+def test_daily_first_context_signal_fires_once_per_active_day():
+    bars = pd.DataFrame(
+        {
+            "ts": pd.to_datetime(
+                [
+                    "2026-01-01T00:00Z",
+                    "2026-01-01T00:15Z",
+                    "2026-01-01T00:30Z",
+                    "2026-01-02T00:00Z",
+                    "2026-01-02T00:15Z",
+                ]
+            )
+        }
+    )
+    combo = pd.Series(["neutral", "bull", "bull", "bull", "bear"])
+
+    signal = daily_first_context_signal(bars, combo)
+
+    assert signal.tolist() == [False, True, False, True, False]
+
+
+def test_direction_context_htf_only_ignores_entry_ema_disagreement(monkeypatch):
+    coarse = pd.DataFrame({"ts": pd.to_datetime(["2026-01-01T00:00Z"]), "direction": ["bull"]})
+    entry = pd.DataFrame({"ts": pd.to_datetime(["2026-01-01T00:15Z"]), "close": [100.0]})
+
+    monkeypatch.setattr("backtesting.crypto.simple_setup_lab.structure_ema_direction", lambda bars: coarse)
+    monkeypatch.setattr("backtesting.crypto.simple_setup_lab.vec_ema_state", lambda bars: pd.Series(["bearish"]))
+
+    assert direction_context(pd.DataFrame(), pd.DataFrame(), entry, mode="strict").tolist() == ["neutral"]
+    assert direction_context(pd.DataFrame(), pd.DataFrame(), entry, mode="htf_only").tolist() == ["bull"]
 
 
 def test_structure_confirmed_context_waits_for_same_direction_bos_after_context_change():
@@ -251,6 +287,35 @@ def test_build_full_review_packet_exports_every_accepted_trade(tmp_path):
     assert (tmp_path / "full_review_BTCUSDT.csv").exists()
     assert {"ts", "exit_ts", "outcome_2r", "return_pct", "review_bucket", "notes_hint"} <= set(packet.columns)
     assert packet["review_bucket"].eq("accepted_trade").all()
+
+
+def test_primary_daily_blocker_explains_untraded_days():
+    assert primary_daily_blocker(pd.Series({"portfolio_accepted": 1})) == "traded"
+    assert primary_daily_blocker(pd.Series({"portfolio_accepted": 0, "pre_portfolio_pass": 2})) == "portfolio_throttle"
+    assert primary_daily_blocker(pd.Series({"raw_signals": 0, "active_context_bars": 12})) == "no_setup_signal"
+    assert primary_daily_blocker(pd.Series({"raw_signals": 0, "active_context_bars": 0})) == "no_active_context"
+    assert primary_daily_blocker(pd.Series({"raw_signals": 2, "blocked_cost": 1, "blocked_context": 0})) == "blocked_cost"
+
+
+def test_write_frequency_report_outputs_blocker_summary(tmp_path):
+    daily = pd.DataFrame(
+        {
+            "symbol": ["ETHUSDT", "ETHUSDT"],
+            "day": [pd.Timestamp("2026-01-01").date(), pd.Timestamp("2026-01-02").date()],
+            "primary_blocker": ["traded", "no_setup_signal"],
+            "active_context_bars": [20, 10],
+            "raw_signals": [2, 0],
+            "pre_portfolio_pass": [1, 0],
+            "portfolio_accepted": [1, 0],
+        }
+    )
+    output = tmp_path / "freq.md"
+
+    write_frequency_report(daily, output)
+
+    text = output.read_text()
+    assert "Frequency Audit" in text
+    assert "no_setup_signal" in text
 
 
 def test_session_bucket_uses_utc_pseudo_sessions():

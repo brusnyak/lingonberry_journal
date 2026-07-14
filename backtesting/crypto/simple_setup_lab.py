@@ -37,6 +37,7 @@ class SimpleSetupConfig:
     global_tf: str = "240"
     local_tf: str = "30"
     entry_tf: str = "15"
+    context_mode: str = "strict"
     min_rr: float = 1.5
     horizon_bars: int = 96
     min_stop_pct: float = 0.1
@@ -68,6 +69,203 @@ def run_simple_setup_lab(
     return trades, summarize_trades(trades)
 
 
+def run_frequency_audit(
+    symbols: list[str] | None = None,
+    *,
+    config: SimpleSetupConfig | None = None,
+    setup: str = "context_change",
+    accepted: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Explain daily trade frequency by pipeline stage, not just final trades."""
+    cfg = config or SimpleSetupConfig()
+    daily_rows: list[dict] = []
+    signal_rows: list[dict] = []
+    for symbol in symbols or DEFAULT_SYMBOLS:
+        daily, signals = frequency_audit_symbol(symbol, cfg, setup=setup)
+        daily_rows.extend(daily.to_dict("records"))
+        signal_rows.extend(signals.to_dict("records"))
+    daily_df = pd.DataFrame(daily_rows)
+    signal_df = pd.DataFrame(signal_rows)
+    if daily_df.empty:
+        return daily_df, signal_df
+    if accepted is not None and not accepted.empty:
+        acc = accepted.copy()
+        acc["entry_ts"] = pd.to_datetime(acc["entry_ts"], utc=True)
+        acc["day"] = acc["entry_ts"].dt.date
+        accepted_daily = acc.groupby(["symbol", "day"]).size().rename("portfolio_accepted").reset_index()
+        daily_df = daily_df.merge(accepted_daily, on=["symbol", "day"], how="left")
+    else:
+        daily_df["portfolio_accepted"] = 0
+    daily_df["portfolio_accepted"] = daily_df["portfolio_accepted"].fillna(0).astype(int)
+    daily_df["portfolio_throttled"] = (daily_df["pre_portfolio_pass"] - daily_df["portfolio_accepted"]).clip(lower=0)
+    daily_df["primary_blocker"] = daily_df.apply(primary_daily_blocker, axis=1)
+    return daily_df.sort_values(["symbol", "day"]).reset_index(drop=True), signal_df.sort_values(["symbol", "entry_ts"]).reset_index(drop=True)
+
+
+def frequency_audit_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    bars = {
+        "global": load_crypto(symbol, tf=cfg.global_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True),
+        "local": load_crypto(symbol, tf=cfg.local_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True),
+        "entry": load_crypto(symbol, tf=cfg.entry_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True),
+    }
+    if any(df.empty for df in bars.values()):
+        return pd.DataFrame(), pd.DataFrame()
+
+    entry_bars = bars["entry"]
+    entry_ts = pd.to_datetime(entry_bars["ts"], utc=True)
+    combo = direction_context(bars["global"], bars["local"], entry_bars, mode=cfg.context_mode)
+    structure = build_structure_index(entry_bars, StructureConfig(left=2, right=2))
+    signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
+    signal_idx = np.where(signal_mask)[0]
+
+    signal_rows = []
+    for i in signal_idx:
+        row = signal_diagnostic_row(symbol, cfg, setup, entry_bars, structure, combo, int(i))
+        if row:
+            signal_rows.append(row)
+    signals = pd.DataFrame(signal_rows)
+
+    daily = pd.DataFrame({"day": entry_ts.dt.date})
+    daily["symbol"] = symbol
+    daily["active_context_bar"] = pd.Series(combo).isin(["bull", "bear"]).to_numpy()
+    daily = daily.groupby(["symbol", "day"]).agg(
+        bars=("day", "size"),
+        active_context_bars=("active_context_bar", "sum"),
+    ).reset_index()
+    if signals.empty:
+        for col in FREQUENCY_COUNT_COLS:
+            daily[col] = 0
+        return daily, signals
+
+    counts = signals.groupby(["symbol", "day"]).agg(
+        raw_signals=("stage_status", "size"),
+        valid_stop=("valid_stop", "sum"),
+        min_stop_pass=("min_stop_pass", "sum"),
+        session_pass=("session_pass", "sum"),
+        context_filter_pass=("context_filter_pass", "sum"),
+        cost_pass=("cost_pass", "sum"),
+        pre_portfolio_pass=("pre_portfolio_pass", "sum"),
+    ).reset_index()
+    by_fail = signals[signals["stage_status"] != "pass"].groupby(["symbol", "day", "stage_status"]).size().unstack(fill_value=0).reset_index()
+    daily = daily.merge(counts, on=["symbol", "day"], how="left").merge(by_fail, on=["symbol", "day"], how="left")
+    for col in FREQUENCY_COUNT_COLS:
+        if col not in daily.columns:
+            daily[col] = 0
+        daily[col] = daily[col].fillna(0).astype(int)
+    return daily, signals
+
+
+FREQUENCY_COUNT_COLS = [
+    "raw_signals",
+    "valid_stop",
+    "min_stop_pass",
+    "session_pass",
+    "context_filter_pass",
+    "cost_pass",
+    "pre_portfolio_pass",
+    "invalid_stop",
+    "stop_too_tight",
+    "no_outcome",
+    "blocked_session",
+    "blocked_context",
+    "blocked_cost",
+]
+
+
+def signal_diagnostic_row(
+    symbol: str,
+    cfg: SimpleSetupConfig,
+    setup: str,
+    entry_bars: pd.DataFrame,
+    structure: pd.DataFrame,
+    combo: np.ndarray,
+    i: int,
+) -> dict:
+    if i >= len(entry_bars) - 1:
+        return {}
+    entry_ts = pd.to_datetime(entry_bars["ts"].iat[i], utc=True)
+    direction = "long" if combo[i] == "bull" else "short"
+    entry = float(entry_bars["close"].iat[i])
+    sl, tp = structural_stop_target(structure.iloc[i], direction, entry, cfg.min_rr)
+    row = {
+        "symbol": symbol,
+        "setup": setup,
+        "entry_ts": entry_ts,
+        "day": entry_ts.date(),
+        "direction": direction,
+        "session_utc": session_bucket(entry_ts),
+        "valid_stop": False,
+        "min_stop_pass": False,
+        "session_pass": False,
+        "context_filter_pass": False,
+        "cost_pass": False,
+        "pre_portfolio_pass": False,
+        "stage_status": "invalid_stop",
+    }
+    if not np.isfinite(sl):
+        return row
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return row
+    row["valid_stop"] = True
+    stop_pct = risk / entry * 100.0
+    if stop_pct < cfg.min_stop_pct:
+        row["stage_status"] = "stop_too_tight"
+        return row
+    row["min_stop_pass"] = True
+    outcome = walk_structural_outcome(entry_bars, i, direction, sl, tp, horizon=cfg.horizon_bars)
+    if outcome is None:
+        row["stage_status"] = "no_outcome"
+        return row
+    row["session_pass"] = cfg.sessions is None or row["session_utc"] in cfg.sessions
+    if not row["session_pass"]:
+        row["stage_status"] = "blocked_session"
+        return row
+    pa = price_action_snapshot(entry_bars, entry_ts=entry_ts, direction=direction)
+    dmi = dmi_alignment(direction, pa.get("plus_di_14", np.nan), pa.get("minus_di_14", np.nan))
+    context_pass = (
+        (cfg.trend_strengths is None or pa.get("trend_strength", "unknown") in cfg.trend_strengths)
+        and (cfg.consolidation_states is None or pa.get("consolidation_state", "unknown") in cfg.consolidation_states)
+        and (cfg.shock_alignments is None or pa.get("shock_alignment", "no_shock") in cfg.shock_alignments)
+        and (cfg.dmi_alignments is None or dmi in cfg.dmi_alignments)
+    )
+    row["context_filter_pass"] = bool(context_pass)
+    if not context_pass:
+        row["stage_status"] = "blocked_context"
+        return row
+    base_cost_r = cfg.base_round_trip_pct * entry / risk
+    stress_cost_r = cfg.stress_round_trip_pct * entry / risk
+    cost_pass = (
+        (cfg.max_base_cost_r is None or base_cost_r <= cfg.max_base_cost_r)
+        and (cfg.max_stress_cost_r is None or stress_cost_r <= cfg.max_stress_cost_r)
+    )
+    row["cost_pass"] = bool(cost_pass)
+    if not cost_pass:
+        row["stage_status"] = "blocked_cost"
+        return row
+    row["pre_portfolio_pass"] = True
+    row["stage_status"] = "pass"
+    return row
+
+
+def primary_daily_blocker(row: pd.Series) -> str:
+    if int(row.get("portfolio_accepted", 0)) > 0:
+        return "traded"
+    if int(row.get("pre_portfolio_pass", 0)) > 0:
+        return "portfolio_throttle"
+    if int(row.get("raw_signals", 0)) == 0:
+        return "no_setup_signal" if int(row.get("active_context_bars", 0)) else "no_active_context"
+    blockers = {
+        "blocked_cost": int(row.get("blocked_cost", 0)),
+        "blocked_context": int(row.get("blocked_context", 0)),
+        "blocked_session": int(row.get("blocked_session", 0)),
+        "stop_too_tight": int(row.get("stop_too_tight", 0)),
+        "invalid_stop": int(row.get("invalid_stop", 0)),
+        "no_outcome": int(row.get("no_outcome", 0)),
+    }
+    return max(blockers, key=blockers.get) if max(blockers.values()) > 0 else "unknown"
+
+
 def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.DataFrame:
     bars = {
         "global": load_crypto(symbol, tf=cfg.global_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True),
@@ -78,7 +276,7 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         return pd.DataFrame()
 
     entry_bars = bars["entry"]
-    combo = direction_context(bars["global"], bars["local"], entry_bars)
+    combo = direction_context(bars["global"], bars["local"], entry_bars, mode=cfg.context_mode)
     structure = build_structure_index(entry_bars, StructureConfig(left=2, right=2))
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
@@ -149,12 +347,22 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
     return pd.DataFrame(rows)
 
 
-def direction_context(global_bars: pd.DataFrame, local_bars: pd.DataFrame, entry_bars: pd.DataFrame) -> np.ndarray:
+def direction_context(
+    global_bars: pd.DataFrame,
+    local_bars: pd.DataFrame,
+    entry_bars: pd.DataFrame,
+    *,
+    mode: str = "strict",
+) -> np.ndarray:
+    if mode not in {"strict", "htf_only"}:
+        raise ValueError(f"unknown context mode: {mode}")
     dir_global = structure_ema_direction(global_bars)
     dir_local = structure_ema_direction(local_bars)
-    entry_state = vec_ema_state(entry_bars).map({"bullish": "bull", "bearish": "bear"}).fillna("neutral").to_numpy()
     g = asof_direction(entry_bars["ts"], dir_global)
     l = asof_direction(entry_bars["ts"], dir_local)
+    if mode == "htf_only":
+        return np.where((g == l) & (g != "neutral"), g, "neutral")
+    entry_state = vec_ema_state(entry_bars).map({"bullish": "bull", "bearish": "bear"}).fillna("neutral").to_numpy()
     return np.where((g == l) & (l == entry_state) & (g != "neutral"), g, "neutral")
 
 
@@ -166,12 +374,14 @@ def setup_signal(
     structure: pd.DataFrame | None = None,
     entry_delay_bars: int = 0,
 ) -> np.ndarray:
-    if setup not in {"pullback_reclaim", "context_change", "structure_confirmed_context"}:
+    if setup not in {"pullback_reclaim", "context_change", "daily_first_context", "structure_confirmed_context"}:
         raise ValueError(f"unknown setup: {setup}")
     combo_s = pd.Series(combo)
     active = combo_s.isin(["bull", "bear"])
     if setup == "context_change":
         return delayed_context_signal(combo_s, delay_bars=entry_delay_bars).to_numpy()
+    if setup == "daily_first_context":
+        return daily_first_context_signal(entry_bars, combo_s).to_numpy()
     if setup == "structure_confirmed_context":
         if structure is None or structure.empty:
             return np.zeros(len(combo_s), dtype=bool)
@@ -200,6 +410,16 @@ def delayed_context_signal(combo_s: pd.Series, *, delay_bars: int = 0) -> pd.Ser
         return context_change
     bars_since_context = _bars_since(context_change)
     return active & bars_since_context.eq(delay_bars) & combo_s.eq(combo_s.shift(delay_bars))
+
+
+def daily_first_context_signal(entry_bars: pd.DataFrame, combo_s: pd.Series) -> pd.Series:
+    """Signal on the first active context bar of each UTC day."""
+    active = combo_s.isin(["bull", "bear"])
+    days = pd.to_datetime(entry_bars["ts"], utc=True).dt.date
+    active_seen = active.groupby(days).cummax()
+    first_active = active & ~active_seen.shift(1, fill_value=False)
+    previous_day = pd.Series(days).ne(pd.Series(days).shift(1))
+    return first_active | (active & previous_day)
 
 
 def structure_confirmed_context_signal(
@@ -627,6 +847,48 @@ def write_portfolio_report(summary: dict, accepted: pd.DataFrame, output: Path) 
     output.write_text("\n".join(lines) + "\n")
 
 
+def write_frequency_report(daily: pd.DataFrame, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Simple Crypto Setup Frequency Audit",
+        "",
+        "Scope: day-level explanation of why the setup did or did not produce accepted trades.",
+        "",
+        "## Summary",
+        "",
+    ]
+    if daily.empty:
+        lines.append("No rows.")
+    else:
+        summary = daily.groupby("primary_blocker").agg(
+            symbol_days=("day", "size"),
+            active_context_bars=("active_context_bars", "sum"),
+            raw_signals=("raw_signals", "sum"),
+            pre_portfolio_pass=("pre_portfolio_pass", "sum"),
+            portfolio_accepted=("portfolio_accepted", "sum"),
+        ).reset_index().sort_values("symbol_days", ascending=False)
+        lines.append(dataframe_to_markdown(summary))
+        lines.extend(["", "## Symbol Split", ""])
+        by_symbol = daily.groupby(["symbol", "primary_blocker"]).agg(
+            days=("day", "size"),
+            raw_signals=("raw_signals", "sum"),
+            pre_portfolio_pass=("pre_portfolio_pass", "sum"),
+            portfolio_accepted=("portfolio_accepted", "sum"),
+        ).reset_index().sort_values(["symbol", "days"], ascending=[True, False])
+        lines.append(dataframe_to_markdown(by_symbol))
+        lines.extend(["", "## Read", ""])
+        lines.extend(
+            [
+                "- `no_active_context`: 240m/30m/15m direction stack did not align that day.",
+                "- `no_setup_signal`: direction context existed, but the setup trigger did not fire.",
+                "- `blocked_context`: context filters such as no-shock/DMI/consolidation blocked signals.",
+                "- `blocked_cost`: stop geometry was tradable but too expensive in R after cost gates.",
+                "- `portfolio_throttle`: signal passed setup gates but was skipped by portfolio risk rules.",
+            ]
+        )
+    output.write_text("\n".join(lines) + "\n")
+
+
 def dataframe_to_markdown(df: pd.DataFrame) -> str:
     if df.empty:
         return "No rows."
@@ -648,9 +910,10 @@ def dataframe_to_markdown(df: pd.DataFrame) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a narrow crypto setup lab.")
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
-    parser.add_argument("--setup", default="pullback_reclaim", choices=["pullback_reclaim", "context_change", "structure_confirmed_context"])
+    parser.add_argument("--setup", default="pullback_reclaim", choices=["pullback_reclaim", "context_change", "daily_first_context", "structure_confirmed_context"])
     parser.add_argument("--days", type=int, default=400)
     parser.add_argument("--min-rr", type=float, default=1.5)
+    parser.add_argument("--context-mode", default="strict", choices=["strict", "htf_only"], help="strict=240/30/15 agree; htf_only=240/30 agree.")
     parser.add_argument("--max-base-cost-r", type=float, default=None)
     parser.add_argument("--max-stress-cost-r", type=float, default=None)
     parser.add_argument("--sessions", default="", help="Comma-separated UTC session buckets: asia,london,ny,late_us")
@@ -670,6 +933,7 @@ def main() -> int:
     parser.add_argument("--daily-loss-limit-pct", type=float, default=0.005)
     parser.add_argument("--cooldown-after-loss-bars", type=int, default=4)
     parser.add_argument("--review-packet", action="store_true", help="When portfolio is enabled, export every accepted trade for the review UI.")
+    parser.add_argument("--frequency-audit", action="store_true", help="Write a day-level audit explaining untraded days and blocked signals.")
     parser.add_argument("--output-dir", default="backtesting/results/crypto_simple_setup_lab")
     args = parser.parse_args()
 
@@ -681,6 +945,7 @@ def main() -> int:
     dmi_alignments = tuple(s.strip() for s in args.dmi_alignments.split(",") if s.strip()) or None
     cfg = SimpleSetupConfig(
         days=args.days,
+        context_mode=args.context_mode,
         min_rr=args.min_rr,
         max_base_cost_r=args.max_base_cost_r,
         max_stress_cost_r=args.max_stress_cost_r,
@@ -702,6 +967,7 @@ def main() -> int:
     summary.to_csv(out_dir / f"{suffix}_summary.csv", index=False)
     windows.to_csv(out_dir / f"{suffix}_windows.csv", index=False)
     write_report(summary, trades, out_dir / f"{suffix}_report.md", windows)
+    accepted = pd.DataFrame()
     if args.portfolio:
         accepted, portfolio_summary = run_portfolio_validation(
             trades,
@@ -722,6 +988,14 @@ def main() -> int:
             print(f"Saved review packet: {review_path} rows={len(packet)}")
         print("\nPortfolio")
         print(pd.DataFrame([portfolio_summary]).to_string(index=False))
+    if args.frequency_audit:
+        daily, signal_audit = run_frequency_audit(symbols, config=cfg, setup=args.setup, accepted=accepted)
+        daily.to_csv(out_dir / f"{suffix}_frequency_daily.csv", index=False)
+        signal_audit.to_csv(out_dir / f"{suffix}_frequency_signals.csv", index=False)
+        write_frequency_report(daily, out_dir / f"{suffix}_frequency_report.md")
+        if not daily.empty:
+            print("\nFrequency")
+            print(daily["primary_blocker"].value_counts().to_string())
     print(summary.to_string(index=False))
     if not windows.empty:
         print("\nRolling windows")
@@ -749,6 +1023,8 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append(f"delay{cfg.entry_delay_bars}b")
     if cfg.run_label:
         parts.append(cfg.run_label)
+    if cfg.context_mode != "strict":
+        parts.append(cfg.context_mode)
     return "_".join(parts).replace(".", "p")
 
 

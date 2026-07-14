@@ -4127,3 +4127,111 @@ Next best steps:
    Test a local 5m/1m CHoCH/reclaim confirmation inside the already-active
    30m trend context (`30/1 approach`), using the same structural stops.
 4. Keep stops frozen.
+
+## Phase 36 -- Frequency audit: untraded days are mostly direction-context absence, not portfolio throttling
+
+User asked whether low frequency means the engine is wrong or whether the setup is
+just selective. Added a day-level frequency audit to `simple_setup_lab.py`:
+
+- `--frequency-audit` writes:
+  - daily blocker table;
+  - per-signal blocker table;
+  - compact markdown report.
+- Daily blockers:
+  - `no_active_context`: 240m/30m/15m direction stack did not align that day.
+  - `no_setup_signal`: direction existed but setup did not fire.
+  - `blocked_session`: signal fired in excluded session.
+  - `blocked_context`: no-shock/DMI/consolidation filters blocked it.
+  - `blocked_cost`: stop existed but was too expensive in R after cost gates.
+  - `portfolio_throttle`: signal passed setup gates but risk layer skipped it.
+  - `traded`: portfolio accepted at least one trade.
+- Added `--context-mode`:
+  - `strict`: current 240m + 30m + 15m agreement.
+  - `htf_only`: only 240m + 30m agreement.
+- Added `daily_first_context` setup:
+  - one possible basic setup: first active context bar per UTC day.
+
+Validation:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_simple_setup_lab.py -q
+# 17 passed
+```
+
+Baseline frequency audit for current no-BTC candidate:
+
+```bash
+PYTHONPATH=. python -m backtesting.crypto.simple_setup_lab \
+  --symbols ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT \
+  --setup context_change \
+  --days 400 \
+  --min-rr 2.0 \
+  --max-base-cost-r 0.12 \
+  --max-stress-cost-r 0.40 \
+  --sessions asia,london,ny \
+  --shock-alignments no_shock \
+  --run-label no-btc \
+  --portfolio \
+  --portfolio-net stress_net_r \
+  --risk-pct 0.002 \
+  --max-open 3 \
+  --max-open-per-symbol 1 \
+  --daily-loss-limit-pct 0.005 \
+  --cooldown-after-loss-bars 4 \
+  --frequency-audit
+```
+
+No-BTC day-level blockers over `4 x 401 = 1604` symbol-days:
+
+| Blocker | Symbol-days |
+|---|---:|
+| no_active_context | 797 |
+| traded | 318 |
+| blocked_context | 163 |
+| blocked_session | 137 |
+| blocked_cost | 101 |
+| invalid_stop | 41 |
+| no_setup_signal | 19 |
+| stop_too_tight | 16 |
+| portfolio_throttle | 12 |
+
+Signal-level blockers:
+
+| Stage | Signals |
+|---|---:|
+| blocked_session | 645 |
+| blocked_context | 572 |
+| pass setup gates | 479 |
+| blocked_cost | 392 |
+| invalid_stop | 236 |
+| stop_too_tight | 120 |
+
+Read:
+
+- Low frequency is **not** mainly portfolio throttling. Only `12` symbol-days
+  were skipped because portfolio rules had already blocked otherwise-valid trades.
+- Low frequency is mostly because the direction stack does not align:
+  `797 / 1604` symbol-days had no active context at all.
+- When context exists, setup scarcity is not the problem: only `19` symbol-days
+  had active context but no setup signal.
+- The strict setup is selective because of direction alignment plus context/cost
+  gates, not because the portfolio layer is too conservative.
+
+Frequency expansion tests:
+
+| Variant | Candidates | Accepted | PF | Return | Max DD | Return/DD | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| no-BTC strict baseline | 479 | 360 | 1.605 | +23.6% | 2.37% | 9.96 | keep |
+| HTF-only context | 268 | 243 | 1.563 | +15.0% | 2.23% | 6.72 | reject |
+| daily-first context | 249 | 240 | 1.333 | +9.1% | 3.02% | 3.00 | reject |
+| all sessions | 746 | 499 | 1.385 | +22.5% | 3.95% | 5.70 | reject |
+
+Conclusion:
+
+- Forcing more daily trades is a bad strategy here. It lowers return/DD and
+  increases drawdown.
+- The next improvement should not be frequency-first. It should be adding another
+  high-quality setup family that works on days where the current context-change
+  setup is inactive, or testing the `30/1 approach` for better entry confirmation
+  inside already-valid context.
+- Do not loosen the session gate or direction stack just to increase activity.
