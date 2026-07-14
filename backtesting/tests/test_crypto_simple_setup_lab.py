@@ -10,6 +10,7 @@ from backtesting.crypto.simple_setup_lab import (
     exit_kind,
     profit_factor,
     rolling_window_summary,
+    run_portfolio_validation,
     session_bucket,
     setup_signal,
     summarize_trades,
@@ -113,6 +114,37 @@ def test_rolling_window_summary_and_summary_windows():
     assert not windows.empty
     assert {"base_pf", "stress_pf", "base_return_r"}.issubset(windows.columns)
     assert summary.iloc[0]["windows"] == len(windows)
+
+
+def test_run_portfolio_validation_converts_simple_lab_trades_to_risk_path():
+    trades = pd.DataFrame(
+        {
+            "entry_ts": pd.to_datetime(["2026-01-01T00:00Z", "2026-01-01T00:15Z", "2026-01-01T01:30Z"]),
+            "symbol": ["BTCUSDT", "ETHUSDT", "BTCUSDT"],
+            "setup": ["context_change"] * 3,
+            "entry": [100.0, 100.0, 100.0],
+            "sl": [99.0, 99.0, 99.0],
+            "tp": [102.0, 102.0, 102.0],
+            "planned_rr": [2.0, 2.0, 2.0],
+            "bars_to_exit": [4, 4, 1],
+            "exit_kind": ["target", "stop", "target"],
+            "stress_net_r": [2.0, -1.0, 2.0],
+        }
+    )
+
+    accepted, summary = run_portfolio_validation(
+        trades,
+        net_column="stress_net_r",
+        risk_pct=0.01,
+        max_open=1,
+        max_open_per_symbol=1,
+        daily_loss_limit_pct=1.0,
+        cooldown_after_loss_bars=0,
+    )
+
+    assert len(accepted) < len(trades)
+    assert summary["accepted"] == len(accepted)
+    assert summary["risk_per_trade_pct"] == 0.01
 
 
 def test_session_bucket_uses_utc_pseudo_sessions():

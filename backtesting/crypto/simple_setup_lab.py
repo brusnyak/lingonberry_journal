@@ -24,6 +24,7 @@ from backtesting.crypto.mtf_cascade_direction import (
     vec_ema_state,
     walk_structural_outcome,
 )
+from backtesting.crypto.portfolio_validation import PortfolioRiskConfig, simulate_portfolio
 from backtesting.features.structure import StructureConfig, build_structure_index
 
 
@@ -124,7 +125,8 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
                 "stress_net_r": gross_r - stress_cost_r,
                 "mfe_r": float(outcome.get("mfe_r", np.nan)),
                 "mae_r": float(outcome.get("mae_r", np.nan)),
-                "exit_kind": exit_kind(gross_r),
+                "bars_to_exit": int(outcome.get("bars_to_exit", cfg.horizon_bars)),
+                "exit_kind": str(outcome.get("exit_reason", exit_kind(gross_r))),
             }
         )
     return pd.DataFrame(rows)
@@ -272,6 +274,58 @@ def summarize_windows(windows: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def run_portfolio_validation(
+    trades: pd.DataFrame,
+    *,
+    net_column: str = "stress_net_r",
+    risk_pct: float = 0.0025,
+    max_open: int = 3,
+    max_open_per_symbol: int = 1,
+    daily_loss_limit_pct: float = 0.005,
+    cooldown_after_loss_bars: int = 4,
+    tf_minutes: int = 15,
+) -> tuple[pd.DataFrame, dict]:
+    if trades.empty:
+        cfg = PortfolioRiskConfig(
+            risk_per_trade_pct=risk_pct,
+            max_open_trades=max_open,
+            max_open_per_symbol=max_open_per_symbol,
+            cooldown_after_loss_bars=cooldown_after_loss_bars,
+            daily_loss_limit_pct=daily_loss_limit_pct,
+            tf_minutes=tf_minutes,
+        )
+        return trades.copy(), {
+            "candidates": 0,
+            "accepted": 0,
+            "acceptance_rate": 0.0,
+            "gross_return_pct": 0.0,
+            "max_dd_pct": 0.0,
+            "daily_max_dd_pct": 0.0,
+            "return_to_dd": np.nan,
+        }
+    if net_column not in trades.columns:
+        raise ValueError(f"missing net column: {net_column}")
+    data = trades.copy()
+    data["exchange"] = "binance"
+    data["net_r"] = data[net_column].astype(float)
+    data["hit_stop"] = data["exit_kind"].eq("stop")
+    data["exit_reason"] = data["exit_kind"]
+    data["target_model"] = data["planned_rr"].map(lambda v: f"fixed_{float(v):g}r")
+    data["management_model"] = "hold_to_target_stop_or_expiry"
+    data["entry_model"] = data["setup"]
+    data["stop"] = data["sl"]
+    data["target"] = data["tp"]
+    cfg = PortfolioRiskConfig(
+        risk_per_trade_pct=risk_pct,
+        max_open_trades=max_open,
+        max_open_per_symbol=max_open_per_symbol,
+        cooldown_after_loss_bars=cooldown_after_loss_bars,
+        daily_loss_limit_pct=daily_loss_limit_pct,
+        tf_minutes=tf_minutes,
+    )
+    return simulate_portfolio(data, cfg)
+
+
 def exit_kind(gross_r: float) -> str:
     if gross_r > 0:
         return "target"
@@ -337,13 +391,50 @@ def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path, wind
     output.write_text("\n".join(lines) + "\n")
 
 
+def write_portfolio_report(summary: dict, accepted: pd.DataFrame, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    summary_df = pd.DataFrame([summary])
+    lines = [
+        "# Simple Crypto Setup Portfolio Validation",
+        "",
+        "Scope: portfolio/risk throttle applied to one already-filtered simple setup candidate set.",
+        "",
+        "## Summary",
+        "",
+        dataframe_to_markdown(summary_df),
+        "",
+        "## Symbol Split",
+        "",
+    ]
+    if not accepted.empty:
+        by_symbol = accepted.groupby("symbol").agg(
+            trades=("net_r", "size"),
+            avg_r=("net_r", "mean"),
+            pf=("net_r", profit_factor),
+            pnl_pct=("pnl_pct", "sum"),
+        ).reset_index()
+        lines.append(dataframe_to_markdown(by_symbol))
+    else:
+        lines.append("No accepted trades.")
+    lines.extend(
+        [
+            "",
+            "## Read",
+            "",
+            "- This is still research validation, not live approval.",
+            "- Stress-mode validation should be treated as the primary deployment-risk read.",
+        ]
+    )
+    output.write_text("\n".join(lines) + "\n")
+
+
 def dataframe_to_markdown(df: pd.DataFrame) -> str:
     if df.empty:
         return "No rows."
     formatted = df.copy()
     for col in formatted.columns:
         if pd.api.types.is_float_dtype(formatted[col]):
-            formatted[col] = formatted[col].map(lambda v: "" if pd.isna(v) else f"{v:.3f}")
+            formatted[col] = formatted[col].map(lambda v: "" if pd.isna(v) else f"{v:.4f}")
     headers = [str(c) for c in formatted.columns]
     rows = [[str(v) for v in row] for row in formatted.to_numpy()]
     widths = [len(h) for h in headers]
@@ -366,6 +457,13 @@ def main() -> int:
     parser.add_argument("--sessions", default="", help="Comma-separated UTC session buckets: asia,london,ny,late_us")
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--step-days", type=int, default=7)
+    parser.add_argument("--portfolio", action="store_true")
+    parser.add_argument("--portfolio-net", default="stress_net_r", choices=["base_net_r", "stress_net_r"])
+    parser.add_argument("--risk-pct", type=float, default=0.0025)
+    parser.add_argument("--max-open", type=int, default=3)
+    parser.add_argument("--max-open-per-symbol", type=int, default=1)
+    parser.add_argument("--daily-loss-limit-pct", type=float, default=0.005)
+    parser.add_argument("--cooldown-after-loss-bars", type=int, default=4)
     parser.add_argument("--output-dir", default="backtesting/results/crypto_simple_setup_lab")
     args = parser.parse_args()
 
@@ -388,6 +486,22 @@ def main() -> int:
     summary.to_csv(out_dir / f"{suffix}_summary.csv", index=False)
     windows.to_csv(out_dir / f"{suffix}_windows.csv", index=False)
     write_report(summary, trades, out_dir / f"{suffix}_report.md", windows)
+    if args.portfolio:
+        accepted, portfolio_summary = run_portfolio_validation(
+            trades,
+            net_column=args.portfolio_net,
+            risk_pct=args.risk_pct,
+            max_open=args.max_open,
+            max_open_per_symbol=args.max_open_per_symbol,
+            daily_loss_limit_pct=args.daily_loss_limit_pct,
+            cooldown_after_loss_bars=args.cooldown_after_loss_bars,
+        )
+        portfolio_suffix = f"{suffix}_portfolio_{args.portfolio_net}_risk{args.risk_pct:g}".replace(".", "p")
+        accepted.to_csv(out_dir / f"{portfolio_suffix}_accepted.csv", index=False)
+        pd.DataFrame([portfolio_summary]).to_csv(out_dir / f"{portfolio_suffix}_summary.csv", index=False)
+        write_portfolio_report(portfolio_summary, accepted, out_dir / f"{portfolio_suffix}_report.md")
+        print("\nPortfolio")
+        print(pd.DataFrame([portfolio_summary]).to_string(index=False))
     print(summary.to_string(index=False))
     if not windows.empty:
         print("\nRolling windows")

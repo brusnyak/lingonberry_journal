@@ -3794,3 +3794,89 @@ exact variant:
 3. Split rolling stats by symbol and session to see whether one component causes
    the bad stress windows.
 4. Only if that passes, export UI review samples for the worst stress windows.
+
+## Phase 32 -- Portfolio risk validation: viable research candidate, not live-approved
+
+Implemented portfolio/risk validation for `simple_setup_lab.py` using the existing
+`crypto.portfolio_validation` throttle model. `walk_structural_outcome()` now also
+returns `bars_to_exit` / `exit_reason`, so the simple lab can test concurrency and
+symbol cooldown honestly instead of pretending all trades are independent.
+
+Validation:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_simple_setup_lab.py \
+  backtesting/tests/test_mtf_cascade_direction.py \
+  backtesting/tests/test_mtf_cascade_foundation.py \
+  backtesting/tests/test_crypto_portfolio_validation.py -q
+# 41 passed
+```
+
+Baseline portfolio command, stress net R:
+
+```bash
+PYTHONPATH=. python -m backtesting.crypto.simple_setup_lab \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT \
+  --setup context_change \
+  --days 400 \
+  --min-rr 2.0 \
+  --max-base-cost-r 0.15 \
+  --max-stress-cost-r 0.50 \
+  --sessions asia,london,ny \
+  --portfolio \
+  --portfolio-net stress_net_r \
+  --risk-pct 0.0015 \
+  --max-open 3 \
+  --max-open-per-symbol 1 \
+  --daily-loss-limit-pct 0.005 \
+  --cooldown-after-loss-bars 4
+```
+
+Portfolio comparison:
+
+| Variant | Candidates | Accepted | Risk/trade | Return | Max DD | Daily DD | Return/DD | PF | Avg R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 6 symbols, asia/london/ny | 1,394 | 803 | 0.25% | +36.25% | 7.02% | 6.75% | 5.16 | 1.31 | +0.181 |
+| 5 symbols no BNB, asia/london/ny | 1,200 | 745 | 0.15% | +22.76% | 4.40% | 4.40% | 5.17 | 1.35 | +0.204 |
+| 5 symbols no BNB, asia/london/ny | 1,200 | 721 | 0.20% | +30.02% | 5.41% | 5.41% | 5.55 | 1.36 | +0.208 |
+| 5 symbols no BNB, asia/ny | 926 | 623 | 0.15% | +19.18% | 3.35% | 3.35% | 5.73 | 1.36 | +0.205 |
+| 5 symbols no BNB, asia only | 470 | 338 | 0.15% | +10.82% | 2.81% | 2.81% | 3.85 | 1.37 | +0.213 |
+
+The best current risk-adjusted candidate is **5 symbols, no BNB, asia/london/ny,
+0.15% risk/trade**:
+
+- stress-mode return: `+22.76%`;
+- max DD: `4.40%`;
+- daily DD: `4.40%`;
+- return/DD: `5.17`;
+- accepted trades: `745`;
+- PF: `1.35`;
+- avg R: `+0.204`;
+- stress positive rolling windows before portfolio throttles: `63.5%`.
+
+Component split after portfolio throttles:
+
+| Component | Read |
+|---|---|
+| BNB | negative after throttles: `-0.75%` PnL, PF `0.96`; drop for now. |
+| SOL | strongest: `+13.7%` PnL in six-symbol run, PF `1.79`. |
+| XRP | strong: `+10.3%`, PF `1.51`. |
+| DOGE | useful: `+7.2%`, PF `1.32`. |
+| BTC | positive but modest: `+4.8%`, PF `1.29`. |
+| ETH | weak but positive overall: `+1.0%`, PF `1.05`; bad specifically in London. |
+| Asia | best session after throttles: `+25.6%`, PF `1.53` in six-symbol run. |
+| London/NY | still positive overall; removing London reduced trades and did not improve rolling stability. |
+
+**Read:** this is now a viable research candidate, not a live system. It clears
+basic return/DD under 20bps stress only at low risk. It still fails full deployment
+readiness because:
+
+- stress positive-window rate is `63.5%`, still below the intended `65%` bar;
+- daily loss cap is realized-trade based, so a day can still close below the cap
+  after multiple simultaneous losses;
+- no broker/live-fill validation;
+- no UI review of worst windows yet.
+
+Next meaningful step: export review samples for the worst stress windows of the
+5-symbol no-BNB candidate. Do not add entry logic until those losses are visually
+understood.

@@ -369,18 +369,35 @@ def walk_structural_outcome(
                 mae = max(mae, (hi - entry) / risk)
         if hit_tp and hit_sl:
             r_multiple, hit = -1.0, False
+            end_i = j
             break
         if hit_tp:
             r_multiple, hit = target_r, True
+            end_i = j
             break
         if hit_sl:
             r_multiple, hit = -1.0, False
+            end_i = j
             break
-    result = {"r_multiple": r_multiple, "hit": hit, "risk_price": risk}
+    result = {
+        "r_multiple": r_multiple,
+        "hit": hit,
+        "risk_price": risk,
+        "bars_to_exit": end_i - entry_i,
+        "exit_reason": exit_kind_from_r(r_multiple),
+    }
     if track_excursion:
         result["mfe_r"] = mfe
         result["mae_r"] = -mae
     return result
+
+
+def exit_kind_from_r(r_multiple: float) -> str:
+    if r_multiple > 0:
+        return "target"
+    if r_multiple < 0:
+        return "stop"
+    return "expiry"
 
 
 def sweep_preceded(structure: pd.DataFrame, entry_i: int, direction: str, lookback_bars: int = 20) -> bool:
