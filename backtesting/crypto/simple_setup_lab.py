@@ -353,6 +353,79 @@ def run_portfolio_validation(
     return simulate_portfolio(data, cfg)
 
 
+def build_full_review_packet(
+    accepted: pd.DataFrame,
+    *,
+    output_path: Path,
+    predictor: str = "crypto_simple_context_change_strict_no_shock",
+    target_r: float = 2.0,
+    tf: str = "15",
+) -> pd.DataFrame:
+    """Export every accepted simple-lab portfolio trade for the review UI."""
+    if accepted.empty:
+        packet = pd.DataFrame()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        packet.to_csv(output_path, index=False)
+        return packet
+
+    data = accepted.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True)
+    if "exit_ts" in data.columns:
+        data["exit_ts"] = pd.to_datetime(data["exit_ts"], utc=True)
+    else:
+        data["exit_ts"] = data["entry_ts"] + pd.to_timedelta(pd.to_numeric(data["bars_to_exit"], errors="coerce") * int(tf), unit="m")
+
+    risk = (data["entry"].astype(float) - data["stop"].astype(float)).abs()
+    packet = pd.DataFrame(
+        {
+            "ts": data["entry_ts"],
+            "exit_ts": data["exit_ts"],
+            "symbol": data["symbol"].astype(str),
+            "exchange": data.get("exchange", "binance"),
+            "tf": tf,
+            "predictor": predictor,
+            "session": data["session_utc"].astype(str),
+            "direction": data["direction"].astype(str),
+            "entry_price": data["entry"].astype(float),
+            "sl": data["stop"].astype(float),
+            "tp1": data["target"].astype(float),
+            "risk_price": risk.astype(float),
+            f"outcome_{target_r:g}r": data["net_r"].astype(float),
+            f"hit_{target_r:g}r": data["exit_reason"].astype(str).eq("target"),
+            "planned_rr": data["planned_rr"].astype(float),
+            "duration_min": pd.to_numeric(data["bars_to_exit"], errors="coerce").astype(float) * int(tf),
+            "return_pct": data.get("pnl_pct", data["net_r"].astype(float) * data.get("risk_per_trade_pct", 0.0)).astype(float) * 100.0,
+            "mfe_r": data["mfe_r"].astype(float),
+            "mae_r": data["mae_r"].astype(float),
+            "exit_reason": data["exit_reason"].astype(str),
+            "review_bucket": "accepted_trade",
+            "setup": data["setup"].astype(str),
+            "trend_strength": data.get("trend_strength", ""),
+            "consolidation_state": data.get("consolidation_state", ""),
+            "shock_alignment": data.get("shock_alignment", ""),
+            "compression_state": data.get("compression_state", ""),
+            "base_net_r": data.get("base_net_r", np.nan),
+            "stress_net_r": data.get("stress_net_r", np.nan),
+            "notes_hint": data.apply(_review_notes_hint, axis=1),
+        }
+    )
+    packet = packet.sort_values(["symbol", "ts"]).reset_index(drop=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    packet.to_csv(output_path, index=False)
+    for symbol, group in packet.groupby("symbol"):
+        group.to_csv(output_path.with_name(f"{output_path.stem}_{symbol}.csv"), index=False)
+    return packet
+
+
+def _review_notes_hint(row: pd.Series) -> str:
+    return (
+        f"Full accepted trade. setup={row.get('setup')}; "
+        f"session={row.get('session_utc')}; context={row.get('trend_strength')}/"
+        f"{row.get('consolidation_state')}/{row.get('shock_alignment')}; "
+        f"stressR={float(row.get('net_r', 0.0)):.2f}."
+    )
+
+
 def exit_kind(gross_r: float) -> str:
     if gross_r > 0:
         return "target"
@@ -500,6 +573,7 @@ def main() -> int:
     parser.add_argument("--max-open-per-symbol", type=int, default=1)
     parser.add_argument("--daily-loss-limit-pct", type=float, default=0.005)
     parser.add_argument("--cooldown-after-loss-bars", type=int, default=4)
+    parser.add_argument("--review-packet", action="store_true", help="When portfolio is enabled, export every accepted trade for the review UI.")
     parser.add_argument("--output-dir", default="backtesting/results/crypto_simple_setup_lab")
     args = parser.parse_args()
 
@@ -542,6 +616,10 @@ def main() -> int:
         accepted.to_csv(out_dir / f"{portfolio_suffix}_accepted.csv", index=False)
         pd.DataFrame([portfolio_summary]).to_csv(out_dir / f"{portfolio_suffix}_summary.csv", index=False)
         write_portfolio_report(portfolio_summary, accepted, out_dir / f"{portfolio_suffix}_report.md")
+        if args.review_packet:
+            review_path = Path("backtesting/results/review_samples") / f"{portfolio_suffix}_full_review.csv"
+            packet = build_full_review_packet(accepted, output_path=review_path, target_r=args.min_rr, tf=cfg.entry_tf)
+            print(f"Saved review packet: {review_path} rows={len(packet)}")
         print("\nPortfolio")
         print(pd.DataFrame([portfolio_summary]).to_string(index=False))
     print(summary.to_string(index=False))

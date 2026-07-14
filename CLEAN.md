@@ -3962,3 +3962,66 @@ Still not live-approved:
 - no live fill/slippage sample;
 - the daily loss cap is still realized-trade based, not mark-to-market intraday;
 - no out-of-universe test beyond the five selected core crypto pairs.
+
+## Phase 34 -- Full accepted-trade review packet, not curated samples
+
+User clarified that UI review should load **every trade made** by the backtest,
+not a best/worst representation. Curated packets are still useful for targeted
+forensics, but they are the wrong default when judging whether the engine is
+actually trading correctly.
+
+Implemented:
+
+- `simple_setup_lab.py --review-packet` now exports every portfolio-accepted
+  trade from the latest simple setup run into review-compatible CSV.
+- Master packet:
+  `backtesting/results/review_samples/context_change_rr2_basecost0p12r_stresscost0p4r_sessions-asia-london-ny_shock-no_shock_portfolio_stress_net_r_risk0p002_full_review.csv`
+- Per-symbol packets are generated beside it:
+  - `..._full_review_BTCUSDT.csv`
+  - `..._full_review_DOGEUSDT.csv`
+  - `..._full_review_ETHUSDT.csv`
+  - `..._full_review_SOLUSDT.csv`
+  - `..._full_review_XRPUSDT.csv`
+- Review UI now has `LOAD SIMPLE FULL ACCEPTED TRADES`. It loads all accepted
+  trades for the currently selected symbol because the chart candle stream is
+  single-symbol.
+- `/api/review/ict-events` now respects packet-provided `exit_ts`,
+  `duration_min`, `planned_rr`, `return_pct`, and `exit_reason` instead of
+  forcing a fake fixed exit window. Its event-packet drawdown stat is no longer
+  hardcoded to zero.
+
+Latest full packet:
+
+| Metric | Value |
+|---|---:|
+| candidates | 556 |
+| accepted | 413 |
+| symbols | 5 |
+| stress PF | 1.501 |
+| win rate | 46.5% |
+| gross return | +23.1% |
+| max DD | 2.77% |
+| daily max DD | 2.41% |
+| return/DD | 8.34 |
+
+Per-symbol accepted trades:
+
+| Symbol | Trades | Avg R | PF | PnL |
+|---|---:|---:|---:|---:|
+| BTCUSDT | 62 | +0.066 | 1.105 | +0.82% |
+| DOGEUSDT | 88 | +0.170 | 1.284 | +2.99% |
+| ETHUSDT | 80 | +0.351 | 1.691 | +5.62% |
+| SOLUSDT | 89 | +0.471 | 1.959 | +8.39% |
+| XRPUSDT | 94 | +0.283 | 1.485 | +5.31% |
+
+Next best steps:
+
+1. Manual UI review should start with the full accepted packet, symbol by symbol.
+2. BTC is the first suspect: positive but weak (`62` trades, PF `1.105`,
+   `+0.82%`). It may be dead weight unless review finds a fixable pattern.
+3. Do not add more strategy layers until review labels tell whether losses are
+   bad direction, bad entry timing, bad target, or normal variance.
+4. After review labels exist, compare label buckets against `trend_strength`,
+   `consolidation_state`, `shock_alignment`, session, MFE/MAE, and bars-to-exit.
+5. Only then test symbol removal, tighter context gates, or target-management
+   variants.

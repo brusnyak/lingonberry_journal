@@ -7,6 +7,7 @@ import pytest
 from backtesting.crypto.simple_setup_lab import (
     SimpleSetupConfig,
     apply_trade_filters,
+    build_full_review_packet,
     exit_kind,
     profit_factor,
     rolling_window_summary,
@@ -159,6 +160,46 @@ def test_run_portfolio_validation_converts_simple_lab_trades_to_risk_path():
     assert len(accepted) < len(trades)
     assert summary["accepted"] == len(accepted)
     assert summary["risk_per_trade_pct"] == 0.01
+
+
+def test_build_full_review_packet_exports_every_accepted_trade(tmp_path):
+    accepted = pd.DataFrame(
+        {
+            "entry_ts": pd.to_datetime(["2026-01-01T00:00Z", "2026-01-02T00:00Z"]),
+            "exit_ts": pd.to_datetime(["2026-01-01T01:00Z", "2026-01-02T00:30Z"]),
+            "symbol": ["BTCUSDT", "ETHUSDT"],
+            "exchange": ["binance", "binance"],
+            "setup": ["context_change", "context_change"],
+            "direction": ["long", "short"],
+            "session_utc": ["asia", "ny"],
+            "entry": [100.0, 200.0],
+            "stop": [99.0, 202.0],
+            "target": [102.0, 196.0],
+            "planned_rr": [2.0, 2.0],
+            "bars_to_exit": [4, 2],
+            "net_r": [1.8, -1.2],
+            "pnl_pct": [0.0036, -0.0024],
+            "risk_per_trade_pct": [0.002, 0.002],
+            "mfe_r": [2.0, 0.3],
+            "mae_r": [-0.2, -1.0],
+            "exit_reason": ["target", "stop"],
+            "trend_strength": ["trend", "transition"],
+            "consolidation_state": ["directional", "range"],
+            "shock_alignment": ["no_shock", "no_shock"],
+            "compression_state": ["normal", "normal"],
+            "base_net_r": [1.9, -1.1],
+            "stress_net_r": [1.8, -1.2],
+        }
+    )
+    output = tmp_path / "full_review.csv"
+
+    packet = build_full_review_packet(accepted, output_path=output, target_r=2.0)
+
+    assert len(packet) == 2
+    assert output.exists()
+    assert (tmp_path / "full_review_BTCUSDT.csv").exists()
+    assert {"ts", "exit_ts", "outcome_2r", "return_pct", "review_bucket", "notes_hint"} <= set(packet.columns)
+    assert packet["review_bucket"].eq("accepted_trade").all()
 
 
 def test_session_bucket_uses_utc_pseudo_sessions():

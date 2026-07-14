@@ -2695,9 +2695,22 @@ def api_review_ict_events():
             is_long = str(row.get("direction", direction)).lower() == "long"
             sl = float(row.get("sl") if "sl" in row and pd.notna(row.get("sl")) else (entry - risk if is_long else entry + risk))
             tp = float(row.get("tp1") if "tp1" in row and pd.notna(row.get("tp1")) else (entry + target_r * risk if is_long else entry - target_r * risk))
-            exit_ts = event_ts + pd.Timedelta(minutes=int(tf) * 24 if tf.isdigit() else 120)
+            if "exit_ts" in row and pd.notna(row.get("exit_ts")):
+                exit_ts = pd.Timestamp(row.get("exit_ts"))
+                exit_ts = exit_ts.tz_convert("UTC") if exit_ts.tzinfo else exit_ts.tz_localize("UTC")
+            else:
+                duration_min = float(row.get("duration_min", 0.0) or 0.0)
+                if duration_min <= 0:
+                    duration_min = float(int(tf) * 24 if tf.isdigit() else 120)
+                exit_ts = event_ts + pd.Timedelta(minutes=duration_min)
             outcome = float(row.get(outcome_col, 0.0))
             hit = bool(row.get(hit_col, False))
+            exit_reason = str(row.get("exit_reason", f"ICT_{target.upper()}_{'HIT' if hit else 'MISS'}"))
+            exit_price = row.get("exit_price") if "exit_price" in row else None
+            if exit_price is None or pd.isna(exit_price):
+                exit_price = tp if hit else sl if outcome <= -1 else entry + (outcome * risk if is_long else -outcome * risk)
+            planned_rr = row.get("planned_rr") if "planned_rr" in row else target_r
+            return_pct = row.get("return_pct") if "return_pct" in row else None
             label_bits = [str(row.get("predictor", predictor)), str(row.get("session", session))]
             if "review_bucket" in row and pd.notna(row.get("review_bucket")):
                 label_bits.insert(0, str(row.get("review_bucket")))
@@ -2720,8 +2733,10 @@ def api_review_ict_events():
                     "exit_time": exit_ts.isoformat(),
                     "duration_min": float((exit_ts - event_ts).total_seconds() / 60),
                     "entry_price": entry,
-                    "exit_price": tp if hit else sl if outcome <= -1 else entry + (outcome * risk if is_long else -outcome * risk),
-                    "exit_reason": f"ICT_{target.upper()}_{'HIT' if hit else 'MISS'}",
+                    "exit_price": float(exit_price),
+                    "exit_reason": exit_reason,
+                    "planned_rr": float(planned_rr) if pd.notna(planned_rr) else target_r,
+                    "return_pct": float(return_pct) if return_pct is not None and pd.notna(return_pct) else None,
                     "sl": sl,
                     "tp1": tp,
                     "pnl": outcome,
@@ -2743,6 +2758,12 @@ def api_review_ict_events():
         gains = sum(t["r_multiple"] for t in trades_json if t["r_multiple"] > 0)
         losses = abs(sum(t["r_multiple"] for t in trades_json if t["r_multiple"] < 0))
         report["profit_factor"] = gains / losses if losses > 0 else gains
+        if any(t.get("return_pct") is not None for t in trades_json):
+            returns = [float(t.get("return_pct") or 0.0) / 100.0 for t in trades_json]
+        else:
+            returns = [float(t["r_multiple"]) * 0.002 for t in trades_json]
+        equity = pd.Series(returns, dtype="float64").cumsum()
+        report["max_drawdown_pct"] = float((equity.cummax() - equity).max()) if not equity.empty else 0.0
         return jsonify(
             {
                 "symbol": symbol,
