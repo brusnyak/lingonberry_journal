@@ -409,6 +409,7 @@ def walk_structural_outcome_ltf(
     tp: float,
     partial_pct: float = 0.0,
     horizon_bars: int = 96,
+    dir_global: pd.DataFrame | None = None,
 ) -> dict | None:
     """Walk forward with LTF structure monitoring and optional partial TP.
 
@@ -416,6 +417,11 @@ def walk_structural_outcome_ltf(
     breaks (CHoCH/BOS) against the trade. If structure invalidates, exits
     early. If partial_pct > 0, closes that fraction at 1R and lets the
     remainder run to 2R.
+
+    When dir_global (from structure_ema_direction on the global/HFT TF) is
+    provided, LTF structure breaks are gated by HTF direction: if the HTF
+    still supports the trade direction, the break is treated as a pullback
+    and ignored.
 
     Returns: dict with r_multiple, exit_reason, bars_to_exit, mfe_r, mae_r
              or None if SL/TP is degenerate.
@@ -428,6 +434,13 @@ def walk_structural_outcome_ltf(
     target_r = abs(tp - entry) / risk
     tp1_price = entry + risk if direction == "long" else entry - risk  # 1R
     tp2_price = tp  # 2R
+
+    # Precompute HTF direction lookup if provided
+    if dir_global is not None:
+        htf_ts = pd.to_datetime(dir_global["ts"], utc=True).to_numpy()
+        htf_dir = dir_global["direction"].to_numpy()
+    else:
+        htf_ts = htf_dir = None
 
     # Find the LTF bar matching entry time
     ltf_entry_idx = ltf_bars["ts"].searchsorted(entry_ts, side="right") - 1
@@ -483,6 +496,17 @@ def walk_structural_outcome_ltf(
                 structure_broken = bool(struct.get("choch_up", False)) or bool(struct.get("bos_up", False))
 
         if structure_broken:
+            # Gate: check if HTF direction still supports the trade
+            if htf_ts is not None:
+                bar_ts = pd.to_datetime(ltf_window["ts"].iat[j], utc=True)
+                htf_idx = htf_ts.searchsorted(bar_ts, side="right") - 1
+                if htf_idx >= 0 and htf_idx < len(htf_dir):
+                    htf_d = htf_dir[htf_idx]
+                    if direction == "long" and htf_d == "bull":
+                        continue  # HTF still bullish, ignore LTF pullback
+                    if direction == "short" and htf_d == "bear":
+                        continue  # HTF still bearish, ignore LTF pullback
+
             # Exit at current LTF close
             exit_price = close
             exit_r = (exit_price - entry) / risk if direction == "long" else (entry - exit_price) / risk

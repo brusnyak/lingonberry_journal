@@ -306,6 +306,7 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
 
     entry_bars = bars["entry"]
     combo = direction_context(bars["global"], bars["local"], entry_bars, mode=cfg.context_mode)
+    dir_global = structure_ema_direction(bars["global"])  # HTF direction for LTF monitoring gate
     structure = build_structure_index(entry_bars, StructureConfig(left=2, right=2))
     stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], StructureConfig(left=2, right=2))
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
@@ -364,6 +365,7 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
                 direction, sl, tp,
                 partial_pct=cfg.partial_tp_pct,
                 horizon_bars=cfg.horizon_bars,
+                dir_global=dir_global,
             )
         else:
             outcome = walk_structural_outcome(
