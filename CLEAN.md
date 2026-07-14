@@ -5088,3 +5088,63 @@ Read: relaxing global context proves the skipped days move, but not in a way
 AQC can safely exploit. Do not weaken AQC for frequency. Build separate setup
 families for `sweep_revert`, `ny_sweep`, and directional days with neutral 240m
 context.
+
+## Phase 52 -- Causal HTF direction fix and continuation retest (2026-07-14)
+
+Found a foundation bug in the MTF direction layer:
+
+- `structure_ema_direction()` returned 240m/30m direction at the source bar
+  timestamp.
+- But structure rows are only usable at `known_after_ts`, after that candle is
+  closed/confirmed.
+- `asof_direction()` also clipped timestamps before the first known HTF state to
+  the first direction row, leaking future context at the start of a series.
+
+Fix:
+
+- `structure_ema_direction()` and `ema_only_direction()` now publish direction at
+  availability time, not source candle time.
+- `asof_direction()` now returns `neutral` before the first known coarse state.
+- Added `global_bias` context mode for research only: neutral 240m can be
+  upgraded only when EMA, VWAP, and swing-sequence bias agree.
+- Tests added for pre-history neutrality, availability timestamps, and synthetic
+  trend-bias upgrade.
+
+Validation: focused suite passed, `52 passed`.
+
+### Result after causal fix
+
+The old AQC/daily-first result is invalid as a deployment candidate. Once HTF
+timing is causal, it collapses:
+
+| Variant | Window | Candidates | Accepted | Portfolio PF | Return | Max DD | Read |
+|---------|--------|-----------:|---------:|-------------:|-------:|-------:|------|
+| daily_first_context strict | 180d top4 Asia | 84 | 77 | 0.53 | -7.75% | 9.39% | reject |
+| daily_first_context global_bias | 180d top4 Asia | 88 | 81 | 0.51 | -8.49% | 9.40% | reject |
+| context_change strict | 180d top4 Asia | 125 | 92 | 0.83 | -3.02% | 8.58% | reject |
+| continuation_reclaim strict | 180d top4 Asia | 63 | 52 | 0.73 | -2.49% | 4.36% | reject |
+| continuation_reclaim RR2 | 180d top4 Asia | 63 | 52 | 0.76 | -2.37% | 4.40% | reject |
+| continuation + 5m confirm | 180d top4 Asia | 20 | 19 | 1.21 | +0.58% | 1.11% | too sparse |
+| continuation + stress cost <= 0.25R | 180d top4 Asia | 40 | 34 | 1.36 | +1.45% | 1.48% | best lead |
+| same costcap | 180d all6 Asia | 59 | 51 | 1.04 | +0.27% | 2.24% | weak |
+| same costcap | 180d top4 all sessions | 109 | 87 | 1.12 | +1.42% | 3.88% | weaker |
+| same costcap | 360d top4 Asia | 84 | 69 | 1.05 | +0.47% | 3.23% | not robust |
+
+Read:
+
+- The previous “good” AQC result was contaminated by HTF availability timing.
+- Stop placement is still not the problem.
+- EMA/VWAP neutral upgrade did not rescue daily-first context.
+- The only honest lead is **Asia continuation reclaim with a stress-cost cap**:
+  it prefers cleaner/wider stop geometry where awful costs do not dominate R.
+- It is not robust enough yet: 360d top4 Asia drops to stress PF ~1.05 and only
+  one third of 90d windows are stress-positive.
+
+Next development should stay on foundation:
+
+1. Add a direction-layer validation report that scores 240m/30m/15m causal
+   direction against forward paths before any setup entry.
+2. Separate confirmed trend, pullback-in-trend, neutral accumulation, and range
+   states instead of treating all `neutral` as identical.
+3. Keep the costcap continuation setup as the current benchmark to beat, not as
+   a deployable system.

@@ -19,6 +19,7 @@ from backtesting.crypto.mtf_cascade_direction import (
     sl_tp_geometry,
     structural_stop_target,
     structure_ema_direction,
+    structure_trend_bias_direction,
     summarize_checklist,
     sweep_preceded,
     vec_ema_state,
@@ -54,6 +55,26 @@ def test_asof_direction_is_causal_no_future_leak():
     assert list(out) == ["bull", "bull", "bear"]
 
 
+def test_asof_direction_returns_neutral_before_first_known_coarse_state():
+    coarse = pd.DataFrame({
+        "ts": pd.to_datetime(["2026-01-01T04:00Z"]),
+        "direction": ["bull"],
+    })
+    fine_ts = pd.to_datetime(["2026-01-01T00:15Z", "2026-01-01T04:00Z"])
+
+    out = asof_direction(fine_ts, coarse)
+
+    assert list(out) == ["neutral", "bull"]
+
+
+def test_structure_ema_direction_timestamps_at_availability_not_pivot_bar():
+    ohlcv = make_staircase_series("up", bars=120, tf_minutes=240, seed=31)
+
+    direction = structure_ema_direction(ohlcv)
+
+    assert pd.to_datetime(direction["ts"].iloc[0], utc=True) == pd.to_datetime(ohlcv["ts"].iloc[1], utc=True)
+
+
 def test_global_local_cascade_detects_known_trend_on_synthetic_data():
     ohlcv30 = make_staircase_series("up", bars=80000, tf_minutes=30, seed=1)
     ohlcv240 = _resample(ohlcv30, 240)
@@ -65,6 +86,16 @@ def test_global_local_cascade_detects_known_trend_on_synthetic_data():
     result = evaluate_direction_series(ohlcv30.reset_index(drop=True), combo)
     assert result["decided"] > 100
     assert result["direction_accuracy"] > 0.70, result
+
+
+def test_structure_trend_bias_can_upgrade_neutral_when_indicators_and_swings_agree():
+    ohlcv = make_staircase_series("up", bars=500, tf_minutes=240, seed=33)
+    # Keep volume explicit so the VWAP branch is exercised.
+    ohlcv["volume"] = 1000.0
+
+    direction = structure_trend_bias_direction(ohlcv)
+
+    assert (direction["direction"] == "bull").sum() > 50
 
 
 def test_global_local_cascade_shows_no_edge_on_random_walk():

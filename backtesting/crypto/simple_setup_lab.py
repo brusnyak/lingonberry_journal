@@ -21,6 +21,7 @@ from backtesting.crypto.mtf_cascade_direction import (
     asof_direction,
     structural_stop_target,
     structure_ema_direction,
+    structure_trend_bias_direction,
     vec_ema_state,
     walk_limit_outcome,
     walk_structural_outcome,
@@ -557,15 +558,18 @@ def direction_context(
     structure_left: int = 2,
     structure_right: int = 2,
 ) -> np.ndarray:
-    if mode not in {"strict", "htf_only", "local_entry", "local_only"}:
+    if mode not in {"strict", "htf_only", "global_bias", "local_entry", "local_only"}:
         raise ValueError(f"unknown context mode: {mode}")
-    dir_global = structure_ema_direction(global_bars, left=structure_left, right=structure_right)
+    global_builder = structure_trend_bias_direction if mode == "global_bias" else structure_ema_direction
+    dir_global = global_builder(global_bars, left=structure_left, right=structure_right)
     dir_local = structure_ema_direction(local_bars, left=structure_left, right=structure_right)
     g = asof_direction(entry_bars["ts"], dir_global)
     l = asof_direction(entry_bars["ts"], dir_local)
+    entry_state = vec_ema_state(entry_bars).map({"bullish": "bull", "bearish": "bear"}).fillna("neutral").to_numpy()
     if mode == "htf_only":
         return np.where((g == l) & (g != "neutral"), g, "neutral")
-    entry_state = vec_ema_state(entry_bars).map({"bullish": "bull", "bearish": "bear"}).fillna("neutral").to_numpy()
+    if mode == "global_bias":
+        return np.where((g == l) & (l == entry_state) & (g != "neutral"), g, "neutral")
     if mode == "local_entry":
         return np.where((l == entry_state) & (l != "neutral"), l, "neutral")
     if mode == "local_only":
@@ -1769,8 +1773,8 @@ def main() -> int:
     parser.add_argument(
         "--context-mode",
         default="strict",
-        choices=["strict", "htf_only", "local_entry", "local_only"],
-        help="strict=240/30/15 agree; htf_only=240/30 agree; local_entry=30/15 agree; local_only=30m only.",
+        choices=["strict", "htf_only", "global_bias", "local_entry", "local_only"],
+        help="strict=240/30/15 agree; global_bias=240m neutral can be upgraded by EMA/VWAP/swing bias; htf_only=240/30 agree; local_entry=30/15 agree; local_only=30m only.",
     )
     parser.add_argument("--max-base-cost-r", type=float, default=None)
     parser.add_argument("--max-stress-cost-r", type=float, default=None)

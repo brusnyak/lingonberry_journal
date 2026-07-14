@@ -57,6 +57,7 @@ from backtesting.crypto.data import load_crypto
 from backtesting.crypto.event_atlas import _atr
 from backtesting.crypto.structure_direction_accuracy import _walk_outcome
 from backtesting.features.structure import StructureConfig, build_structure_index
+from backtesting.features.vwap import build_vwap_index
 
 TIERS = ("global", "local", "mini")
 DEFAULT_TF_MAP = {"global": "240", "local": "30", "mini": "5"}
@@ -84,7 +85,11 @@ def vec_ema_state(ohlcv: pd.DataFrame, fast: int = 21, slow: int = 55) -> pd.Ser
 
 
 def structure_ema_direction(ohlcv: pd.DataFrame, left: int = 2, right: int = 2) -> pd.DataFrame:
-    """bull/bear/neutral per bar -- requires swing-structure regime AND EMA slope to agree."""
+    """bull/bear/neutral per bar -- requires swing-structure regime AND EMA slope to agree.
+
+    Direction timestamps are availability timestamps. A 4h candle's structure
+    and EMA state are not known to a 15m strategy until that 4h candle closes.
+    """
     ohlcv = ohlcv.reset_index(drop=True)
     structure = build_structure_index(ohlcv, StructureConfig(left=left, right=right))
     struct_regime = structure["regime"].astype(str)
@@ -92,7 +97,44 @@ def structure_ema_direction(ohlcv: pd.DataFrame, left: int = 2, right: int = 2) 
     direction = pd.Series("neutral", index=ohlcv.index)
     direction[(struct_regime == "bull") & (ema_states == "bullish")] = "bull"
     direction[(struct_regime == "bear") & (ema_states == "bearish")] = "bear"
-    return pd.DataFrame({"ts": pd.to_datetime(ohlcv["ts"], utc=True).values, "direction": direction.values})
+    return pd.DataFrame({"ts": _availability_ts(ohlcv, structure), "direction": direction.values})
+
+
+def structure_trend_bias_direction(ohlcv: pd.DataFrame, left: int = 2, right: int = 2) -> pd.DataFrame:
+    """Causal structure direction with a conservative neutral-regime trend bias.
+
+    Base confirmed trend still comes from structure regime + EMA agreement.
+    Neutral structure can be upgraded only when EMA, VWAP, and recent swing
+    sequence agree. This avoids treating every neutral 4h state as no-trade
+    while keeping mixed/ranging states neutral.
+    """
+    ohlcv = ohlcv.reset_index(drop=True)
+    structure = build_structure_index(ohlcv, StructureConfig(left=left, right=right))
+    struct_regime = structure["regime"].astype(str)
+    ema_states = vec_ema_state(ohlcv)
+    close = pd.to_numeric(ohlcv["close"], errors="coerce")
+
+    direction = pd.Series("neutral", index=ohlcv.index)
+    direction[(struct_regime == "bull") & (ema_states == "bullish")] = "bull"
+    direction[(struct_regime == "bear") & (ema_states == "bearish")] = "bear"
+
+    vwap_state = pd.Series("mixed", index=ohlcv.index)
+    if "volume" in ohlcv.columns:
+        try:
+            vwap = build_vwap_index(ohlcv)
+            above_vwap = close > pd.to_numeric(vwap["vwap"], errors="coerce")
+            vwap_rising = pd.to_numeric(vwap["vwap_slope_12"], errors="coerce") > 0
+            vwap_falling = pd.to_numeric(vwap["vwap_slope_12"], errors="coerce") < 0
+            vwap_state[above_vwap & vwap_rising] = "bullish"
+            vwap_state[(~above_vwap) & vwap_falling] = "bearish"
+        except ValueError:
+            pass
+
+    swing_bias = _swing_sequence_bias(structure)
+    neutral = struct_regime.eq("neutral")
+    direction[neutral & ema_states.eq("bullish") & vwap_state.eq("bullish") & swing_bias.eq("bull")] = "bull"
+    direction[neutral & ema_states.eq("bearish") & vwap_state.eq("bearish") & swing_bias.eq("bear")] = "bear"
+    return pd.DataFrame({"ts": _availability_ts(ohlcv, structure), "direction": direction.values})
 
 
 def ema_only_direction(ohlcv: pd.DataFrame) -> pd.DataFrame:
@@ -100,7 +142,7 @@ def ema_only_direction(ohlcv: pd.DataFrame) -> pd.DataFrame:
     ohlcv = ohlcv.reset_index(drop=True)
     states = vec_ema_state(ohlcv)
     direction = states.map({"bullish": "bull", "bearish": "bear"}).fillna("neutral")
-    return pd.DataFrame({"ts": pd.to_datetime(ohlcv["ts"], utc=True).values, "direction": direction.values})
+    return pd.DataFrame({"ts": _availability_ts(ohlcv), "direction": direction.values})
 
 
 def asof_direction(fine_ts: pd.Series, coarse_dir: pd.DataFrame) -> np.ndarray:
@@ -109,8 +151,33 @@ def asof_direction(fine_ts: pd.Series, coarse_dir: pd.DataFrame) -> np.ndarray:
     coarse = coarse_dir.sort_values("ts")
     coarse_ts = pd.to_datetime(coarse["ts"], utc=True)
     idx = coarse_ts.to_numpy().searchsorted(fine_ts.to_numpy(), side="right") - 1
-    idx = np.clip(idx, 0, len(coarse) - 1)
-    return coarse["direction"].to_numpy()[idx]
+    out = np.full(len(fine_ts), "neutral", dtype=object)
+    valid = idx >= 0
+    if valid.any():
+        safe_idx = np.clip(idx[valid], 0, len(coarse) - 1)
+        out[valid] = coarse["direction"].to_numpy()[safe_idx]
+    return out
+
+
+def _availability_ts(ohlcv: pd.DataFrame, structure: pd.DataFrame | None = None) -> np.ndarray:
+    if structure is not None and "known_after_ts" in structure.columns:
+        return pd.to_datetime(structure["known_after_ts"], utc=True).values
+    ts = pd.to_datetime(ohlcv["ts"], utc=True)
+    diffs = ts.sort_values().diff().dropna()
+    delta = diffs.median() if not diffs.empty else pd.Timedelta(0)
+    return (ts + delta).values
+
+
+def _swing_sequence_bias(structure: pd.DataFrame, lookback: int = 8) -> pd.Series:
+    labels = structure["structure_label"].astype(str).reset_index(drop=True)
+    bull = labels.isin(["HH", "HL"]).astype(int)
+    bear = labels.isin(["LH", "LL"]).astype(int)
+    bull_count = bull.rolling(lookback, min_periods=1).sum()
+    bear_count = bear.rolling(lookback, min_periods=1).sum()
+    out = pd.Series("neutral", index=structure.index)
+    out[(bull_count >= 2) & (bull_count > bear_count)] = "bull"
+    out[(bear_count >= 2) & (bear_count > bull_count)] = "bear"
+    return out
 
 
 def evaluate_direction_series(base: pd.DataFrame, combo: np.ndarray, horizon: int = 48, atr_period: int = 14) -> dict:
