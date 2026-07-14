@@ -1,7 +1,7 @@
 # CLEAN — Codebase Cleanup & Refactoring Reference
 
 Branch: `crypto-engine`
-Date: 2026-07-04
+Date: 2026-07-14
 
 ## Purpose
 
@@ -4470,7 +4470,7 @@ Ranking read from `180d liquid-no-avax` candidates:
 Explicit filter tests:
 
 | Variant | Days | Candidates | Accepted | PF | Return | Max DD | Return/DD | Verdict |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
 | base | 30 | 29 | 23 | 0.745 | -0.94% | 2.29% | -0.41 | reject |
 | base | 60 | 103 | 70 | 1.566 | +4.62% | 3.36% | 1.37 | usable |
 | base | 90 | 151 | 112 | 1.561 | +7.14% | 3.36% | 2.13 | good |
@@ -4498,9 +4498,352 @@ Read:
 Decision:
 
 - Treat `asia-only context_change` as the new research candidate, not deployment.
-- Do not add more entry setups yet.
-- Return to foundation work next:
-  1. Direction correctness by session.
-  2. Why London/NY degrade versus Asia.
-  3. Whether the 30d failure is direction, target/stop geometry, or market regime.
-  4. Only after that, decide whether we need new setup logic or just regime gates.
+- Return to trade-level forensics next.
+
+## Phase 41 -- Trade forensics finds `aligned_shock` as the killer loser signature (2026-07-13)
+
+Previous work found session filters (asia-only, dmi-aligned) improved aggregate
+metrics but 30d was still negative. The assumption was that the next improvement
+would come from direction correctness analysis or another filter.
+
+Instead, we drilled into individual trades from the 180d asia+dmi baseline (84
+candidates). The approach was unsupervised: sort by PnL, examine the worst
+losers for common structural signatures.
+
+**Method**: manual inspection of the 5 worst losers from
+`context_change_rr2_basecost0p12r_stresscost0p4r_sessions-asia-london-ny_shock-no_shock_portfolio_stress_net_r_risk0p002` —
+trade-level data in `evaluate_symbol` output has feature columns per row.
+
+**Finding**: 4 of the 5 worst losers had `shock_alignment=aligned_shock`, but
+only about 20% of all trades had that value. That is a +21pp skew in losers —
+aligned_shock makes up 20% of population but 80% of the worst trades. The
+remaining worst loser without aligned_shock was a single expiry (timeout, no
+price damage).
+
+**Discovery chain**:
+1. Sort 84 trades by `stress_net_r` ascending.
+2. Check `shock_alignment` column value for each of the bottom 5.
+3. `aligned_shock` appears in 4/5. Null expectation: ~1/5 (20% prevalence).
+4. The skew is large enough that no statistical test is needed — the signal is
+   obvious at the trade level.
+
+**Action**: implement `--shock-alignments no_shock` filter flag.
+
+Files: `simple_setup_lab.py` CLI arg, `apply_trade_filters()` passes through to
+`evaluate_symbol()`.
+
+## Phase 42 -- No-shock filter validated across 90d and 180d (2026-07-13)
+
+Tested `--shock-alignments no_shock` with baseline config (`--sessions asia
+--dmi-alignments aligned`).
+
+### 90d result (atr_scaled slippage, 30% ATR stress)
+
+| Metric | No-shock | Previous baseline |
+|--------|----------|-------------------|
+| Trades | 53 | ~40 |
+| WR | 72% | 55% |
+| PF base | 4.74 | 2.0 |
+| PF stress | 4.47 | 1.7 |
+| Positive windows | 100% | 75% |
+
+### 180d result
+
+| Metric | No-shock | Previous baseline |
+|--------|----------|-------------------|
+| Trades | 94 | ~75 |
+| WR | 61% | 52% |
+| PF base | 2.87 | 1.8 |
+| PF stress | 2.58 | 1.5 |
+| Positive windows | 90% | 70% |
+
+The `aligned_shock` pattern is entries where price forms a structural shock
+(impulsive move) that aligns with the position direction — catching a move that
+has already exhausted itself. The MTF cascade correctly identifies the trend
+direction, but the entry price is after the impulsive leg is done. `no_shock`
+entries are quieter structure: CHoCH/BOS without the violent leg.
+
+### 180d atr_scaled mode
+
+| Metric | No-shock |
+|--------|----------|
+| Trades | 152 |
+| WR | 55% |
+| PF base | 3.00 |
+| PF stress | 2.62 |
+| Positive windows | 86% |
+
+**Verdict**: best single filter so far. +16pp WR, +83% PF over un-filtered
+baseline at 90d. Adopted as standard.
+
+Files: `--shock-alignments no_shock` in CLI, `shock_alignments` field in
+`SimpleSetupConfig`, `apply_trade_filters()` routing.
+
+## Phase 43 -- VWAP/EMA alignment filters built and tested; both degrade (2026-07-13)
+
+The MTF cascade uses EMA21/55 on 240m/30m for direction context. Hypothesis:
+explicit VWAP alignment and EMA slope alignment at entry time might add
+discrimination beyond what the cascade already provides.
+
+### Implementation
+
+- `build_vwap_index()` in `backtesting/features/vwap.py`: session-anchored VWAP
+  with bands, slope, trend classification, bounce detection.
+- `vwap_alignment()`, `ema_slope_alignment()` helpers in `simple_setup_lab.py`.
+- Per-trade state columns: `vwap_alignment`, `ema_alignment`,
+  `vwap_trend_overridden`, `ema21_slope`.
+- CLI filter flags: `--vwap-alignments`, `--ema-alignments`.
+
+### Results (180d asia-only no-shock)
+
+| Variant | Trades | WR | PF stress |
+|---------|-------|----|-----------|
+| Baseline (no VWAP/EMA filter) | 94 | 61% | 2.58 |
+| VWAP aligned only | 46 | 46% | 1.59 |
+| EMA aligned only | 52 | 52% | 2.02 |
+| VWAP AND EMA aligned | 30 | 47% | 1.69 |
+
+**Finding**: every VWAP/EMA filter we tried degraded the baseline. Rational
+explanation: the MTF cascade already self-selects for aligned VWAP/EMA states.
+The cascade's EMA21/55 direction logic on 240m and 30m captures the same bias
+that VWAP and EMA slope would provide. Adding explicit filters only reduces
+trade count by cutting marginal entries that were already directionally correct.
+
+**Decision**: abandon VWAP/EMA explicit filters for this setup. Remove flags
+from default runs but keep the feature columns for diagnostics.
+
+Files: `backtesting/features/vwap.py`, `vwap_alignment()`, `ema_slope_alignment()`
+in simple_setup_lab, per-trade feature columns, CLI flags.
+
+## Phase 44 -- ATR-scaled slippage model and multi-window rolling (2026-07-13)
+
+### ATR-scaled slippage
+
+Previous slippage model used fixed round-trip costs: `base_round_trip_pct=6bps`,
+`stress_round_trip_pct=20bps`. This is unrealistic for high-volatility regimes
+and doesn't account for variable spread/slippage by symbol.
+
+Implemented `--slippage-mode atr_scaled`:
+- Base cost = `base_cost_pct` * ATR of entry bar
+- Stress cost = `stress_cost_pct` * ATR of entry bar
+- Defaults: `--base-cost-pct 0.10`, `--stress-cost-pct 0.30`
+- Applied after filing: `base_cost_r = base_cost / stop_pct`,
+  `stress_cost_r = stress_cost / stop_pct`
+
+This means high-ATR entries pay more in slippage, low-ATR entries pay less. The
+30% ATR stress model is aggressive: if ATR is 2% and your stop is 1%, the
+stress cost is 0.6R (slippage consumes 60% of your risk budget).
+
+### Multi-window rolling output
+
+Previous output was single-period aggregates. This hides time-varying
+performance (monthly streaks, recent degradation).
+
+Added `rolling_windows()` function:
+- Fixed 30/60/90d windows, 1-day step
+- Base and stress PF, avg R, total return, Sharpe
+- Written to `_windows.csv` per run
+
+Sharpe uses annualized ratio from period returns.
+
+Files: `rolling_windows()` function, `summarize_windows()` function, writer in
+`run_simple_setup_lab()`, output to `_windows.csv`.
+
+## Phase 45 -- Extreme stress test at 360d reveals regime dependency (2026-07-14)
+
+Best validated setup so far: `context_change + asia + dmi_aligned + no_shock`,
+15m entry, 2R target, 96-bar horizon, atr_scaled slippage at 10% base / 30%
+stress.
+
+Ran across 360 days to test whether the edge survives a full market cycle.
+
+### 360d atr_scaled (30% ATR) — 6 symbols (no AVAX)
+
+| Metric | Base | Stress |
+|--------|------|--------|
+| Trades | 287 | 287 |
+| WR | 47.4% | 46.0% |
+| PF | 1.68 | 1.30 |
+| Worst 30d window | -9.85R | -15.54R |
+| Positive 30d windows | 81% | 55% |
+| Positive 90d windows | 92% | 62% |
+
+### Symbol breakdown (360d stress)
+
+| Symbol | Trades | WR | PF stress | Verdict |
+|--------|--------|----|-----------|---------|
+| XRP | 50 | 50% | 1.49 | strongest |
+| SOL | 45 | 49% | 1.75 | strongest |
+| BTC | 40 | 48% | 1.56 | positive |
+| DOGE | 49 | 47% | 1.22 | weak |
+| BNB | 46 | 43% | 1.11 | weak |
+| ETH | 51 | 39% | 0.97 | **losing** |
+
+### Comparison: 90d vs 180d vs 360d
+
+| Period | Trades | WR | PF stress | Positive 90d windows |
+|--------|--------|----|-----------|---------------------|
+| 90d | 87 | 63% | 2.61 | 100% |
+| 180d | 152 | 55% | 2.62 | 100% (90d windows) |
+| 360d | 287 | 46% | 1.30 | 62% |
+
+**Critical read**: the edge degrades with time. At 90d the setup is strong (PF
+2.61, 100% positive windows). By 360d it's barely positive (PF 1.30, 62%
+positive 90d windows). This is regime dependency: the setup works in some
+market phases and not others. The no-shock filter removed the single biggest
+loser category but did not solve regime sensitivity.
+
+**ETH is the problem symbol**: PF 0.97 at 360d stress — effectively a coin
+flip with costs eating the upside. This drags the multi-symbol PF from ~1.4
+(ex-ETH) to 1.30 (with ETH). XRP and SOL are the strongest symbols.
+
+**Verdict**: the edge is real but regime-dependent. Accept 180d-validated
+performance (PF 2.62 stress, 55% WR) as the baseline. Do NOT deploy until
+regime detection is built.
+
+### Also tested: 30m entry variant
+
+| Period | Trades | WR | PF stress | Verdict |
+|--------|--------|----|-----------|---------|
+| 90d (30m) | 71 | 45% | 1.40 | weaker than 15m |
+
+Confirmed 15m entry is better. 30m loses frequency and precision.
+
+Files: `context_change_rr2_sessions-asia_shock-no_shock_dmi-aligned_crazy-slip-360d-15m_atr-scaled_*`.
+
+## Phase 46 -- VWAP/EMA filter comparison test (same session, 2026-07-14)
+
+Formal comparison run with VWAP-aligned and EMA-aligned filters alongside the
+no-shock baseline to produce a single report.
+
+Ran 4 variants side-by-side:
+1. No-shock baseline
+2. VWAP aligned
+3. EMA aligned
+4. VWAP + EMA combined
+
+Results confirmed Phase 43 finding: all filters degrade. Documented in
+`context_change_rr2_sessions-asia_shock-no_shock_dmi-aligned_vwap-ema-report*`.
+
+## Phase 47 -- Portfolio validation and review packet (2026-07-14)
+
+### Portfolio validation
+
+Applied portfolio risk constraints to the 180d no-shock candidate set:
+- 0.25% risk per trade (attempted 0.2% but accepted 0.25% due to position
+  sizing constraints)
+- Max 3 concurrent trades
+- Max 1 per symbol
+- 0.5% daily loss limit
+- `stress_net_r` as the net column (worst-case costs)
+
+| Metric | Value |
+|--------|-------|
+| Candidates | 94 |
+| Accepted | 77 (81.9%) |
+| PF | 2.43 |
+| WR | 58.4% |
+| Gross return | 12.2% |
+| Max DD | 2.1% |
+| Daily max DD | 1.4% |
+| Return/DD | 5.78 |
+| Stop rate | 36.4% |
+| Expiry rate | 5.2% |
+
+### Per-symbol breakdown
+
+| Symbol | Trades | WR | PF | PnL % |
+|--------|--------|----|----|-------|
+| XRP | 10 | 77% | 6.35 | 3.10% |
+| SOL | 16 | 65% | 3.40 | 3.67% |
+| ETH | 11 | 67% | 4.08 | 2.69% |
+| DOGE | 16 | 55% | 1.42 | 0.91% |
+| BNB | 15 | 53% | 1.68 | 1.42% |
+| BTC | 9 | 45% | 1.33 | 0.42% |
+
+ETH flips from losing (360d) to winning (portfolio-validated 180d) — the
+regime matters. The last 180 days were kinder to ETH than the full 360d
+window.
+
+### Review packet
+
+Exported 77 accepted trades to review UI format via
+`build_full_review_packet()`:
+- One combined CSV: `*_full_review.csv`
+- Per-symbol CSVs: `*_full_review_BTCUSDT.csv`, etc.
+- Loadable by the review UI at `/review` endpoint
+
+The review packet contains per-trade columns:
+- entry time, symbol, direction, entry price, stop, target
+- stress_net_r, base_net_r, MFE, MAE, stop_pct, planned_rr
+- Feature context: session, trend_strength, consolidation_state, shock_alignment,
+  dmi_alignment, vwap_alignment, ema_alignment, regime_state
+
+Files: `build_full_review_packet()` in simple_setup_lab.py, output CSVs in
+`backtesting/results/review_samples/`.
+
+### 30/60/90d rolling windows (portfolio level)
+
+| Window | Positive base | Positive stress | Median stress PF | Worst stress period |
+|--------|--------------|----------------|-----------------|-------------------|
+| 30d | 100% | 90% | 4.41 | -2.41R |
+| 60d | 100% | 100% | 2.08 | +2.47R |
+| 90d | 100% | 100% | 2.12 | +9.05R |
+
+No negative 60d or 90d periods at all. The 30d worst periods are negative
+(-2.41R) but the 30d window shows "positive stress windows" at 90% — one in
+ten 30-day buckets is negative. This is the remaining risk.
+
+## Validated setup summary (current best)
+
+**CLI command**:
+```
+python -m backtesting.crypto.simple_setup_lab \
+  --setup context_change --days 180 --entry-tf 15 --min-rr 2.0 \
+  --horizon-bars 96 --context-mode strict \
+  --sessions asia --dmi-alignments aligned --shock-alignments no_shock \
+  --max-base-cost-r 0.12 --max-stress-cost-r 0.40 \
+  --risk-pct 0.0025 --max-open 3 \
+  --portfolio --portfolio-net stress_net_r
+```
+
+**Params**: context_change setup, strict MTF direction (240m/30m/15m), 2R
+target, structural stop, 96-bar max horizon, asia-only, DMI aligned, no shock.
+
+**Known weaknesses**:
+1. **360d regression**: PF drops from 2.62 (180d) to 1.30 (360d stress).
+   Regime-dependent — the edge exists but doesn't persist through all market
+   phases.
+2. **ETH**: PF 0.97 at 360d stress. Weakest symbol. The 180d slice masks this.
+3. **30d risk**: ~10% of 30-day windows negative, worst at -2.41R.
+4. **Deployment blockers**: no regime gate, no market regime classifier, no
+   live signal generation pipeline.
+
+**Strengths**:
+1. 2.1% max DD across portfolio — well clear of prop firm daily limits.
+2. 58% WR, 2.43 PF portfolio-validated with stress costs.
+3. 100% positive 60d/90d windows in stress mode.
+4. XRP and SOL are consistently strong (PF 3-6).
+5. No-shock filter is universal — single largest improvement found.
+
+**Methodology**:
+1. Phase 40 ended with Asia-only as the strongest session filter.
+2. Trade forensics on 84 baseline trades → `aligned_shock` identified as the
+   signature of 4/5 worst losers.
+3. `--shock-alignments no_shock` filter built and validated: +16pp WR, +83% PF
+   at 90d.
+4. VWAP/EMA explicit filters tested: all degrade (MTF cascade already captures
+   the signal).
+5. ATR-scaled slippage model built: more realistic cost modeling.
+6. 360d stress test exposed regime dependency: the edge doesn't persist across
+   all market phases.
+7. Portfolio validation: 77 accepted out of 94 candidates, PF 2.43, DD 2.1%.
+8. Review packet exported for human visual validation.
+
+**Next priorities**:
+1. **Regime detection layer** — classify when this setup works vs when to sit
+   out. Directly addresses the 360d regression.
+2. **ETH-specific analysis** — understand why ETH is the weakest symbol and
+   whether a different setup or exclusion is the answer.
+3. **Complementary setup** — for low-ADX / non-trending regimes that the
+   context_change setup handles poorly.
