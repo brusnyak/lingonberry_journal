@@ -4896,3 +4896,63 @@ Next meaningful work:
    label which setup family should be allowed.
 3. Keep `no_shock` as a default gate for this setup. Do not loosen it for
    frequency.
+
+## Phase 49 -- Asia-only logic, synthetic state check, and structure-window retest (2026-07-14)
+
+Question: is Asia-only really the best setup, and can it be expanded?
+
+### Session read
+
+Using the causal no-BTC all-session run:
+
+| Session | Trades | Stress avg R | Stress sum R | Read |
+|---------|--------|--------------|--------------|------|
+| asia | 113 | +0.522 | +58.99R | main edge |
+| ny | 95 | +0.115 | +10.91R | weak, drawdown-heavy |
+| london | 49 | +0.013 | +0.64R | dead weight |
+
+Controlled top4 tests:
+
+| Variant | Candidates | Accepted | PF | Return | Max DD | Return/DD | Read |
+|---------|------------|----------|----|--------|--------|-----------|------|
+| top4 asia-only | 84 | 72 | 2.37 | +11.56% | 1.80% | 6.41 | keep |
+| top4 asia+ny | 160 | 131 | 1.70 | +12.50% | 2.37% | 5.28 | more trades, worse stability |
+| top4 ny-only | 76 | 66 | 1.16 | +1.67% | 3.76% | 0.44 | reject |
+| top4 london-only | 43 | 41 | 1.07 | +0.48% | 2.45% | 0.20 | reject |
+
+Read: Asia is not magic. This setup is a quiet-context continuation/break setup.
+It works best when the market is cleaner and less stop-hunt/news-driven. NY and
+London add frequency but damage the 30d/60d drawdown profile. Expansion should
+come from a separate setup for NY/London behavior, not from turning sessions on.
+
+### Synthetic validation
+
+Added/kept synthetic tests:
+- known staircase trend: structure/direction harness must recover planted trend;
+- random walk: harness must show no fake edge;
+- flat synthetic range: `price_action_snapshot()` must classify weak/range
+  behavior differently from a planted trend.
+
+Important warning: a strong oscillating synthetic chop can still create high ADX.
+So ADX alone is not a sufficient consolidation detector. Future regime gate
+should add directional efficiency / net displacement, not just ADX/compression.
+
+### Structure-window retest
+
+Made simple setup lab structure windows configurable:
+- `--structure-left/right`: entry/stop structure;
+- `--context-structure-left/right`: global/local direction-context structure.
+
+Real top4 asia-only retests:
+
+| Variant | Accepted | PF | Return | Max DD | Return/DD | Read |
+|---------|----------|----|--------|--------|-----------|------|
+| default L2/R2 | 72 | 2.37 | +11.56% | 1.80% | 6.41 | baseline |
+| entry/stop L5/R5 | 72 | 2.37 | +11.56% | 1.80% | 6.41 | no effect |
+| entry/stop L8/R8 | 72 | 2.37 | +11.56% | 1.80% | 6.41 | no effect |
+| context L5/R5 | 75 | 2.01 | +9.68% | 2.51% | 3.86 | worse |
+| context L8/R8 | 68 | 1.78 | +7.40% | 1.77% | 4.17 | worse |
+
+Read: wider structure is better on clean synthetic trend, but worse on this real
+trade setup. Keep default context L2/R2 for now. The next improvement should be
+LTF confirmation entry or a separate session setup, not wider pivot tuning.

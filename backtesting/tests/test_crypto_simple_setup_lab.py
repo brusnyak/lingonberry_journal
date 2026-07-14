@@ -25,6 +25,7 @@ from backtesting.crypto.simple_setup_lab import (
     session_bucket,
     setup_signal,
     micro_reclaim_context_signal,
+    output_suffix,
     structure_confirmed_context_signal,
     summarize_trades,
     summarize_windows,
@@ -160,7 +161,7 @@ def test_direction_context_htf_only_ignores_entry_ema_disagreement(monkeypatch):
     coarse = pd.DataFrame({"ts": pd.to_datetime(["2026-01-01T00:00Z"]), "direction": ["bull"]})
     entry = pd.DataFrame({"ts": pd.to_datetime(["2026-01-01T00:15Z"]), "close": [100.0]})
 
-    monkeypatch.setattr("backtesting.crypto.simple_setup_lab.structure_ema_direction", lambda bars: coarse)
+    monkeypatch.setattr("backtesting.crypto.simple_setup_lab.structure_ema_direction", lambda bars, **kwargs: coarse)
     monkeypatch.setattr("backtesting.crypto.simple_setup_lab.vec_ema_state", lambda bars: pd.Series(["bearish"]))
 
     assert direction_context(pd.DataFrame(), pd.DataFrame(), entry, mode="strict").tolist() == ["neutral"]
@@ -305,6 +306,20 @@ def test_asof_structure_row_uses_known_after_ts_when_available():
     assert early is None
     assert at_first_confirm["regime"] == "bull"
     assert before_second_confirm["regime"] == "bull"
+
+
+def test_output_suffix_records_non_default_structure_window():
+    cfg = SimpleSetupConfig(
+        structure_left=8,
+        structure_right=8,
+        context_structure_left=5,
+        context_structure_right=5,
+    )
+
+    suffix = output_suffix("context_change", cfg)
+
+    assert "structL8R8" in suffix
+    assert "ctxL5R5" in suffix
 
 
 def test_apply_trade_filters_can_cap_stale_wide_stops():

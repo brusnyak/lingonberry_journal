@@ -63,6 +63,10 @@ class SimpleSetupConfig:
     partial_tp_pct: float = 0.0   # 0=no partial, 0.5=close 50% at 1R, let rest run
     ltf_monitor_tf: str = ""      # ""=no LTF monitoring, "5"=5m, "3"=3m
     fib_entry_pct: float = 0.0    # 0=market at close, 0.382/0.5/0.618=limit at Fib retrace of last swing
+    structure_left: int = 2
+    structure_right: int = 2
+    context_structure_left: int = 2
+    context_structure_right: int = 2
     run_label: str = ""
 
 
@@ -129,9 +133,17 @@ def frequency_audit_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -
 
     entry_bars = bars["entry"]
     entry_ts = pd.to_datetime(entry_bars["ts"], utc=True)
-    combo = direction_context(bars["global"], bars["local"], entry_bars, mode=cfg.context_mode)
-    structure = build_structure_index(entry_bars, StructureConfig(left=2, right=2))
-    stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], StructureConfig(left=2, right=2))
+    combo = direction_context(
+        bars["global"],
+        bars["local"],
+        entry_bars,
+        mode=cfg.context_mode,
+        structure_left=cfg.context_structure_left,
+        structure_right=cfg.context_structure_right,
+    )
+    structure_cfg = StructureConfig(left=cfg.structure_left, right=cfg.structure_right)
+    structure = build_structure_index(entry_bars, structure_cfg)
+    stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], structure_cfg)
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
 
@@ -307,10 +319,22 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         return pd.DataFrame()
 
     entry_bars = bars["entry"]
-    combo = direction_context(bars["global"], bars["local"], entry_bars, mode=cfg.context_mode)
-    dir_global = structure_ema_direction(bars["global"])  # HTF direction for LTF monitoring gate
-    structure = build_structure_index(entry_bars, StructureConfig(left=2, right=2))
-    stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], StructureConfig(left=2, right=2))
+    combo = direction_context(
+        bars["global"],
+        bars["local"],
+        entry_bars,
+        mode=cfg.context_mode,
+        structure_left=cfg.context_structure_left,
+        structure_right=cfg.context_structure_right,
+    )
+    dir_global = structure_ema_direction(
+        bars["global"],
+        left=cfg.context_structure_left,
+        right=cfg.context_structure_right,
+    )  # HTF direction for LTF monitoring gate
+    structure_cfg = StructureConfig(left=cfg.structure_left, right=cfg.structure_right)
+    structure = build_structure_index(entry_bars, structure_cfg)
+    stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], structure_cfg)
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
 
@@ -469,11 +493,13 @@ def direction_context(
     entry_bars: pd.DataFrame,
     *,
     mode: str = "strict",
+    structure_left: int = 2,
+    structure_right: int = 2,
 ) -> np.ndarray:
     if mode not in {"strict", "htf_only"}:
         raise ValueError(f"unknown context mode: {mode}")
-    dir_global = structure_ema_direction(global_bars)
-    dir_local = structure_ema_direction(local_bars)
+    dir_global = structure_ema_direction(global_bars, left=structure_left, right=structure_right)
+    dir_local = structure_ema_direction(local_bars, left=structure_left, right=structure_right)
     g = asof_direction(entry_bars["ts"], dir_global)
     l = asof_direction(entry_bars["ts"], dir_local)
     if mode == "htf_only":
@@ -1579,6 +1605,10 @@ def main() -> int:
     parser.add_argument("--partial-tp", type=float, default=0.0, help="Close this fraction at 1R, let rest run to 2R. 0.5 = close half.")
     parser.add_argument("--ltf-monitor", default="", choices=["", "1", "3", "5"], help="Lower timeframe for position monitoring (1/3/5m). Empty = no LTF monitoring.")
     parser.add_argument("--fib-entry", type=float, default=0.0, help="Fibonacci retracement entry: 0=market at close, 0.382/0.5/0.618=limit at Fib pct of last swing.")
+    parser.add_argument("--structure-left", type=int, default=2, help="Left pivot bars for entry/stop structure detection.")
+    parser.add_argument("--structure-right", type=int, default=2, help="Right pivot bars for entry/stop structure detection.")
+    parser.add_argument("--context-structure-left", type=int, default=2, help="Left pivot bars for global/local direction-context structure.")
+    parser.add_argument("--context-structure-right", type=int, default=2, help="Right pivot bars for global/local direction-context structure.")
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--step-days", type=int, default=7)
     parser.add_argument("--portfolio", action="store_true")
@@ -1628,6 +1658,10 @@ def main() -> int:
         partial_tp_pct=args.partial_tp,
         ltf_monitor_tf=args.ltf_monitor,
         fib_entry_pct=args.fib_entry,
+        structure_left=args.structure_left,
+        structure_right=args.structure_right,
+        context_structure_left=args.context_structure_left,
+        context_structure_right=args.context_structure_right,
         slippage_mode=args.slippage_mode,
         base_round_trip_pct=args.base_cost_pct,
         stress_round_trip_pct=args.stress_cost_pct,
@@ -1730,6 +1764,10 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append(f"fib{cfg.fib_entry_pct:g}")
     if cfg.ltf_monitor_tf:
         parts.append(f"ltf{cfg.ltf_monitor_tf}m")
+    if cfg.structure_left != 2 or cfg.structure_right != 2:
+        parts.append(f"structL{cfg.structure_left}R{cfg.structure_right}")
+    if cfg.context_structure_left != 2 or cfg.context_structure_right != 2:
+        parts.append(f"ctxL{cfg.context_structure_left}R{cfg.context_structure_right}")
     if cfg.run_label:
         parts.append(cfg.run_label)
     if cfg.context_mode != "strict":

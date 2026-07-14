@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
+from backtesting.crypto.synthetic_ohlcv import make_staircase_series
 from backtesting.crypto.structure_regime_journal import (
     average_true_range,
     classify_consolidation_state,
@@ -180,6 +182,29 @@ def test_price_action_snapshot_flags_opposing_shock_before_long_entry():
     assert snap["entry_hour_utc"] == 5
     assert "trend_strength" in snap
     assert "consolidation_state" in snap
+
+
+def test_price_action_snapshot_separates_synthetic_trend_from_chop():
+    trend = make_staircase_series("up", bars=240, tf_minutes=15, seed=101, noise_std_pct=0.0002)
+    chop_ts = pd.date_range("2024-01-01", periods=240, freq="15min", tz="UTC")
+    chop_close = 100.0 + np.sin(np.arange(240) / 2.0) * 0.10
+    chop_open = np.roll(chop_close, 1)
+    chop_open[0] = chop_close[0]
+    chop = pd.DataFrame({
+        "ts": chop_ts,
+        "open": chop_open,
+        "high": np.maximum(chop_open, chop_close) + 0.40,
+        "low": np.minimum(chop_open, chop_close) - 0.40,
+        "close": chop_close,
+        "volume": 1.0,
+    })
+
+    trend_snap = price_action_snapshot(trend, entry_ts=trend["ts"].iloc[-1], direction="long")
+    chop_snap = price_action_snapshot(chop, entry_ts=chop["ts"].iloc[-1], direction="long")
+
+    assert trend_snap["trend_strength"] in {"trend", "strong_trend"}
+    assert chop_snap["trend_strength"] in {"weak_or_range", "transition"}
+    assert trend_snap["consolidation_state"] != "tight_range"
 
 
 def test_range_atr_ratio_uses_only_past_window():
