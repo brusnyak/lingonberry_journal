@@ -5,11 +5,15 @@ import pandas as pd
 import pytest
 
 from backtesting.crypto.simple_setup_lab import (
+    SimpleSetupConfig,
+    apply_trade_filters,
     exit_kind,
     profit_factor,
+    rolling_window_summary,
     session_bucket,
     setup_signal,
     summarize_trades,
+    summarize_windows,
 )
 
 
@@ -73,6 +77,42 @@ def test_summarize_trades_reports_cost_fragility_fields():
     assert {"base_avg_r", "base_pf", "stress_avg_r", "median_base_cost_r"}.issubset(summary.columns)
     assert summary.iloc[0]["trades"] == 2
     assert summary.iloc[0]["median_stop_pct"] == 0.4
+
+
+def test_apply_trade_filters_cost_and_session_gate():
+    trades = pd.DataFrame(
+        {
+            "base_cost_r": [0.10, 0.20, 0.10],
+            "stress_cost_r": [0.30, 0.40, 0.60],
+            "session_utc": ["ny", "ny", "late_us"],
+        }
+    )
+    cfg = SimpleSetupConfig(max_base_cost_r=0.15, max_stress_cost_r=0.50, sessions=("ny",))
+
+    out = apply_trade_filters(trades, cfg)
+
+    assert len(out) == 1
+    assert out.iloc[0]["base_cost_r"] == 0.10
+
+
+def test_rolling_window_summary_and_summary_windows():
+    trades = pd.DataFrame(
+        {
+            "entry_ts": pd.to_datetime(
+                ["2026-01-01T00:00Z", "2026-01-05T00:00Z", "2026-01-20T00:00Z", "2026-02-05T00:00Z"]
+            ),
+            "base_net_r": [1.0, -0.5, 0.5, -1.0],
+            "stress_net_r": [0.5, -0.8, 0.2, -1.2],
+            "stop_pct": [0.5, 0.6, 0.7, 0.8],
+        }
+    )
+
+    windows = rolling_window_summary(trades, window_days=30, step_days=15, min_trades=1)
+    summary = summarize_windows(windows)
+
+    assert not windows.empty
+    assert {"base_pf", "stress_pf", "base_return_r"}.issubset(windows.columns)
+    assert summary.iloc[0]["windows"] == len(windows)
 
 
 def test_session_bucket_uses_utc_pseudo_sessions():

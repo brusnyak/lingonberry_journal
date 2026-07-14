@@ -40,6 +40,9 @@ class SimpleSetupConfig:
     min_stop_pct: float = 0.1
     base_round_trip_pct: float = 0.0006
     stress_round_trip_pct: float = 0.0020
+    max_base_cost_r: float | None = None
+    max_stress_cost_r: float | None = None
+    sessions: tuple[str, ...] | None = None
 
 
 def run_simple_setup_lab(
@@ -53,6 +56,7 @@ def run_simple_setup_lab(
     for symbol in symbols or DEFAULT_SYMBOLS:
         rows.extend(evaluate_symbol(symbol, cfg, setup=setup).to_dict("records"))
     trades = pd.DataFrame(rows)
+    trades = apply_trade_filters(trades, cfg)
     return trades, summarize_trades(trades)
 
 
@@ -166,6 +170,19 @@ def summarize_trades(trades: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def apply_trade_filters(trades: pd.DataFrame, cfg: SimpleSetupConfig) -> pd.DataFrame:
+    if trades.empty:
+        return trades
+    out = trades.copy()
+    if cfg.max_base_cost_r is not None:
+        out = out[out["base_cost_r"] <= cfg.max_base_cost_r]
+    if cfg.max_stress_cost_r is not None:
+        out = out[out["stress_cost_r"] <= cfg.max_stress_cost_r]
+    if cfg.sessions:
+        out = out[out["session_utc"].isin(cfg.sessions)]
+    return out.reset_index(drop=True)
+
+
 def summary_row(group: pd.DataFrame, *, setup: str, symbol: str) -> dict:
     base = group["base_net_r"].to_numpy(dtype=float)
     stress = group["stress_net_r"].to_numpy(dtype=float)
@@ -200,6 +217,61 @@ def profit_factor(r: np.ndarray) -> float:
     return float("inf") if gains > 0 else np.nan
 
 
+def rolling_window_summary(
+    trades: pd.DataFrame,
+    *,
+    window_days: int = 30,
+    step_days: int = 7,
+    min_trades: int = 5,
+) -> pd.DataFrame:
+    if trades.empty:
+        return pd.DataFrame()
+    data = trades.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True)
+    start = data["entry_ts"].min().floor("D")
+    end_all = data["entry_ts"].max()
+    rows = []
+    while start + pd.Timedelta(days=window_days) <= end_all:
+        end = start + pd.Timedelta(days=window_days)
+        window = data[(data["entry_ts"] >= start) & (data["entry_ts"] < end)]
+        if len(window) >= min_trades:
+            rows.append(
+                {
+                    "window_start": start,
+                    "window_end": end,
+                    "trades": len(window),
+                    "base_avg_r": float(window["base_net_r"].mean()),
+                    "base_pf": profit_factor(window["base_net_r"].to_numpy(dtype=float)),
+                    "stress_avg_r": float(window["stress_net_r"].mean()),
+                    "stress_pf": profit_factor(window["stress_net_r"].to_numpy(dtype=float)),
+                    "base_return_r": float(window["base_net_r"].sum()),
+                    "stress_return_r": float(window["stress_net_r"].sum()),
+                    "median_stop_pct": float(window["stop_pct"].median()),
+                }
+            )
+        start += pd.Timedelta(days=step_days)
+    return pd.DataFrame(rows)
+
+
+def summarize_windows(windows: pd.DataFrame) -> pd.DataFrame:
+    if windows.empty:
+        return pd.DataFrame()
+    return pd.DataFrame(
+        [
+            {
+                "windows": len(windows),
+                "median_trades": float(windows["trades"].median()),
+                "positive_base_windows": float((windows["base_return_r"] > 0).mean()),
+                "positive_stress_windows": float((windows["stress_return_r"] > 0).mean()),
+                "median_base_pf": float(windows["base_pf"].replace([np.inf, -np.inf], np.nan).median()),
+                "worst_base_return_r": float(windows["base_return_r"].min()),
+                "median_stress_pf": float(windows["stress_pf"].replace([np.inf, -np.inf], np.nan).median()),
+                "worst_stress_return_r": float(windows["stress_return_r"].min()),
+            }
+        ]
+    )
+
+
 def exit_kind(gross_r: float) -> str:
     if gross_r > 0:
         return "target"
@@ -219,7 +291,7 @@ def session_bucket(ts: pd.Timestamp) -> str:
     return "late_us"
 
 
-def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path) -> None:
+def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path, windows: pd.DataFrame | None = None) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# Simple Crypto Setup Lab",
@@ -243,6 +315,15 @@ def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path) -> N
         lines.append(dataframe_to_markdown(session))
     else:
         lines.append("No trades.")
+    if windows is not None and not windows.empty:
+        lines.extend(
+            [
+                "",
+                "## Rolling Windows",
+                "",
+                dataframe_to_markdown(summarize_windows(windows)),
+            ]
+        )
     lines.extend(
         [
             "",
@@ -279,20 +360,50 @@ def main() -> int:
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--setup", default="pullback_reclaim", choices=["pullback_reclaim", "context_change"])
     parser.add_argument("--days", type=int, default=400)
+    parser.add_argument("--min-rr", type=float, default=1.5)
+    parser.add_argument("--max-base-cost-r", type=float, default=None)
+    parser.add_argument("--max-stress-cost-r", type=float, default=None)
+    parser.add_argument("--sessions", default="", help="Comma-separated UTC session buckets: asia,london,ny,late_us")
+    parser.add_argument("--window-days", type=int, default=30)
+    parser.add_argument("--step-days", type=int, default=7)
     parser.add_argument("--output-dir", default="backtesting/results/crypto_simple_setup_lab")
     args = parser.parse_args()
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    cfg = SimpleSetupConfig(days=args.days)
+    sessions = tuple(s.strip() for s in args.sessions.split(",") if s.strip()) or None
+    cfg = SimpleSetupConfig(
+        days=args.days,
+        min_rr=args.min_rr,
+        max_base_cost_r=args.max_base_cost_r,
+        max_stress_cost_r=args.max_stress_cost_r,
+        sessions=sessions,
+    )
     trades, summary = run_simple_setup_lab(symbols, config=cfg, setup=args.setup)
+    windows = rolling_window_summary(trades, window_days=args.window_days, step_days=args.step_days)
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    trades.to_csv(out_dir / f"{args.setup}_trades.csv", index=False)
-    summary.to_csv(out_dir / f"{args.setup}_summary.csv", index=False)
-    write_report(summary, trades, out_dir / f"{args.setup}_report.md")
+    suffix = output_suffix(args.setup, cfg)
+    trades.to_csv(out_dir / f"{suffix}_trades.csv", index=False)
+    summary.to_csv(out_dir / f"{suffix}_summary.csv", index=False)
+    windows.to_csv(out_dir / f"{suffix}_windows.csv", index=False)
+    write_report(summary, trades, out_dir / f"{suffix}_report.md", windows)
     print(summary.to_string(index=False))
+    if not windows.empty:
+        print("\nRolling windows")
+        print(summarize_windows(windows).to_string(index=False))
     return 0
+
+
+def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
+    parts = [setup, f"rr{cfg.min_rr:g}"]
+    if cfg.max_base_cost_r is not None:
+        parts.append(f"basecost{cfg.max_base_cost_r:g}r")
+    if cfg.max_stress_cost_r is not None:
+        parts.append(f"stresscost{cfg.max_stress_cost_r:g}r")
+    if cfg.sessions:
+        parts.append("sessions-" + "-".join(cfg.sessions))
+    return "_".join(parts).replace(".", "p")
 
 
 if __name__ == "__main__":

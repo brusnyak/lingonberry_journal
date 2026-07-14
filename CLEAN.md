@@ -3722,3 +3722,75 @@ survives 20bps stress. Next test should be one of:
 
 Do **not** add another recognition layer until one of those simple tests clears
 `base PF >= 1.20`, `20bps PF >= 1.05`, enough trades, and tolerable rolling DD.
+
+## Phase 31 -- Cost-gated context-change validation: closest viable simple baseline, still not deployment-ready
+
+Implemented the next planned validation directly in `simple_setup_lab.py`:
+
+- `--max-base-cost-r`
+- `--max-stress-cost-r`
+- `--sessions`
+- `--min-rr`
+- rolling 30d / 7d window summary
+
+Validation:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_simple_setup_lab.py \
+  backtesting/tests/test_mtf_cascade_direction.py \
+  backtesting/tests/test_mtf_cascade_foundation.py -q
+# 35 passed
+```
+
+Tested `context_change` only, because Phase 30 falsified `pullback_reclaim`.
+All runs use 400d, six core symbols, cost gate `base_cost_r <= 0.15` and
+`stress_cost_r <= 0.50`.
+
+| Variant | Trades | Base avgR | Base PF | 20bps avgR | 20bps PF | Positive base windows | Positive stress windows | Median stress PF | Worst stress return R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1.5R, all sessions | 2,013 | +0.184 | 1.354 | +0.012 | 1.020 | 82.7% | 48.1% | 0.958 | -62.7R |
+| 1.5R, no late-US | 1,394 | +0.236 | 1.480 | +0.064 | 1.111 | 80.8% | 55.8% | 1.114 | -39.7R |
+| 2.0R, all sessions | 2,013 | +0.219 | 1.385 | +0.048 | 1.071 | 80.8% | 50.0% | 1.012 | -63.7R |
+| **2.0R, no late-US** | **1,394** | **+0.300** | **1.559** | **+0.128** | **1.204** | **84.6%** | **61.5%** | **1.168** | **-40.7R** |
+| 2.5R, no late-US | 1,394 | +0.300 | 1.515 | +0.128 | 1.186 | 80.8% | 57.7% | 1.191 | -45.2R |
+
+Best current simple variant:
+
+```bash
+PYTHONPATH=. python -m backtesting.crypto.simple_setup_lab \
+  --setup context_change \
+  --days 400 \
+  --min-rr 2.0 \
+  --max-base-cost-r 0.15 \
+  --max-stress-cost-r 0.50 \
+  --sessions asia,london,ny
+```
+
+Full report:
+`backtesting/results/crypto_simple_setup_lab/context_change_rr2_basecost0p15r_stresscost0p5r_sessions-asia-london-ny_report.md`.
+
+**Read:** this is the first simple crypto setup that is not obviously dead after
+realistic costs:
+
+- base PF `1.559`;
+- stress PF `1.204`;
+- `1,394` trades over 400d;
+- `84.6%` positive base windows;
+- `61.5%` positive 20bps-stress windows.
+
+But it is **not deployment-ready**:
+
+- stress positive-window rate misses the planned `65%` bar;
+- worst 30d stress window is still `-40.7R`;
+- no equity sizing / max-DD curve has been applied in this lab yet;
+- no per-symbol/session rolling split yet.
+
+Decision: keep this as the active simple baseline. Next useful work is **not**
+another entry pattern. Next useful work is portfolio/risk validation on this
+exact variant:
+
+1. Convert R-stream to equity curve at conservative risk (`0.25-0.50%`).
+2. Add daily/weekly loss caps and max simultaneous trade rules.
+3. Split rolling stats by symbol and session to see whether one component causes
+   the bad stress windows.
+4. Only if that passes, export UI review samples for the worst stress windows.
