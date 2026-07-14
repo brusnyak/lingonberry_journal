@@ -3625,3 +3625,100 @@ cost-survival gate plus forensics:
    stop distance, target distance, MFE/MAE, and duration.
 4. Only then decide whether to widen timeframe/stops, require stronger trend
    confirmation, or abandon this foundation.
+
+## Phase 30 -- Step back to simple setups: pullback-reclaim falsified, context-change survives base costs only
+
+User correction: step back from the full engine and test simple setups while
+continuing to measure structure/direction. Added `backtesting/crypto/simple_setup_lab.py`
+as a deliberately narrow lab:
+
+- one setup family per run;
+- existing direction context only: 240m + 30m structure/EMA agreement, 15m EMA;
+- existing structural SL/TP reused;
+- reports gross R, base-fee net R, 20bps-stress net R, MFE/MAE, stop distance,
+  planned RR, session bucket, and cost as R;
+- no broad matrix, no duplicated variants, no promotion logic.
+
+Research grounding used for the lab design:
+
+- crypto technical rules must be judged after transaction costs, not only gross;
+- Bitcoin/crypto intraday volume and volatility cluster around European/US daytime
+  hours, so session bucket remains a first-class diagnostic even in 24/7 markets;
+- FX literature shows intraday volume/volatility/spread seasonality, so "session"
+  is not a cosmetic filter;
+- swing structure is useful for context/levels, but this repo's own 400d tests show
+  standalone HH/HL/LH/LL regime is not directional edge.
+
+Validation:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_simple_setup_lab.py \
+  backtesting/tests/test_mtf_cascade_direction.py \
+  backtesting/tests/test_mtf_cascade_foundation.py -q
+# 33 passed
+
+PYTHONPATH=. python -m backtesting.crypto.simple_setup_lab --setup pullback_reclaim --days 400
+PYTHONPATH=. python -m backtesting.crypto.simple_setup_lab --setup context_change --days 400
+```
+
+Full reports:
+
+- `backtesting/results/crypto_simple_setup_lab/pullback_reclaim_report.md`
+- `backtesting/results/crypto_simple_setup_lab/context_change_report.md`
+
+**Pullback-reclaim result** (15m, all six symbols, 400d):
+
+| setup | trades | gross avgR | base avgR | base PF | 20bps avgR | 20bps PF | median stop |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| pullback_reclaim | 11,322 | +0.057 | -0.035 | 0.940 | -0.251 | 0.654 | 0.985% |
+
+Read: falsified as a broad simple continuation entry. It creates plenty of trades
+but does not improve quality. ETH is the only pair with a decent base-fee result
+(`base PF 1.276`), and even ETH fails 20bps stress (`PF 0.893`). Do not build the
+engine around this setup.
+
+**Context-change baseline** (fresh 240/30/15 direction-context change, same SL/TP):
+
+| setup | trades | gross avgR | base avgR | base PF | 20bps avgR | 20bps PF | median stop |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| context_change | 2,984 | +0.248 | +0.111 | 1.188 | -0.208 | 0.732 | 0.594% |
+
+Symbol split at base cost:
+
+| symbol | trades | base avgR | base PF | 20bps PF |
+|---|---:|---:|---:|---:|
+| ETH | 510 | +0.190 | 1.332 | 0.795 |
+| SOL | 527 | +0.175 | 1.313 | 0.870 |
+| DOGE | 520 | +0.118 | 1.197 | 0.837 |
+| BNB | 453 | +0.088 | 1.147 | 0.643 |
+| XRP | 531 | +0.059 | 1.096 | 0.677 |
+| BTC | 443 | +0.025 | 1.040 | 0.569 |
+
+Session split at base cost:
+
+| session | trades | base avgR | base PF | 20bps avgR | 20bps PF |
+|---|---:|---:|---:|---:|---:|
+| NY | 760 | +0.185 | 1.340 | -0.110 | 0.843 |
+| Asia | 796 | +0.132 | 1.229 | -0.187 | 0.753 |
+| London | 544 | +0.126 | 1.209 | -0.242 | 0.703 |
+| Late US | 884 | +0.021 | 1.032 | -0.290 | 0.651 |
+
+Cost gate check, same context-change trades:
+
+| filter | trades | base avgR | base PF | 20bps avgR | 20bps PF | median stop |
+|---|---:|---:|---:|---:|---:|---:|
+| none | 2,984 | +0.111 | 1.188 | -0.208 | 0.732 | 0.594% |
+| base cost <= 0.15R / 20bps cost <= 0.50R | 2,013 | +0.184 | 1.354 | +0.012 | 1.020 | 0.863% |
+
+**Read:** the structure/direction context is still the best simple baseline. The
+pullback entry did not help. Cost-per-R is the first useful filter: it keeps most
+of the signal (`67%` of trades) and lifts base PF materially, but it only barely
+survives 20bps stress. Next test should be one of:
+
+1. Promote cost gate into the lab as a first-class flag and rerun rolling windows.
+2. Test context-change only on NY/Asia/London, excluding late-US.
+3. Test wider target / management on context-change; current `1.5R` target may be
+   too low for a modest 45-48% win-rate edge after stress costs.
+
+Do **not** add another recognition layer until one of those simple tests clears
+`base PF >= 1.20`, `20bps PF >= 1.05`, enough trades, and tolerable rolling DD.

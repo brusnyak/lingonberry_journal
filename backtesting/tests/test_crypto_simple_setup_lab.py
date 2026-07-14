@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from backtesting.crypto.simple_setup_lab import (
+    exit_kind,
+    profit_factor,
+    session_bucket,
+    setup_signal,
+    summarize_trades,
+)
+
+
+def test_setup_signal_context_change_fires_only_on_fresh_direction():
+    bars = pd.DataFrame({"close": [100, 101, 102, 103]})
+    combo = np.array(["neutral", "bull", "bull", "bear"])
+
+    signal = setup_signal(bars, combo, "context_change")
+
+    assert signal.tolist() == [False, True, False, True]
+
+
+def test_setup_signal_pullback_reclaim_requires_existing_context_and_ema_reclaim():
+    bars = pd.DataFrame(
+        {
+            "close": [100, 100, 100, 100, 99, 101, 102],
+            "high": [101, 101, 101, 101, 100, 102, 103],
+            "low": [99, 99, 99, 99, 98, 100, 101],
+        }
+    )
+    combo = np.array(["bull"] * len(bars))
+
+    signal = setup_signal(bars, combo, "pullback_reclaim")
+
+    assert signal.sum() == 1
+    assert np.where(signal)[0][0] > 0
+
+
+def test_setup_signal_rejects_unknown_setup():
+    with pytest.raises(ValueError):
+        setup_signal(pd.DataFrame({"close": [1, 2, 3]}), np.array(["bull", "bull", "bull"]), "bad")
+
+
+def test_profit_factor_and_exit_kind():
+    assert profit_factor(np.array([1.0, 2.0, -1.0])) == 3.0
+    assert exit_kind(1.5) == "target"
+    assert exit_kind(-1.0) == "stop"
+    assert exit_kind(0.0) == "expiry"
+
+
+def test_summarize_trades_reports_cost_fragility_fields():
+    trades = pd.DataFrame(
+        {
+            "setup": ["pullback_reclaim", "pullback_reclaim"],
+            "symbol": ["BTCUSDT", "BTCUSDT"],
+            "base_net_r": [1.4, -1.2],
+            "stress_net_r": [0.8, -1.8],
+            "gross_r": [1.5, -1.0],
+            "stop_pct": [0.5, 0.3],
+            "planned_rr": [1.5, 1.5],
+            "base_cost_r": [0.1, 0.2],
+            "stress_cost_r": [0.7, 0.8],
+            "exit_kind": ["target", "stop"],
+            "mfe_r": [1.6, 0.4],
+            "mae_r": [-0.2, -1.0],
+        }
+    )
+
+    summary = summarize_trades(trades)
+
+    assert {"base_avg_r", "base_pf", "stress_avg_r", "median_base_cost_r"}.issubset(summary.columns)
+    assert summary.iloc[0]["trades"] == 2
+    assert summary.iloc[0]["median_stop_pct"] == 0.4
+
+
+def test_session_bucket_uses_utc_pseudo_sessions():
+    assert session_bucket(pd.Timestamp("2026-01-01T03:00:00Z")) == "asia"
+    assert session_bucket(pd.Timestamp("2026-01-01T08:00:00Z")) == "london"
+    assert session_bucket(pd.Timestamp("2026-01-01T13:00:00Z")) == "ny"
+    assert session_bucket(pd.Timestamp("2026-01-01T20:00:00Z")) == "late_us"
