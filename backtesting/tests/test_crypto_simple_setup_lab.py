@@ -9,12 +9,14 @@ from backtesting.crypto.simple_setup_lab import (
     apply_trade_filters,
     asof_structure_row,
     build_candidate_feature_table,
+    build_candidate_filter_diagnostics,
     build_full_review_packet,
     continuation_reclaim_signal,
     delayed_context_signal,
     daily_first_context_signal,
     direction_context,
     dmi_alignment,
+    dataframe_to_markdown,
     exit_kind,
     profit_factor,
     primary_daily_blocker,
@@ -26,6 +28,7 @@ from backtesting.crypto.simple_setup_lab import (
     structure_confirmed_context_signal,
     summarize_trades,
     summarize_windows,
+    write_candidate_filter_report,
     write_frequency_report,
 )
 
@@ -429,6 +432,55 @@ def test_build_candidate_feature_table_exports_labels(tmp_path):
     assert table["label_positive_stress_r"].tolist() == [True, False]
     assert table["label_mfe_ge_2r"].tolist() == [True, False]
     assert (tmp_path / "features.csv").exists()
+
+
+def test_candidate_filter_diagnostics_ranks_good_and_bad_buckets(tmp_path):
+    features = pd.DataFrame(
+        {
+            "entry_ts": pd.to_datetime([f"2026-01-{day:02d}T08:00Z" for day in range(1, 9)]),
+            "setup": ["context_change"] * 8,
+            "symbol": ["ETHUSDT"] * 4 + ["DOGEUSDT"] * 4,
+            "direction": ["long"] * 8,
+            "session_utc": ["london"] * 8,
+            "hour_utc": [8] * 8,
+            "day_of_week": [1] * 8,
+            "stop_pct": [0.8] * 8,
+            "target_pct": [1.6] * 8,
+            "planned_rr": [2.0] * 8,
+            "base_cost_r": [0.05] * 8,
+            "stress_cost_r": [0.15] * 8,
+            "mfe_r": [2.1, 2.2, 1.8, 2.5, 0.3, 0.4, 0.5, 0.6],
+            "mae_r": [-0.2, -0.3, -0.4, -0.2, -1.0, -1.1, -1.0, -1.2],
+            "bars_to_exit": [10] * 8,
+            "trend_strength": ["trend"] * 8,
+            "consolidation_state": ["directional"] * 8,
+            "shock_alignment": ["no_shock"] * 8,
+            "compression_state": ["normal"] * 8,
+            "dmi_alignment": ["aligned"] * 8,
+            "adx_14": [26.0] * 8,
+            "pre_range_atr_16": [1.5] * 8,
+            "label_target": [True, True, True, True, False, False, False, False],
+            "label_stop": [False, False, False, False, True, True, True, True],
+            "label_expiry": [False] * 8,
+            "label_positive_stress_r": [True, True, True, True, False, False, False, False],
+            "label_mfe_ge_1r": [True, True, True, True, False, False, False, False],
+            "label_mfe_ge_2r": [True, True, False, True, False, False, False, False],
+            "outcome_stress_net_r": [1.8, 1.7, 1.9, 1.6, -1.2, -1.1, -1.3, -1.0],
+        }
+    )
+
+    diagnostics = build_candidate_filter_diagnostics(features, min_count=3)
+    write_candidate_filter_report(features, tmp_path / "feature_report.md", min_count=3)
+
+    assert "symbol=ETHUSDT" in diagnostics["good_buckets"]["bucket"].tolist()
+    assert "symbol=DOGEUSDT" in diagnostics["bad_buckets"]["bucket"].tolist()
+    assert (tmp_path / "feature_report.md").exists()
+
+
+def test_dataframe_to_markdown_escapes_pipe_values():
+    text = dataframe_to_markdown(pd.DataFrame({"bucket": ["symbol=ETHUSDT | session_utc=asia"]}))
+
+    assert "\\|" in text
 
 
 def test_primary_daily_blocker_explains_untraded_days():

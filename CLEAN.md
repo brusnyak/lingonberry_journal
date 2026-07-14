@@ -4441,3 +4441,66 @@ Next:
 3. Do not deploy yet because the last 30d is negative.
 4. Build candidate ranking/filter diagnostics from the feature table before
    adding more setups.
+
+## Phase 40 -- Candidate ranking/filter diagnostics: Asia is strongest, but 30d still blocks deployment
+
+User asked to run the candidate ranking/filter diagnostics, then decide whether
+to return to foundation work layer by layer.
+
+Implemented:
+
+- `build_candidate_filter_diagnostics()`
+- `write_candidate_filter_report()`
+- CLI flags:
+  - `--feature-report`
+  - `--feature-min-count`
+
+Generated:
+
+- `backtesting/results/crypto_simple_setup_lab/context_change_rr2_basecost0p12r_stresscost0p4r_sessions-asia-london-ny_shock-no_shock_liquid-no-avax-180d-ranked_feature_report.md`
+- `backtesting/results/crypto_simple_setup_lab/context_change_filter_audit.md`
+
+Ranking read from `180d liquid-no-avax` candidates:
+
+- `asia` session is materially stronger than London/NY.
+- `dmi=aligned` is stronger than opposed, but not enough alone.
+- `trend_strength=trend` is weak despite the name.
+- `DOGE` is the weakest remaining symbol, but not toxic like AVAX.
+
+Explicit filter tests:
+
+| Variant | Days | Candidates | Accepted | PF | Return | Max DD | Return/DD | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| base | 30 | 29 | 23 | 0.745 | -0.94% | 2.29% | -0.41 | reject |
+| base | 60 | 103 | 70 | 1.566 | +4.62% | 3.36% | 1.37 | usable |
+| base | 90 | 151 | 112 | 1.561 | +7.14% | 3.36% | 2.13 | good |
+| base | 180 | 303 | 228 | 1.437 | +11.77% | 4.11% | 2.86 | good |
+| dmi-aligned | 30 | 24 | 21 | 0.602 | -1.37% | 2.01% | -0.68 | reject |
+| dmi-aligned | 60 | 79 | 63 | 1.828 | +5.48% | 2.82% | 1.95 | good |
+| dmi-aligned | 90 | 115 | 95 | 1.837 | +8.11% | 2.82% | 2.88 | good |
+| dmi-aligned | 180 | 221 | 186 | 1.480 | +10.29% | 3.81% | 2.70 | not better than base |
+| asia-only | 30 | 13 | 10 | 0.964 | -0.05% | 0.72% | -0.07 | still not positive |
+| asia-only | 60 | 48 | 33 | 2.207 | +3.87% | 1.30% | 2.98 | strong |
+| asia-only | 90 | 65 | 49 | 3.268 | +8.25% | 1.30% | 6.34 | strongest |
+| asia-only | 180 | 133 | 100 | 2.291 | +11.92% | 1.30% | 9.16 | strongest risk profile |
+| no-trend | 30 | 20 | 17 | 0.830 | -0.43% | 1.39% | -0.31 | reject |
+| no-trend | 60 | 71 | 50 | 2.055 | +5.24% | 1.95% | 2.69 | strong |
+| no-trend | 90 | 100 | 78 | 1.819 | +6.74% | 1.95% | 3.46 | strong |
+| no-trend | 180 | 193 | 155 | 1.669 | +11.28% | 2.57% | 4.39 | strong |
+
+Read:
+
+- `asia-only` is the best filter so far for drawdown and return/DD.
+- It still does not solve the recent 30d weakness: PF `0.964`, return `-0.05%`.
+- `dmi-aligned` improves 60/90d but not 180d enough and worsens 30d.
+- `no-trend` is useful, but weaker than `asia-only`.
+
+Decision:
+
+- Treat `asia-only context_change` as the new research candidate, not deployment.
+- Do not add more entry setups yet.
+- Return to foundation work next:
+  1. Direction correctness by session.
+  2. Why London/NY degrade versus Asia.
+  3. Whether the 30d failure is direction, target/stop geometry, or market regime.
+  4. Only after that, decide whether we need new setup logic or just regime gates.

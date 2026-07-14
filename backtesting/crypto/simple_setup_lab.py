@@ -897,6 +897,166 @@ def build_candidate_feature_table(trades: pd.DataFrame, *, output_path: Path) ->
     return table
 
 
+def build_candidate_filter_diagnostics(features: pd.DataFrame, *, min_count: int = 10) -> dict[str, pd.DataFrame]:
+    """Rank candidate feature buckets before promoting any filter or ML model."""
+    if features.empty:
+        empty = pd.DataFrame()
+        return {"overview": empty, "single_feature": empty, "pair_feature": empty, "good_buckets": empty, "bad_buckets": empty}
+
+    data = features.copy()
+    data["outcome_stress_net_r"] = pd.to_numeric(data["outcome_stress_net_r"], errors="coerce")
+    data["stop_pct"] = pd.to_numeric(data.get("stop_pct"), errors="coerce")
+    data["adx_14"] = pd.to_numeric(data.get("adx_14"), errors="coerce")
+    data["pre_range_atr_16"] = pd.to_numeric(data.get("pre_range_atr_16"), errors="coerce")
+    data["hour_bucket"] = pd.cut(
+        pd.to_numeric(data.get("hour_utc"), errors="coerce"),
+        bins=[-1, 6, 11, 16, 23],
+        labels=["asia", "london", "ny", "late_us"],
+    ).astype(str)
+    data["stop_pct_bucket"] = pd.cut(
+        data["stop_pct"],
+        bins=[-np.inf, 0.75, 1.25, 2.0, 5.0, np.inf],
+        labels=["<=0.75", "0.75-1.25", "1.25-2", "2-5", ">5"],
+    ).astype(str)
+    data["adx_bucket"] = pd.cut(
+        data["adx_14"],
+        bins=[-np.inf, 15, 25, 35, np.inf],
+        labels=["<=15", "15-25", "25-35", ">35"],
+    ).astype(str)
+    data["pre_range_bucket"] = pd.cut(
+        data["pre_range_atr_16"],
+        bins=[-np.inf, 1.0, 2.0, 4.0, np.inf],
+        labels=["<=1atr", "1-2atr", "2-4atr", ">4atr"],
+    ).astype(str)
+    if "day_of_week" in data.columns:
+        data["day_of_week"] = data["day_of_week"].astype(str)
+
+    overview = _feature_bucket_summary(data, ["setup"], min_count=1)
+    single_cols = [
+        "symbol",
+        "direction",
+        "session_utc",
+        "hour_bucket",
+        "day_of_week",
+        "trend_strength",
+        "consolidation_state",
+        "compression_state",
+        "dmi_alignment",
+        "stop_pct_bucket",
+        "adx_bucket",
+        "pre_range_bucket",
+    ]
+    pair_cols = [
+        ("symbol", "dmi_alignment"),
+        ("symbol", "session_utc"),
+        ("symbol", "trend_strength"),
+        ("trend_strength", "dmi_alignment"),
+        ("consolidation_state", "dmi_alignment"),
+        ("stop_pct_bucket", "dmi_alignment"),
+        ("adx_bucket", "dmi_alignment"),
+    ]
+    single = pd.concat(
+        [_feature_bucket_summary(data, [col], min_count=min_count).assign(feature=col) for col in single_cols if col in data.columns],
+        ignore_index=True,
+    )
+    pairs = pd.concat(
+        [_feature_bucket_summary(data, list(cols), min_count=min_count).assign(feature="+".join(cols)) for cols in pair_cols],
+        ignore_index=True,
+    )
+    baseline_avg = float(data["outcome_stress_net_r"].mean())
+    good = pd.concat([single, pairs], ignore_index=True)
+    if not good.empty:
+        good = good[
+            (good["trades"] >= min_count)
+            & (good["stress_avg_r"] > baseline_avg)
+            & (good["stress_pf"] >= 1.5)
+            & (good["positive_rate"] >= 0.50)
+        ].sort_values(["stress_pf", "stress_avg_r", "trades"], ascending=[False, False, False])
+    bad = pd.concat([single, pairs], ignore_index=True)
+    if not bad.empty:
+        bad = bad[
+            (bad["trades"] >= min_count)
+            & ((bad["stress_pf"] < 1.0) | (bad["stop_rate"] >= 0.60))
+        ].sort_values(["stress_pf", "stress_avg_r", "trades"], ascending=[True, True, False])
+    return {
+        "overview": overview,
+        "single_feature": single.sort_values(["feature", "stress_pf", "trades"], ascending=[True, False, False]).reset_index(drop=True),
+        "pair_feature": pairs.sort_values(["feature", "stress_pf", "trades"], ascending=[True, False, False]).reset_index(drop=True),
+        "good_buckets": good.reset_index(drop=True),
+        "bad_buckets": bad.reset_index(drop=True),
+    }
+
+
+def _feature_bucket_summary(data: pd.DataFrame, group_cols: list[str], *, min_count: int) -> pd.DataFrame:
+    rows = []
+    for keys, group in data.dropna(subset=group_cols).groupby(group_cols, dropna=False, sort=True):
+        if len(group) < min_count:
+            continue
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        r = group["outcome_stress_net_r"].to_numpy(dtype=float)
+        rows.append(
+            {
+                "bucket": " | ".join(f"{col}={value}" for col, value in zip(group_cols, key_values)),
+                "trades": len(group),
+                "stress_avg_r": float(np.mean(r)),
+                "stress_sum_r": float(np.sum(r)),
+                "stress_pf": profit_factor(r),
+                "positive_rate": float((r > 0).mean()),
+                "target_rate": float(group["label_target"].astype(bool).mean()) if "label_target" in group else np.nan,
+                "stop_rate": float(group["label_stop"].astype(bool).mean()) if "label_stop" in group else np.nan,
+                "expiry_rate": float(group["label_expiry"].astype(bool).mean()) if "label_expiry" in group else np.nan,
+                "mfe_2r_rate": float(group["label_mfe_ge_2r"].astype(bool).mean()) if "label_mfe_ge_2r" in group else np.nan,
+                "median_stop_pct": float(group["stop_pct"].median()) if "stop_pct" in group else np.nan,
+                "median_adx_14": float(group["adx_14"].median()) if "adx_14" in group else np.nan,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def write_candidate_filter_report(features: pd.DataFrame, output: Path, *, min_count: int = 10) -> dict[str, pd.DataFrame]:
+    diagnostics = build_candidate_filter_diagnostics(features, min_count=min_count)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Candidate Filter Diagnostics",
+        "",
+        "Scope: rank candidate-event features before adding filters or ML. This is evidence gathering, not promotion.",
+        "",
+        f"Minimum bucket size: `{min_count}` trades.",
+        "",
+        "## Overview",
+        "",
+        dataframe_to_markdown(diagnostics["overview"]) if not diagnostics["overview"].empty else "No rows.",
+        "",
+        "## Strong Buckets",
+        "",
+        dataframe_to_markdown(diagnostics["good_buckets"].head(30)) if not diagnostics["good_buckets"].empty else "No rows.",
+        "",
+        "## Weak Buckets",
+        "",
+        dataframe_to_markdown(diagnostics["bad_buckets"].head(30)) if not diagnostics["bad_buckets"].empty else "No rows.",
+        "",
+        "## Best Single-Feature Buckets",
+        "",
+        dataframe_to_markdown(
+            diagnostics["single_feature"].sort_values(["stress_pf", "stress_avg_r", "trades"], ascending=[False, False, False]).head(40)
+        ) if not diagnostics["single_feature"].empty else "No rows.",
+        "",
+        "## Best Pair Buckets",
+        "",
+        dataframe_to_markdown(
+            diagnostics["pair_feature"].sort_values(["stress_pf", "stress_avg_r", "trades"], ascending=[False, False, False]).head(40)
+        ) if not diagnostics["pair_feature"].empty else "No rows.",
+        "",
+        "## Read",
+        "",
+        "- Promote nothing from this report directly.",
+        "- A bucket is only useful if it has enough trades and remains stable across 30/60/90/180 day windows.",
+        "- Use this to choose the next explicit filter test or to define supervised model features.",
+    ]
+    output.write_text("\n".join(lines) + "\n")
+    return diagnostics
+
+
 def _review_notes_hint(row: pd.Series) -> str:
     return (
         f"Full accepted trade. setup={row.get('setup')}; "
@@ -1064,7 +1224,7 @@ def dataframe_to_markdown(df: pd.DataFrame) -> str:
         if pd.api.types.is_float_dtype(formatted[col]):
             formatted[col] = formatted[col].map(lambda v: "" if pd.isna(v) else f"{v:.4f}")
     headers = [str(c) for c in formatted.columns]
-    rows = [[str(v) for v in row] for row in formatted.to_numpy()]
+    rows = [[str(v).replace("|", "\\|") for v in row] for row in formatted.to_numpy()]
     widths = [len(h) for h in headers]
     for row in rows:
         widths = [max(w, len(cell)) for w, cell in zip(widths, row)]
@@ -1116,6 +1276,8 @@ def main() -> int:
     parser.add_argument("--cooldown-after-loss-bars", type=int, default=4)
     parser.add_argument("--review-packet", action="store_true", help="When portfolio is enabled, export every accepted trade for the review UI.")
     parser.add_argument("--feature-table", action="store_true", help="Export filtered setup candidates with labels for later ranking/ML research.")
+    parser.add_argument("--feature-report", action="store_true", help="Write feature bucket diagnostics from the exported candidate table.")
+    parser.add_argument("--feature-min-count", type=int, default=10, help="Minimum trades per feature bucket in the feature report.")
     parser.add_argument("--frequency-audit", action="store_true", help="Write a day-level audit explaining untraded days and blocked signals.")
     parser.add_argument("--output-dir", default="backtesting/results/crypto_simple_setup_lab")
     args = parser.parse_args()
@@ -1158,6 +1320,10 @@ def main() -> int:
         feature_path = out_dir / f"{suffix}_features.csv"
         features = build_candidate_feature_table(trades, output_path=feature_path)
         print(f"Saved feature table: {feature_path} rows={len(features)}")
+        if args.feature_report:
+            feature_report_path = out_dir / f"{suffix}_feature_report.md"
+            write_candidate_filter_report(features, feature_report_path, min_count=args.feature_min_count)
+            print(f"Saved feature report: {feature_report_path}")
     accepted = pd.DataFrame()
     if args.portfolio:
         accepted, portfolio_summary = run_portfolio_validation(
