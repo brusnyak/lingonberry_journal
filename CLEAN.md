@@ -5209,3 +5209,79 @@ Read:
 - The next useful foundation layer is not more trend labels; it is path/context
   discrimination: expansion vs sweep/reclaim vs compression/range, then setup
   rules tied to those path classes.
+
+## Phase 54 -- Causal path-context report (2026-07-14)
+
+Built `path_context_report.py` to label causal intraday path states before setup
+logic:
+
+- `expansion_up`
+- `expansion_down`
+- `sweep_reclaim_long`
+- `sweep_reclaim_short`
+- `compression`
+- `range_or_noise`
+
+The detector uses only prior rolling range plus the current closed candle:
+
+- prior high/low over `lookback_bars`;
+- ATR-normalized movement;
+- close location inside the current candle;
+- sweep beyond prior range and close back inside.
+
+Synthetic tests validate expansion, sweep/reclaim, compression, event sampling,
+fade scoring, and path/foundation grouping.
+
+### 6-symbol 360d path result
+
+Continuation mode is bad:
+
+| Path | 96-bar calls | Continuation accuracy | Read |
+|------|-------------:|----------------------:|------|
+| expansion_up | 2570 | 45.10% | fade candidate |
+| expansion_down | 2615 | 46.60% | fade candidate |
+| sweep_reclaim_long | 2321 | 46.68% | fade candidate |
+| sweep_reclaim_short | 2163 | 48.91% | no edge |
+
+Fade mode is better:
+
+| Path | 96-bar calls | Fade accuracy | Read |
+|------|-------------:|--------------:|------|
+| expansion_up | 2570 | 52.88% | best broad path |
+| sweep_reclaim_long | 2321 | 52.41% | useful, weaker |
+| expansion_down | 2615 | 51.38% | mixed |
+| sweep_reclaim_short | 2163 | 49.70% | reject |
+
+By-symbol, `expansion_up` fade at 96 bars is positive on all six symbols:
+
+| Symbol | Calls | Accuracy |
+|--------|------:|---------:|
+| DOGEUSDT | 433 | 54.73% |
+| BNBUSDT | 492 | 54.27% |
+| SOLUSDT | 478 | 52.72% |
+| BTCUSDT | 430 | 52.09% |
+| XRPUSDT | 391 | 51.92% |
+| ETHUSDT | 346 | 50.87% |
+
+Path + foundation interaction, fade mode, 96 bars:
+
+| Path | Foundation state | Calls | Accuracy | Read |
+|------|------------------|------:|---------:|------|
+| expansion_down | local_trend_htf_neutral | 455 | 54.73% | best downside fade bucket |
+| expansion_down | confirmed_trend | 370 | 53.24% | useful |
+| expansion_up | range_or_unresolved | 1687 | 53.76% | best upside fade bucket |
+| sweep_reclaim_long | range_or_unresolved | 1299 | 53.47% | useful |
+| sweep_reclaim_short | confirmed_trend | 276 | 51.81% | too weak/small |
+
+Read:
+
+- The market often mean-reverts after our expansion labels. Following expansion
+  is structurally wrong for this detector.
+- The next setup candidate should be **Expansion Exhaustion Fade**, not another
+  trend-continuation setup.
+- Candidate rules should start from:
+  1. expansion_up + range_or_unresolved -> short fade;
+  2. expansion_down + local_trend_htf_neutral or confirmed_trend -> long fade;
+  3. optional sweep_reclaim_long + range_or_unresolved -> short fade.
+- This is still a direction/path edge only. It needs entry timing, stop geometry,
+  and cost stress before being considered a strategy.
