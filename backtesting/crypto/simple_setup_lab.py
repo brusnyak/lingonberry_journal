@@ -194,10 +194,6 @@ def signal_diagnostic_row(
     entry_ts = pd.to_datetime(entry_bars["ts"].iat[i], utc=True)
     direction = "long" if combo[i] == "bull" else "short"
     entry = float(entry_bars["close"].iat[i])
-    stop_row = asof_structure_row(structure, entry_ts)
-    if stop_row is None:
-        return row
-    sl, tp = structural_stop_target(stop_row, direction, entry, cfg.min_rr)
     row = {
         "symbol": symbol,
         "setup": setup,
@@ -214,6 +210,10 @@ def signal_diagnostic_row(
         "pre_portfolio_pass": False,
         "stage_status": "invalid_stop",
     }
+    stop_row = asof_structure_row(structure, entry_ts)
+    if stop_row is None:
+        return row
+    sl, tp = structural_stop_target(stop_row, direction, entry, cfg.min_rr)
     if not np.isfinite(sl):
         return row
     risk = abs(entry - sl)
@@ -400,7 +400,14 @@ def setup_signal(
     structure: pd.DataFrame | None = None,
     entry_delay_bars: int = 0,
 ) -> np.ndarray:
-    if setup not in {"pullback_reclaim", "context_change", "daily_first_context", "micro_reclaim_context", "structure_confirmed_context"}:
+    if setup not in {
+        "pullback_reclaim",
+        "context_change",
+        "daily_first_context",
+        "micro_reclaim_context",
+        "continuation_reclaim",
+        "structure_confirmed_context",
+    }:
         raise ValueError(f"unknown setup: {setup}")
     combo_s = pd.Series(combo)
     active = combo_s.isin(["bull", "bear"])
@@ -412,6 +419,10 @@ def setup_signal(
         if structure is None or structure.empty:
             return np.zeros(len(combo_s), dtype=bool)
         return micro_reclaim_context_signal(entry_bars, combo_s, structure).to_numpy()
+    if setup == "continuation_reclaim":
+        if structure is None or structure.empty:
+            return np.zeros(len(combo_s), dtype=bool)
+        return continuation_reclaim_signal(entry_bars, combo_s, structure).to_numpy()
     if setup == "structure_confirmed_context":
         if structure is None or structure.empty:
             return np.zeros(len(combo_s), dtype=bool)
@@ -478,6 +489,41 @@ def micro_reclaim_context_signal(
     return signal & ~signal.shift(1, fill_value=False)
 
 
+def continuation_reclaim_signal(
+    entry_bars: pd.DataFrame,
+    combo_s: pd.Series,
+    structure: pd.DataFrame,
+    *,
+    confirm_lookback: int = 12,
+    pullback_lookback: int = 6,
+    min_context_bars: int = 2,
+) -> pd.Series:
+    """Continuation setup after context is already active, not on the first context-change bar."""
+    close = pd.to_numeric(entry_bars["close"], errors="coerce")
+    low = pd.to_numeric(entry_bars["low"], errors="coerce")
+    high = pd.to_numeric(entry_bars["high"], errors="coerce")
+    ema21 = close.ewm(span=21, adjust=False).mean()
+    ema55 = close.ewm(span=55, adjust=False).mean()
+    bars_since_context = _bars_since(combo_s.ne(combo_s.shift(1)) & combo_s.isin(["bull", "bear"]))
+    mature_context = bars_since_context.ge(min_context_bars)
+
+    bull_pullback = low.rolling(pullback_lookback, min_periods=1).min().shift(1) <= ema21.shift(1)
+    bear_pullback = high.rolling(pullback_lookback, min_periods=1).max().shift(1) >= ema21.shift(1)
+    bull_reclaim = (combo_s == "bull") & mature_context & bull_pullback & (close > ema21) & (ema21 >= ema55)
+    bear_reclaim = (combo_s == "bear") & mature_context & bear_pullback & (close < ema21) & (ema21 <= ema55)
+
+    regime = structure["regime"].astype(str).reset_index(drop=True)
+    recent_bull_bos = _rolling_recent_bool(structure["bos_up"].astype(bool), confirm_lookback)
+    recent_bear_bos = _rolling_recent_bool(structure["bos_down"].astype(bool), confirm_lookback)
+    recent_bear_choch = _rolling_recent_bool(structure["choch_down"].astype(bool), confirm_lookback)
+    recent_bull_choch = _rolling_recent_bool(structure["choch_up"].astype(bool), confirm_lookback)
+
+    long_signal = bull_reclaim & regime.eq("bull") & recent_bull_bos & ~recent_bear_choch
+    short_signal = bear_reclaim & regime.eq("bear") & recent_bear_bos & ~recent_bull_choch
+    signal = long_signal | short_signal
+    return signal & ~signal.shift(1, fill_value=False)
+
+
 def structure_confirmed_context_signal(
     combo_s: pd.Series,
     structure: pd.DataFrame,
@@ -528,9 +574,10 @@ def _rolling_recent_bool(values: pd.Series, lookback: int) -> pd.Series:
 def asof_structure_row(structure: pd.DataFrame, entry_ts: pd.Timestamp) -> pd.Series | None:
     if structure.empty or "ts" not in structure.columns:
         return None
-    ts = pd.to_datetime(structure["ts"], utc=True)
-    entry_ns = pd.Timestamp(entry_ts).tz_convert("UTC").value if pd.Timestamp(entry_ts).tzinfo else pd.Timestamp(entry_ts).tz_localize("UTC").value
-    idx = ts.astype("int64").to_numpy().searchsorted(entry_ns, side="right") - 1
+    ts_ns = pd.to_datetime(structure["ts"], utc=True).to_numpy(dtype="datetime64[ns]").astype("int64")
+    entry = pd.Timestamp(entry_ts)
+    entry_ns = entry.tz_convert("UTC").value if entry.tzinfo else entry.tz_localize("UTC").value
+    idx = ts_ns.searchsorted(entry_ns, side="right") - 1
     if idx < 0:
         return None
     return structure.iloc[int(idx)]
@@ -799,6 +846,57 @@ def build_full_review_packet(
     return packet
 
 
+def build_candidate_feature_table(trades: pd.DataFrame, *, output_path: Path) -> pd.DataFrame:
+    """Export setup candidates as supervised rows for later candle/price-action ranking."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if trades.empty:
+        table = pd.DataFrame()
+        table.to_csv(output_path, index=False)
+        return table
+
+    data = trades.copy()
+    data["entry_ts"] = pd.to_datetime(data["entry_ts"], utc=True)
+    stress = data["stress_net_r"].astype(float)
+    table = pd.DataFrame(
+        {
+            "entry_ts": data["entry_ts"],
+            "symbol": data["symbol"].astype(str),
+            "setup": data["setup"].astype(str),
+            "direction": data["direction"].astype(str),
+            "session_utc": data["session_utc"].astype(str),
+            "hour_utc": data["entry_ts"].dt.hour.astype(int),
+            "day_of_week": data["entry_ts"].dt.dayofweek.astype(int),
+            "stop_pct": data["stop_pct"].astype(float),
+            "target_pct": data["target_pct"].astype(float),
+            "planned_rr": data["planned_rr"].astype(float),
+            "base_cost_r": data["base_cost_r"].astype(float),
+            "stress_cost_r": data["stress_cost_r"].astype(float),
+            "mfe_r": data["mfe_r"].astype(float),
+            "mae_r": data["mae_r"].astype(float),
+            "bars_to_exit": data["bars_to_exit"].astype(int),
+            "trend_strength": data.get("trend_strength", "").astype(str),
+            "consolidation_state": data.get("consolidation_state", "").astype(str),
+            "shock_alignment": data.get("shock_alignment", "").astype(str),
+            "compression_state": data.get("compression_state", "").astype(str),
+            "dmi_alignment": data.get("dmi_alignment", "").astype(str),
+            "adx_14": data.get("adx_14", np.nan).astype(float),
+            "pre_range_atr_16": data.get("pre_range_atr_16", np.nan).astype(float),
+            "plus_di_14": data.get("plus_di_14", np.nan).astype(float),
+            "minus_di_14": data.get("minus_di_14", np.nan).astype(float),
+            "label_target": data["exit_kind"].astype(str).eq("target"),
+            "label_stop": data["exit_kind"].astype(str).eq("stop"),
+            "label_expiry": data["exit_kind"].astype(str).eq("expiry"),
+            "label_positive_stress_r": stress > 0,
+            "label_mfe_ge_1r": data["mfe_r"].astype(float) >= 1.0,
+            "label_mfe_ge_2r": data["mfe_r"].astype(float) >= 2.0,
+            "outcome_stress_net_r": stress,
+        }
+    )
+    table = table.sort_values(["symbol", "entry_ts"]).reset_index(drop=True)
+    table.to_csv(output_path, index=False)
+    return table
+
+
 def _review_notes_hint(row: pd.Series) -> str:
     return (
         f"Full accepted trade. setup={row.get('setup')}; "
@@ -979,7 +1077,18 @@ def dataframe_to_markdown(df: pd.DataFrame) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a narrow crypto setup lab.")
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
-    parser.add_argument("--setup", default="pullback_reclaim", choices=["pullback_reclaim", "context_change", "daily_first_context", "micro_reclaim_context", "structure_confirmed_context"])
+    parser.add_argument(
+        "--setup",
+        default="pullback_reclaim",
+        choices=[
+            "pullback_reclaim",
+            "context_change",
+            "daily_first_context",
+            "micro_reclaim_context",
+            "continuation_reclaim",
+            "structure_confirmed_context",
+        ],
+    )
     parser.add_argument("--days", type=int, default=400)
     parser.add_argument("--entry-tf", default="15", help="Entry/confirmation timeframe.")
     parser.add_argument("--stop-tf", default="", help="Optional structure timeframe for SL/TP. Defaults to entry tf.")
@@ -1006,6 +1115,7 @@ def main() -> int:
     parser.add_argument("--daily-loss-limit-pct", type=float, default=0.005)
     parser.add_argument("--cooldown-after-loss-bars", type=int, default=4)
     parser.add_argument("--review-packet", action="store_true", help="When portfolio is enabled, export every accepted trade for the review UI.")
+    parser.add_argument("--feature-table", action="store_true", help="Export filtered setup candidates with labels for later ranking/ML research.")
     parser.add_argument("--frequency-audit", action="store_true", help="Write a day-level audit explaining untraded days and blocked signals.")
     parser.add_argument("--output-dir", default="backtesting/results/crypto_simple_setup_lab")
     args = parser.parse_args()
@@ -1044,6 +1154,10 @@ def main() -> int:
     summary.to_csv(out_dir / f"{suffix}_summary.csv", index=False)
     windows.to_csv(out_dir / f"{suffix}_windows.csv", index=False)
     write_report(summary, trades, out_dir / f"{suffix}_report.md", windows)
+    if args.feature_table:
+        feature_path = out_dir / f"{suffix}_features.csv"
+        features = build_candidate_feature_table(trades, output_path=feature_path)
+        print(f"Saved feature table: {feature_path} rows={len(features)}")
     accepted = pd.DataFrame()
     if args.portfolio:
         accepted, portfolio_summary = run_portfolio_validation(

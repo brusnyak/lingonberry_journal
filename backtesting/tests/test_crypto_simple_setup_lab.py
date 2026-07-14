@@ -8,7 +8,9 @@ from backtesting.crypto.simple_setup_lab import (
     SimpleSetupConfig,
     apply_trade_filters,
     asof_structure_row,
+    build_candidate_feature_table,
     build_full_review_packet,
+    continuation_reclaim_signal,
     delayed_context_signal,
     daily_first_context_signal,
     direction_context,
@@ -89,11 +91,59 @@ def test_micro_reclaim_context_requires_reclaim_and_recent_structure():
     assert signal.any()
 
 
+def test_continuation_reclaim_waits_for_mature_context_and_same_direction_bos():
+    bars = pd.DataFrame(
+        {
+            "close": [100, 101, 102, 100, 99, 103, 104],
+            "high": [101, 102, 103, 101, 100, 104, 105],
+            "low": [99, 100, 101, 99, 98, 102, 103],
+        }
+    )
+    combo = pd.Series(["neutral", "bull", "bull", "bull", "bull", "bull", "bull"])
+    structure = pd.DataFrame(
+        {
+            "regime": ["neutral", "bull", "bull", "bull", "bull", "bull", "bull"],
+            "bos_up": [False, False, True, False, False, False, False],
+            "bos_down": [False] * len(bars),
+            "choch_up": [False] * len(bars),
+            "choch_down": [False] * len(bars),
+        }
+    )
+
+    signal = continuation_reclaim_signal(bars, combo, structure, confirm_lookback=4, pullback_lookback=3)
+
+    assert signal.tolist() == [False, False, False, False, False, True, False]
+
+
+def test_continuation_reclaim_blocks_recent_opposite_choch():
+    bars = pd.DataFrame(
+        {
+            "close": [100, 101, 102, 100, 99, 103],
+            "high": [101, 102, 103, 101, 100, 104],
+            "low": [99, 100, 101, 99, 98, 102],
+        }
+    )
+    combo = pd.Series(["neutral", "bull", "bull", "bull", "bull", "bull"])
+    structure = pd.DataFrame(
+        {
+            "regime": ["neutral", "bull", "bull", "bull", "bull", "bull"],
+            "bos_up": [False, False, True, False, False, False],
+            "bos_down": [False] * len(bars),
+            "choch_up": [False] * len(bars),
+            "choch_down": [False, False, False, False, True, False],
+        }
+    )
+
+    signal = continuation_reclaim_signal(bars, combo, structure, confirm_lookback=4, pullback_lookback=3)
+
+    assert not signal.any()
+
+
 def test_asof_structure_row_returns_latest_known_row():
     structure = pd.DataFrame(
         {
-            "ts": pd.to_datetime(["2026-01-01T00:00Z", "2026-01-01T00:15Z"]),
-            "long_structural_sl": [90.0, 95.0],
+            "ts": pd.to_datetime(["2026-01-01T00:00Z", "2026-01-01T00:15Z", "2026-01-01T00:30Z"]),
+            "long_structural_sl": [90.0, 95.0, 80.0],
         }
     )
 
@@ -341,6 +391,44 @@ def test_build_full_review_packet_exports_every_accepted_trade(tmp_path):
     assert (tmp_path / "full_review_BTCUSDT.csv").exists()
     assert {"ts", "exit_ts", "outcome_2r", "return_pct", "review_bucket", "notes_hint"} <= set(packet.columns)
     assert packet["review_bucket"].eq("accepted_trade").all()
+
+
+def test_build_candidate_feature_table_exports_labels(tmp_path):
+    trades = pd.DataFrame(
+        {
+            "entry_ts": pd.to_datetime(["2026-01-01T08:00Z", "2026-01-02T13:00Z"]),
+            "symbol": ["ETHUSDT", "SOLUSDT"],
+            "setup": ["context_change", "context_change"],
+            "direction": ["long", "short"],
+            "session_utc": ["london", "ny"],
+            "stop_pct": [0.8, 1.2],
+            "target_pct": [1.6, 2.4],
+            "planned_rr": [2.0, 2.0],
+            "base_cost_r": [0.05, 0.08],
+            "stress_cost_r": [0.18, 0.24],
+            "mfe_r": [2.1, 0.4],
+            "mae_r": [-0.3, -1.0],
+            "bars_to_exit": [10, 12],
+            "trend_strength": ["trend", "transition"],
+            "consolidation_state": ["directional", "range"],
+            "shock_alignment": ["no_shock", "no_shock"],
+            "compression_state": ["normal", "compressed"],
+            "dmi_alignment": ["aligned", "opposed"],
+            "adx_14": [22.0, 18.0],
+            "pre_range_atr_16": [1.1, 0.9],
+            "plus_di_14": [30.0, 20.0],
+            "minus_di_14": [18.0, 25.0],
+            "exit_kind": ["target", "stop"],
+            "stress_net_r": [1.8, -1.2],
+        }
+    )
+
+    table = build_candidate_feature_table(trades, output_path=tmp_path / "features.csv")
+
+    assert table["label_target"].tolist() == [True, False]
+    assert table["label_positive_stress_r"].tolist() == [True, False]
+    assert table["label_mfe_ge_2r"].tolist() == [True, False]
+    assert (tmp_path / "features.csv").exists()
 
 
 def test_primary_daily_blocker_explains_untraded_days():

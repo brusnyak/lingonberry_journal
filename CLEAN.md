@@ -4306,3 +4306,138 @@ Next:
    build a feature table from accepted/rejected candidates and label whether the
    setup quality was good, not train a model directly on raw candles and hope it
    finds structure.
+
+## Phase 38 -- Fixed as-of structure lookup; continuation setup rejected
+
+Follow-up after testing more setup chemistry:
+
+- Found a real foundation bug in `asof_structure_row()`.
+  - Pandas was returning timestamp integers in microseconds/milliseconds from
+    the structure `ts` column while `Timestamp.value` is nanoseconds.
+  - `searchsorted()` therefore jumped to the final structure row for old entries.
+  - That produced fake stale stops such as ETH long entries using an end-window
+    structural low around `1808`.
+- Fixed the helper by explicitly converting structure timestamps to
+  `datetime64[ns]` before integer comparison.
+- Strengthened the test so as-of lookup must return a middle row, not just the
+  final row.
+
+Validation:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_simple_setup_lab.py -q
+# 23 passed
+```
+
+Corrected no-BTC baseline:
+
+| Variant | Candidates | Accepted | PF | Return | Max DD | Return/DD | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 15m context-change fixed | 479 | 360 | 1.605 | +23.6% | 2.37% | 9.96 | keep |
+
+Corrected 30/1 rerun:
+
+| Variant | Candidates | Accepted | PF | Return | Max DD | Return/DD | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 30/1 micro reclaim fixed | 640 | 42 | 1.535 | +2.38% | 1.06% | 2.24 | reject vs baseline |
+
+New setup tested:
+
+- Added `continuation_reclaim`:
+  - strict active context must already exist;
+  - recent same-direction BOS required;
+  - structure regime must agree;
+  - recent opposite CHoCH blocks the signal;
+  - EMA21 reclaim after pullback required.
+
+Result:
+
+| Variant | Candidates | Accepted | PF | Return | Max DD | Return/DD | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 15m continuation reclaim | 375 | 270 | 1.033 | +1.13% | 6.40% | 0.18 | reject |
+
+Read:
+
+- The best current setup remains `context_change`.
+- 30/1 is no longer invalid because of fake stale stops, but it still does not
+  beat the 15m baseline.
+- Continuation reclaim increases frequency but adds weak trades and drawdown.
+- Do not force frequency. The next setup must target a different market state,
+  not another continuation entry inside the same trend context.
+
+Added ML/candle-pattern preparation:
+
+- `--feature-table` now exports filtered setup candidates with supervised labels:
+  target hit, stop hit, expiry, positive stress R, MFE >= 1R, MFE >= 2R.
+- Exported corrected baseline feature table:
+  `context_change_rr2_basecost0p12r_stresscost0p4r_sessions-asia-london-ny_shock-no_shock_no-btc-fixed-features_features.csv`
+  with `479` rows.
+
+Next:
+
+1. Keep `context_change` as the baseline.
+2. Do not promote `continuation_reclaim`.
+3. Use the feature table for simple ranking/filter tests before any ML model.
+4. If adding another setup, target range/consolidation breakout or sweep/reclaim,
+   not more trend-continuation frequency.
+
+## Phase 39 -- Multi-window validation of current best setup
+
+User asked to clean up and test the best current setup across `30/60/90/180`
+day windows and different assets.
+
+Cleanup:
+
+- Removed throwaway per-run markdown reports from rejected continuation and 30/1
+  experiments.
+- Kept one concise audit report:
+  `backtesting/results/crypto_simple_setup_lab/context_change_multiwindow_audit.md`
+
+Setup tested:
+
+- `context_change`
+- strict 240m/30m/15m direction context
+- 15m entry
+- structural stop, fixed `2R` target
+- sessions: `asia,london,ny`
+- shock filter: `no_shock`
+- cost gates: base <= `0.12R`, stress <= `0.40R`
+- portfolio risk: `0.2%` risk/trade, max `3` open, max `1` open per symbol,
+  daily loss limit `0.5%`
+
+Baskets:
+
+- `multiasset`: `BTC, ETH, SOL, XRP, DOGE, BNB, AVAX`
+- `liquid-no-avax`: `BTC, ETH, SOL, XRP, DOGE, BNB`
+
+Results:
+
+| Basket | Days | Candidates | Accepted | PF | Return | Max DD | Return/DD | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| multiasset | 30 | 33 | 25 | 0.662 | -1.41% | 2.75% | -0.51 | reject |
+| multiasset | 60 | 122 | 78 | 1.269 | +2.73% | 3.95% | 0.69 | weak |
+| multiasset | 90 | 186 | 131 | 1.272 | +4.51% | 3.95% | 1.14 | weak |
+| multiasset | 180 | 357 | 260 | 1.247 | +8.13% | 5.95% | 1.37 | weak |
+| liquid-no-avax | 30 | 29 | 23 | 0.745 | -0.94% | 2.29% | -0.41 | reject |
+| liquid-no-avax | 60 | 103 | 70 | 1.566 | +4.62% | 3.36% | 1.37 | usable but not enough |
+| liquid-no-avax | 90 | 151 | 112 | 1.561 | +7.14% | 3.36% | 2.13 | best current slice |
+| liquid-no-avax | 180 | 303 | 228 | 1.437 | +11.77% | 4.11% | 2.86 | positive but less clean |
+
+Read:
+
+- `30d` is bad in both baskets. Recent regime is hostile for the setup.
+- `AVAX` is toxic for this setup and should be excluded until it gets its own
+  asset-specific filter or separate setup logic.
+- `liquid-no-avax` is the better current basket.
+- `90d liquid-no-avax` is the cleanest validation slice: PF `1.561`, return/DD
+  `2.13`, all rolling windows positive.
+- `180d liquid-no-avax` has higher total return and return/DD, but weaker rolling
+  stability, so it is not cleaner than 90d.
+
+Next:
+
+1. Keep `context_change` as the baseline.
+2. Exclude `AVAX` for now.
+3. Do not deploy yet because the last 30d is negative.
+4. Build candidate ranking/filter diagnostics from the feature table before
+   adding more setups.
