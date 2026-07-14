@@ -170,6 +170,24 @@ def test_direction_context_htf_only_ignores_entry_ema_disagreement(monkeypatch):
     assert direction_context(pd.DataFrame(), pd.DataFrame(), entry, mode="htf_only").tolist() == ["bull"]
 
 
+def test_direction_context_local_entry_can_trade_when_global_is_neutral(monkeypatch):
+    calls = []
+    global_dir = pd.DataFrame({"ts": pd.to_datetime(["2026-01-01T00:00Z"]), "direction": ["neutral"]})
+    local_dir = pd.DataFrame({"ts": pd.to_datetime(["2026-01-01T00:00Z"]), "direction": ["bull"]})
+    entry = pd.DataFrame({"ts": pd.to_datetime(["2026-01-01T00:15Z"]), "close": [100.0]})
+
+    def fake_structure_direction(bars, **kwargs):
+        calls.append(bars)
+        return global_dir if len(calls) == 1 else local_dir
+
+    monkeypatch.setattr("backtesting.crypto.simple_setup_lab.structure_ema_direction", fake_structure_direction)
+    monkeypatch.setattr("backtesting.crypto.simple_setup_lab.vec_ema_state", lambda bars: pd.Series(["bullish"]))
+
+    assert direction_context(pd.DataFrame(), pd.DataFrame(), entry, mode="strict").tolist() == ["neutral"]
+    calls.clear()
+    assert direction_context(pd.DataFrame(), pd.DataFrame(), entry, mode="local_entry").tolist() == ["bull"]
+
+
 def test_structure_confirmed_context_waits_for_same_direction_bos_after_context_change():
     combo = pd.Series(["neutral", "bull", "bull", "bull", "bull", "bear", "bear"])
     structure = pd.DataFrame(

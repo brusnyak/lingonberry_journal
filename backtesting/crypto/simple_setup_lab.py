@@ -557,7 +557,7 @@ def direction_context(
     structure_left: int = 2,
     structure_right: int = 2,
 ) -> np.ndarray:
-    if mode not in {"strict", "htf_only"}:
+    if mode not in {"strict", "htf_only", "local_entry", "local_only"}:
         raise ValueError(f"unknown context mode: {mode}")
     dir_global = structure_ema_direction(global_bars, left=structure_left, right=structure_right)
     dir_local = structure_ema_direction(local_bars, left=structure_left, right=structure_right)
@@ -566,6 +566,10 @@ def direction_context(
     if mode == "htf_only":
         return np.where((g == l) & (g != "neutral"), g, "neutral")
     entry_state = vec_ema_state(entry_bars).map({"bullish": "bull", "bearish": "bear"}).fillna("neutral").to_numpy()
+    if mode == "local_entry":
+        return np.where((l == entry_state) & (l != "neutral"), l, "neutral")
+    if mode == "local_only":
+        return np.where(l != "neutral", l, "neutral")
     return np.where((g == l) & (l == entry_state) & (g != "neutral"), g, "neutral")
 
 
@@ -1762,7 +1766,12 @@ def main() -> int:
     parser.add_argument("--stop-tf", default="", help="Optional structure timeframe for SL/TP. Defaults to entry tf.")
     parser.add_argument("--min-rr", type=float, default=1.5)
     parser.add_argument("--horizon-bars", type=int, default=96)
-    parser.add_argument("--context-mode", default="strict", choices=["strict", "htf_only"], help="strict=240/30/15 agree; htf_only=240/30 agree.")
+    parser.add_argument(
+        "--context-mode",
+        default="strict",
+        choices=["strict", "htf_only", "local_entry", "local_only"],
+        help="strict=240/30/15 agree; htf_only=240/30 agree; local_entry=30/15 agree; local_only=30m only.",
+    )
     parser.add_argument("--max-base-cost-r", type=float, default=None)
     parser.add_argument("--max-stress-cost-r", type=float, default=None)
     parser.add_argument("--max-stop-pct", type=float, default=None)

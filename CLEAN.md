@@ -5018,3 +5018,73 @@ London/NY research hypothesis:
   4. Entry after retest/reclaim, stop behind sweep extreme, target midpoint,
      Asia high/low, London midpoint, or previous day level.
 - This is a reversal/liquidity-sweep setup, not a quiet continuation setup.
+
+## Phase 51 -- Blocked-day atlas and global-context bottleneck (2026-07-14)
+
+Built `session_day_atlas.py` to classify actual symbol-days by path:
+- `directional_up`
+- `directional_down`
+- `sweep_revert`
+- `ny_sweep`
+- `london_sweep`
+- `range`
+- `transition`
+
+Synthetic tests validate:
+- planted directional day -> directional label;
+- flat oscillating day -> range label;
+- sweep and close back near open -> sweep_revert.
+
+### AQC top4 frequency audit
+
+Top4 AQC over 180d:
+
+| Item | Count |
+|------|------:|
+| symbol-days | 724 |
+| no_active_context | 354 |
+| blocked_session | 221 |
+| traded days | 68 |
+
+No-active-context days by actual path:
+
+| Path | Days |
+|------|-----:|
+| directional_down | 98 |
+| sweep_revert | 94 |
+| ny_sweep | 84 |
+| directional_up | 72 |
+| range | 5 |
+| transition | 1 |
+
+This proves the engine is skipping real movement, not only dead chop.
+
+### Why context is inactive
+
+Among the `354` no-active-context days:
+
+| Reason | Count |
+|--------|------:|
+| global 240m context neutral | 260 |
+| 240m/30m disagreement | 85 |
+| 15m EMA strict gate | 8 |
+| local neutral | 1 |
+
+Read: the bottleneck is the 240m global structure/EMA layer, not stops, portfolio
+throttle, or 15m EMA strictness.
+
+### Relaxed-context test
+
+Tested whether ignored days become profitable by allowing local context:
+
+| Variant | Accepted | PF | Return | Max DD | Return/DD | Read |
+|---------|----------|----|--------|--------|-----------|------|
+| AQC strict | 72 | 2.37 | +11.56% | 1.80% | 6.41 | keep |
+| htf_only | 46 | 2.56 | +7.97% | 1.16% | 6.86 | quality sleeve, lower frequency |
+| local_entry | 174 | 1.16 | +4.63% | 4.94% | 0.94 | reject |
+| local_only | 125 | 1.20 | +3.95% | 2.90% | 1.36 | reject |
+
+Read: relaxing global context proves the skipped days move, but not in a way
+AQC can safely exploit. Do not weaken AQC for frequency. Build separate setup
+families for `sweep_revert`, `ny_sweep`, and directional days with neutral 240m
+context.
