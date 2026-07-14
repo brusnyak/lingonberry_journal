@@ -48,6 +48,9 @@ class SimpleSetupConfig:
     trend_strengths: tuple[str, ...] | None = None
     consolidation_states: tuple[str, ...] | None = None
     shock_alignments: tuple[str, ...] | None = None
+    dmi_alignments: tuple[str, ...] | None = None
+    entry_delay_bars: int = 0
+    run_label: str = ""
 
 
 def run_simple_setup_lab(
@@ -77,7 +80,7 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
     entry_bars = bars["entry"]
     combo = direction_context(bars["global"], bars["local"], entry_bars)
     structure = build_structure_index(entry_bars, StructureConfig(left=2, right=2))
-    signal_mask = setup_signal(entry_bars, combo, setup)
+    signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
 
     rows = []
@@ -138,6 +141,9 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
                 "compression_state": pa.get("compression_state", "unknown"),
                 "pre_range_atr_16": pa.get("pre_range_atr_16", np.nan),
                 "adx_14": pa.get("adx_14", np.nan),
+                "plus_di_14": pa.get("plus_di_14", np.nan),
+                "minus_di_14": pa.get("minus_di_14", np.nan),
+                "dmi_alignment": dmi_alignment(direction, pa.get("plus_di_14", np.nan), pa.get("minus_di_14", np.nan)),
             }
         )
     return pd.DataFrame(rows)
@@ -152,13 +158,24 @@ def direction_context(global_bars: pd.DataFrame, local_bars: pd.DataFrame, entry
     return np.where((g == l) & (l == entry_state) & (g != "neutral"), g, "neutral")
 
 
-def setup_signal(entry_bars: pd.DataFrame, combo: np.ndarray, setup: str) -> np.ndarray:
-    if setup not in {"pullback_reclaim", "context_change"}:
+def setup_signal(
+    entry_bars: pd.DataFrame,
+    combo: np.ndarray,
+    setup: str,
+    *,
+    structure: pd.DataFrame | None = None,
+    entry_delay_bars: int = 0,
+) -> np.ndarray:
+    if setup not in {"pullback_reclaim", "context_change", "structure_confirmed_context"}:
         raise ValueError(f"unknown setup: {setup}")
     combo_s = pd.Series(combo)
     active = combo_s.isin(["bull", "bear"])
     if setup == "context_change":
-        return (combo_s.ne(combo_s.shift(1)) & active).to_numpy()
+        return delayed_context_signal(combo_s, delay_bars=entry_delay_bars).to_numpy()
+    if setup == "structure_confirmed_context":
+        if structure is None or structure.empty:
+            return np.zeros(len(combo_s), dtype=bool)
+        return structure_confirmed_context_signal(combo_s, structure)
 
     close = pd.to_numeric(entry_bars["close"], errors="coerce")
     low = pd.to_numeric(entry_bars["low"], errors="coerce")
@@ -171,6 +188,65 @@ def setup_signal(entry_bars: pd.DataFrame, combo: np.ndarray, setup: str) -> np.
     bull_reclaim = (combo_s == "bull") & prior_bull_context & recently_touched_from_above & (close > ema21)
     bear_reclaim = (combo_s == "bear") & prior_bear_context & recently_touched_from_below & (close < ema21)
     return (bull_reclaim | bear_reclaim).to_numpy()
+
+
+def delayed_context_signal(combo_s: pd.Series, *, delay_bars: int = 0) -> pd.Series:
+    """Signal after a fresh MTF context change has held for `delay_bars` bars."""
+    if delay_bars < 0:
+        raise ValueError("delay_bars must be >= 0")
+    active = combo_s.isin(["bull", "bear"])
+    context_change = combo_s.ne(combo_s.shift(1)) & active
+    if delay_bars == 0:
+        return context_change
+    bars_since_context = _bars_since(context_change)
+    return active & bars_since_context.eq(delay_bars) & combo_s.eq(combo_s.shift(delay_bars))
+
+
+def structure_confirmed_context_signal(
+    combo_s: pd.Series,
+    structure: pd.DataFrame,
+    *,
+    context_lookback: int = 12,
+    confirm_lookback: int = 8,
+) -> np.ndarray:
+    """Enter only after active MTF direction gets same-direction 15m structure confirmation."""
+    active = combo_s.isin(["bull", "bear"])
+    context_change = combo_s.ne(combo_s.shift(1)) & active
+    bars_since_context = _bars_since(context_change)
+
+    regime = structure["regime"].astype(str).reset_index(drop=True)
+    bull_bos_recent = _rolling_recent_bool(structure["bos_up"].astype(bool), confirm_lookback)
+    bear_bos_recent = _rolling_recent_bool(structure["bos_down"].astype(bool), confirm_lookback)
+    bull_choch_recent = _rolling_recent_bool(structure["choch_up"].astype(bool), confirm_lookback)
+    bear_choch_recent = _rolling_recent_bool(structure["choch_down"].astype(bool), confirm_lookback)
+
+    valid_window = bars_since_context.between(1, context_lookback)
+    long_confirm = (
+        (combo_s == "bull")
+        & valid_window
+        & regime.eq("bull")
+        & bull_bos_recent
+        & ~bear_choch_recent
+    )
+    short_confirm = (
+        (combo_s == "bear")
+        & valid_window
+        & regime.eq("bear")
+        & bear_bos_recent
+        & ~bull_choch_recent
+    )
+    signal = long_confirm | short_confirm
+    return (signal & ~signal.shift(1, fill_value=False)).to_numpy()
+
+
+def _bars_since(events: pd.Series) -> pd.Series:
+    count = pd.Series(np.arange(len(events)), index=events.index)
+    last = count.where(events).ffill()
+    return count - last
+
+
+def _rolling_recent_bool(values: pd.Series, lookback: int) -> pd.Series:
+    return values.astype(int).rolling(lookback, min_periods=1).max().astype(bool)
 
 
 def summarize_trades(trades: pd.DataFrame) -> pd.DataFrame:
@@ -199,6 +275,8 @@ def apply_trade_filters(trades: pd.DataFrame, cfg: SimpleSetupConfig) -> pd.Data
         out = out[out["consolidation_state"].isin(cfg.consolidation_states)]
     if cfg.shock_alignments:
         out = out[out["shock_alignment"].isin(cfg.shock_alignments)]
+    if cfg.dmi_alignments:
+        out = out[out["dmi_alignment"].isin(cfg.dmi_alignments)]
     return out.reset_index(drop=True)
 
 
@@ -228,6 +306,7 @@ def summary_row(group: pd.DataFrame, *, setup: str, symbol: str) -> dict:
         "top_trend_strength": mode_or_empty(group.get("trend_strength")),
         "top_consolidation_state": mode_or_empty(group.get("consolidation_state")),
         "top_shock_alignment": mode_or_empty(group.get("shock_alignment")),
+        "top_dmi_alignment": mode_or_empty(group.get("dmi_alignment")),
     }
 
 
@@ -236,6 +315,19 @@ def mode_or_empty(values: pd.Series | None) -> str:
         return ""
     mode = values.astype(str).mode(dropna=True)
     return "" if mode.empty else str(mode.iat[0])
+
+
+def dmi_alignment(direction: str, plus_di: float, minus_di: float) -> str:
+    if not np.isfinite(plus_di) or not np.isfinite(minus_di):
+        return "unknown"
+    if plus_di == minus_di:
+        return "flat"
+    bullish = plus_di > minus_di
+    if direction == "long":
+        return "aligned" if bullish else "opposed"
+    if direction == "short":
+        return "aligned" if not bullish else "opposed"
+    return "unknown"
 
 
 def profit_factor(r: np.ndarray) -> float:
@@ -404,6 +496,7 @@ def build_full_review_packet(
             "consolidation_state": data.get("consolidation_state", ""),
             "shock_alignment": data.get("shock_alignment", ""),
             "compression_state": data.get("compression_state", ""),
+            "dmi_alignment": data.get("dmi_alignment", ""),
             "base_net_r": data.get("base_net_r", np.nan),
             "stress_net_r": data.get("stress_net_r", np.nan),
             "notes_hint": data.apply(_review_notes_hint, axis=1),
@@ -467,7 +560,7 @@ def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path, wind
             median_stop_pct=("stop_pct", "median"),
         ).reset_index()
         lines.append(dataframe_to_markdown(session))
-        context = trades.groupby(["trend_strength", "consolidation_state", "shock_alignment"]).agg(
+        context = trades.groupby(["trend_strength", "consolidation_state", "shock_alignment", "dmi_alignment"]).agg(
             trades=("base_net_r", "size"),
             stress_avg_r=("stress_net_r", "mean"),
             stress_pf=("stress_net_r", profit_factor),
@@ -555,7 +648,7 @@ def dataframe_to_markdown(df: pd.DataFrame) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a narrow crypto setup lab.")
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
-    parser.add_argument("--setup", default="pullback_reclaim", choices=["pullback_reclaim", "context_change"])
+    parser.add_argument("--setup", default="pullback_reclaim", choices=["pullback_reclaim", "context_change", "structure_confirmed_context"])
     parser.add_argument("--days", type=int, default=400)
     parser.add_argument("--min-rr", type=float, default=1.5)
     parser.add_argument("--max-base-cost-r", type=float, default=None)
@@ -564,6 +657,9 @@ def main() -> int:
     parser.add_argument("--trend-strengths", default="", help="Comma-separated trend buckets: weak_or_range,transition,trend,strong_trend")
     parser.add_argument("--consolidation-states", default="", help="Comma-separated consolidation states.")
     parser.add_argument("--shock-alignments", default="", help="Comma-separated shock states: no_shock,aligned_shock,opposing_shock")
+    parser.add_argument("--dmi-alignments", default="", help="Comma-separated DMI direction states: aligned,opposed,flat,unknown")
+    parser.add_argument("--entry-delay-bars", type=int, default=0, help="For context_change: wait N entry bars after a fresh context change.")
+    parser.add_argument("--run-label", default="", help="Optional suffix label for output files, e.g. no-btc.")
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--step-days", type=int, default=7)
     parser.add_argument("--portfolio", action="store_true")
@@ -582,6 +678,7 @@ def main() -> int:
     trend_strengths = tuple(s.strip() for s in args.trend_strengths.split(",") if s.strip()) or None
     consolidation_states = tuple(s.strip() for s in args.consolidation_states.split(",") if s.strip()) or None
     shock_alignments = tuple(s.strip() for s in args.shock_alignments.split(",") if s.strip()) or None
+    dmi_alignments = tuple(s.strip() for s in args.dmi_alignments.split(",") if s.strip()) or None
     cfg = SimpleSetupConfig(
         days=args.days,
         min_rr=args.min_rr,
@@ -591,6 +688,9 @@ def main() -> int:
         trend_strengths=trend_strengths,
         consolidation_states=consolidation_states,
         shock_alignments=shock_alignments,
+        dmi_alignments=dmi_alignments,
+        entry_delay_bars=args.entry_delay_bars,
+        run_label=args.run_label.strip(),
     )
     trades, summary = run_simple_setup_lab(symbols, config=cfg, setup=args.setup)
     windows = rolling_window_summary(trades, window_days=args.window_days, step_days=args.step_days)
@@ -643,6 +743,12 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append("state-" + "-".join(cfg.consolidation_states))
     if cfg.shock_alignments:
         parts.append("shock-" + "-".join(cfg.shock_alignments))
+    if cfg.dmi_alignments:
+        parts.append("dmi-" + "-".join(cfg.dmi_alignments))
+    if cfg.entry_delay_bars:
+        parts.append(f"delay{cfg.entry_delay_bars}b")
+    if cfg.run_label:
+        parts.append(cfg.run_label)
     return "_".join(parts).replace(".", "p")
 
 

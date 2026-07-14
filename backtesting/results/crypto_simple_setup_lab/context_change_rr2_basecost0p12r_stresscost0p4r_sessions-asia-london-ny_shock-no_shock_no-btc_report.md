@@ -6,38 +6,37 @@ Scope: one setup family at a time, existing 240m/30m structure+EMA direction con
 
 | setup          | symbol   | trades | win_rate | gross_avg_r | base_avg_r | base_pf | stress_avg_r | stress_pf | median_stop_pct | median_planned_rr | median_base_cost_r | median_stress_cost_r | target_rate | stop_rate | expiry_rate | median_mfe_r | median_mae_r | top_trend_strength | top_consolidation_state | top_shock_alignment | top_dmi_alignment |
 | -------------- | -------- | ------ | -------- | ----------- | ---------- | ------- | ------------ | --------- | --------------- | ----------------- | ------------------ | -------------------- | ----------- | --------- | ----------- | ------------ | ------------ | ------------------ | ----------------------- | ------------------- | ----------------- |
-| context_change | BTCUSDT  | 77     | 0.4545   | 0.4545      | 0.3766     | 1.7597  | 0.1948       | 1.3290    | 0.7318          | 2.0000            | 0.0820             | 0.2733               | 0.4545      | 0.4545    | 0.0909      | 1.8001       | -0.7566      | trend              | directional             | no_shock            | aligned           |
 | context_change | DOGEUSDT | 121    | 0.4298   | 0.4088      | 0.3467     | 1.6889  | 0.2018       | 1.3490    | 1.0833          | 2.0000            | 0.0554             | 0.1846               | 0.4298      | 0.4711    | 0.0992      | 1.6786       | -0.8462      | trend              | directional             | no_shock            | aligned           |
 | context_change | ETHUSDT  | 107    | 0.4579   | 0.4579      | 0.3897     | 1.7869  | 0.2305       | 1.3959    | 0.8500          | 2.0000            | 0.0706             | 0.2353               | 0.4579      | 0.4579    | 0.0841      | 1.8399       | -0.8983      | trend              | directional             | no_shock            | aligned           |
 | context_change | SOLUSDT  | 129    | 0.5116   | 0.6321      | 0.5698     | 2.2737  | 0.4245       | 1.8250    | 0.9900          | 2.0000            | 0.0606             | 0.2020               | 0.5116      | 0.4186    | 0.0698      | 2.0145       | -0.8560      | trend              | directional             | no_shock            | aligned           |
 | context_change | XRPUSDT  | 122    | 0.4836   | 0.5208      | 0.4503     | 1.8941  | 0.2859       | 1.4857    | 0.8547          | 2.0000            | 0.0702             | 0.2340               | 0.4836      | 0.4672    | 0.0492      | 1.9628       | -0.8884      | trend              | directional             | no_shock            | aligned           |
-| ALL            | ALL      | 556    | 0.4694   | 0.5010      | 0.4336     | 1.8890  | 0.2765       | 1.4864    | 0.9063          | 2.0000            | 0.0662             | 0.2207               | 0.4694      | 0.4532    | 0.0773      | 1.8448       | -0.8603      | trend              | directional             | no_shock            | aligned           |
+| ALL            | ALL      | 479    | 0.4718   | 0.5084      | 0.4428     | 1.9101  | 0.2896       | 1.5129    | 0.9377          | 2.0000            | 0.0640             | 0.2133               | 0.4718      | 0.4530    | 0.0752      | 1.8491       | -0.8750      | trend              | directional             | no_shock            | aligned           |
 
 ## Session Split
 
 | setup          | session_utc | trades | base_avg_r | base_pf | median_stop_pct |
 | -------------- | ----------- | ------ | ---------- | ------- | --------------- |
-| context_change | asia        | 243    | 0.4771     | 2.0087  | 0.9624          |
-| context_change | london      | 119    | 0.5147     | 2.0742  | 0.8448          |
-| context_change | ny          | 194    | 0.3294     | 1.6438  | 0.9344          |
+| context_change | asia        | 209    | 0.4768     | 1.9904  | 1.0183          |
+| context_change | london      | 108    | 0.5382     | 2.1506  | 0.8438          |
+| context_change | ny          | 162    | 0.3353     | 1.6632  | 0.9545          |
 
 ## Context Split
 
 | trend_strength | consolidation_state       | shock_alignment | dmi_alignment | trades | stress_avg_r | stress_pf |
 | -------------- | ------------------------- | --------------- | ------------- | ------ | ------------ | --------- |
-| transition     | range_to_trend_transition | no_shock        | opposed       | 5      | 1.1535       | 5.4738    |
 | weak_or_range  | volatile_range            | no_shock        | opposed       | 2      | 0.9028       | 2.3949    |
+| transition     | range_to_trend_transition | no_shock        | opposed       | 3      | 0.7507       | 2.7468    |
 | weak_or_range  | volatile_range            | no_shock        | aligned       | 8      | 0.7056       | 2.5730    |
-| weak_or_range  | range                     | no_shock        | aligned       | 45     | 0.6535       | 2.6654    |
-| transition     | transition                | no_shock        | opposed       | 29     | 0.4767       | 1.9968    |
-| strong_trend   | directional               | no_shock        | aligned       | 122    | 0.4233       | 1.8436    |
-| weak_or_range  | range                     | no_shock        | opposed       | 36     | 0.3487       | 1.6016    |
-| trend          | transition                | no_shock        | aligned       | 2      | 0.2675       | 1.4467    |
-| trend          | directional               | no_shock        | aligned       | 131    | 0.2094       | 1.3664    |
-| transition     | transition                | no_shock        | aligned       | 58     | 0.1052       | 1.1663    |
-| strong_trend   | directional               | no_shock        | opposed       | 35     | 0.0964       | 1.1558    |
-| trend          | directional               | no_shock        | opposed       | 74     | 0.0495       | 1.0704    |
+| weak_or_range  | range                     | no_shock        | aligned       | 40     | 0.6682       | 2.7514    |
+| strong_trend   | directional               | no_shock        | aligned       | 108    | 0.4846       | 1.9817    |
+| weak_or_range  | range                     | no_shock        | opposed       | 31     | 0.4173       | 1.7592    |
+| transition     | transition                | no_shock        | opposed       | 25     | 0.4016       | 1.7985    |
+| trend          | directional               | no_shock        | aligned       | 110    | 0.1971       | 1.3418    |
+| transition     | transition                | no_shock        | aligned       | 50     | 0.1545       | 1.2580    |
+| strong_trend   | directional               | no_shock        | opposed       | 29     | 0.1349       | 1.2210    |
+| trend          | directional               | no_shock        | opposed       | 63     | 0.0457       | 1.0654    |
 | transition     | range_to_trend_transition | no_shock        | aligned       | 4      | -0.4668      | 0.4862    |
+| trend          | transition                | no_shock        | aligned       | 1      | -1.1979      | 0.0000    |
 | transition     | coiling_transition        | no_shock        | aligned       | 4      | -1.2275      | 0.0000    |
 | weak_or_range  | tight_range               | no_shock        | opposed       | 1      | -1.2561      | 0.0000    |
 
@@ -45,7 +44,7 @@ Scope: one setup family at a time, existing 240m/30m structure+EMA direction con
 
 | windows | median_trades | positive_base_windows | positive_stress_windows | median_base_pf | worst_base_return_r | median_stress_pf | worst_stress_return_r |
 | ------- | ------------- | --------------------- | ----------------------- | -------------- | ------------------- | ---------------- | --------------------- |
-| 52      | 41.0000       | 0.8462                | 0.7308                  | 1.9331         | -16.3164            | 1.5020           | -21.7212              |
+| 52      | 35.0000       | 0.8846                | 0.7308                  | 1.9615         | -10.7102            | 1.5293           | -14.7006              |
 
 ## Read
 

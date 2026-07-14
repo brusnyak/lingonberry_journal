@@ -4025,3 +4025,105 @@ Next best steps:
    `consolidation_state`, `shock_alignment`, session, MFE/MAE, and bars-to-exit.
 5. Only then test symbol removal, tighter context gates, or target-management
    variants.
+
+## Phase 35 -- Foundation review: structure-confirmation and timing delays falsified; BTC is the real drag
+
+User reviewed the full accepted-trade packet and found:
+
+- structure/trend read is still weak;
+- entry point is bad;
+- stop placement remains good and should stay untouched.
+
+Implemented foundation diagnostics in `simple_setup_lab.py`:
+
+- `structure_confirmed_context` setup:
+  - waits for active 240m/30m/15m context;
+  - requires same-direction 15m structure regime and recent BOS;
+  - blocks recent opposite CHoCH.
+- `--entry-delay-bars` for `context_change`:
+  - tests whether waiting `1-3` bars after context flip improves entry timing.
+- `dmi_alignment` context:
+  - stores `plus_di_14`, `minus_di_14`, and whether DMI direction agrees with
+    trade direction;
+  - filterable with `--dmi-alignments`.
+- `--run-label`:
+  - prevents different symbol baskets from overwriting each other's reports.
+
+Validation:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_simple_setup_lab.py -q
+# 13 passed
+```
+
+Same baseline config unless noted:
+
+- setup: `context_change`;
+- symbols: `BTC, ETH, SOL, XRP, DOGE`;
+- days: `400`;
+- target: `2R`;
+- sessions: `asia,london,ny`;
+- filters: `no_shock`, base cost `<=0.12R`, stress cost `<=0.40R`;
+- portfolio: stress net R, risk/trade `0.20%`, max open `3`, max per symbol `1`,
+  daily realized loss cap `0.50%`.
+
+Result comparison:
+
+| Variant | Candidates | Accepted | Stress PF | Positive stress windows | Return | Max DD | Return/DD | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Current 5-symbol baseline | 556 | 413 | 1.486 | 73.1% | +23.1% | 2.77% | 8.34 | keep as baseline |
+| `structure_confirmed_context` | 351 | 285 | 0.935 | 41.5% | +1.8% | 6.17% | 0.30 | reject: BOS confirmation is late/exhaustion |
+| `pullback_reclaim` | 2363 | 482 | 0.966 | 34.0% | +2.5% | 7.84% | 0.32 | reject: too many weak pullbacks |
+| context delay `1` | 482 | 370 | 1.064 | 53.8% | +3.3% | 5.70% | 0.58 | reject |
+| context delay `2` | 403 | 329 | 1.260 | 67.3% | +7.4% | 5.40% | 1.36 | reject |
+| context delay `3` | 403 | 323 | 1.201 | 57.7% | +7.0% | 3.83% | 1.83 | reject |
+| DMI aligned, 5 symbols | 374 | 310 | 1.559 | 71.2% | +17.5% | 2.94% | 5.93 | useful diagnostic, not portfolio upgrade |
+| DMI opposed, 5 symbols | 182 | 149 | 1.354 | 66.7% | +7.6% | 2.48% | 3.07 | DMI is not a clean truth gate |
+| **No BTC, no DMI gate** | **479** | **360** | **1.513** | **73.1%** | **+23.6%** | **2.37%** | **9.96** | **new best portfolio candidate** |
+| No BTC, DMI aligned | 325 | 268 | 1.606 | 69.2% | +16.7% | 2.39% | 6.96 | cleaner but too sparse |
+
+Read:
+
+- The user's review is correct: adding naive structure confirmation does not fix
+  entry quality. It enters later and mostly selects exhausted moves.
+- Delaying context-change entries also does not fix the foundation. Waiting
+  loses edge faster than it removes bad entries.
+- ADX/DMI helps describe trend but is not a decisive gate. DMI-aligned trades
+  are cleaner, but DMI-opposed trades are still profitable; this is not a
+  strong enough foundation rule.
+- The best concrete improvement is **not more entry logic**. It is removing BTC
+  from this setup basket for now. BTC contributes weakly in the full accepted
+  packet and drags portfolio risk-adjusted return.
+
+Current best candidate:
+
+```bash
+PYTHONPATH=. python -m backtesting.crypto.simple_setup_lab \
+  --symbols ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT \
+  --setup context_change \
+  --days 400 \
+  --min-rr 2.0 \
+  --max-base-cost-r 0.12 \
+  --max-stress-cost-r 0.40 \
+  --sessions asia,london,ny \
+  --shock-alignments no_shock \
+  --run-label no-btc \
+  --portfolio \
+  --portfolio-net stress_net_r \
+  --risk-pct 0.002 \
+  --max-open 3 \
+  --max-open-per-symbol 1 \
+  --daily-loss-limit-pct 0.005 \
+  --cooldown-after-loss-bars 4
+```
+
+Next best steps:
+
+1. Generate a full review packet for the **no-BTC** candidate and review every
+   accepted trade on ETH/SOL/XRP/DOGE.
+2. Review question should be narrower now: are the remaining bad entries still
+   structure/trend errors, or are they normal failed continuations?
+3. If bad entries persist, next foundation experiment should not be BOS-after-flip.
+   Test a local 5m/1m CHoCH/reclaim confirmation inside the already-active
+   30m trend context (`30/1 approach`), using the same structural stops.
+4. Keep stops frozen.

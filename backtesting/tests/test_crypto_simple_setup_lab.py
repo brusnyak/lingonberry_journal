@@ -8,12 +8,15 @@ from backtesting.crypto.simple_setup_lab import (
     SimpleSetupConfig,
     apply_trade_filters,
     build_full_review_packet,
+    delayed_context_signal,
+    dmi_alignment,
     exit_kind,
     profit_factor,
     rolling_window_summary,
     run_portfolio_validation,
     session_bucket,
     setup_signal,
+    structure_confirmed_context_signal,
     summarize_trades,
     summarize_windows,
 )
@@ -26,6 +29,48 @@ def test_setup_signal_context_change_fires_only_on_fresh_direction():
     signal = setup_signal(bars, combo, "context_change")
 
     assert signal.tolist() == [False, True, False, True]
+
+
+def test_delayed_context_signal_waits_for_context_to_hold():
+    combo = pd.Series(["neutral", "bull", "bull", "bear", "bear", "bear"])
+
+    signal = delayed_context_signal(combo, delay_bars=2)
+
+    assert signal.tolist() == [False, False, False, False, False, True]
+
+
+def test_structure_confirmed_context_waits_for_same_direction_bos_after_context_change():
+    combo = pd.Series(["neutral", "bull", "bull", "bull", "bull", "bear", "bear"])
+    structure = pd.DataFrame(
+        {
+            "regime": ["neutral", "neutral", "bull", "bull", "bull", "bear", "bear"],
+            "bos_up": [False, False, True, False, False, False, False],
+            "bos_down": [False, False, False, False, False, True, False],
+            "choch_up": [False] * 7,
+            "choch_down": [False, False, False, True, False, False, False],
+        }
+    )
+
+    signal = structure_confirmed_context_signal(combo, structure, context_lookback=3, confirm_lookback=2)
+
+    assert signal.tolist() == [False, False, True, False, False, False, True]
+
+
+def test_structure_confirmed_context_blocks_after_opposing_choch():
+    combo = pd.Series(["neutral", "bull", "bull", "bull"])
+    structure = pd.DataFrame(
+        {
+            "regime": ["neutral", "neutral", "bull", "bull"],
+            "bos_up": [False, False, True, True],
+            "bos_down": [False] * 4,
+            "choch_up": [False] * 4,
+            "choch_down": [False, False, True, False],
+        }
+    )
+
+    signal = structure_confirmed_context_signal(combo, structure, context_lookback=3, confirm_lookback=2)
+
+    assert not signal.any()
 
 
 def test_setup_signal_pullback_reclaim_requires_existing_context_and_ema_reclaim():
@@ -54,6 +99,8 @@ def test_profit_factor_and_exit_kind():
     assert exit_kind(1.5) == "target"
     assert exit_kind(-1.0) == "stop"
     assert exit_kind(0.0) == "expiry"
+    assert dmi_alignment("long", 30.0, 20.0) == "aligned"
+    assert dmi_alignment("short", 30.0, 20.0) == "opposed"
 
 
 def test_summarize_trades_reports_cost_fragility_fields():
@@ -74,6 +121,7 @@ def test_summarize_trades_reports_cost_fragility_fields():
             "trend_strength": ["trend", "transition"],
             "consolidation_state": ["directional", "transition"],
             "shock_alignment": ["no_shock", "aligned_shock"],
+            "dmi_alignment": ["aligned", "opposed"],
         }
     )
 
@@ -94,6 +142,7 @@ def test_apply_trade_filters_cost_and_session_gate():
             "trend_strength": ["trend", "weak_or_range", "trend"],
             "consolidation_state": ["directional", "range", "directional"],
             "shock_alignment": ["no_shock", "no_shock", "opposing_shock"],
+            "dmi_alignment": ["aligned", "opposed", "aligned"],
         }
     )
     cfg = SimpleSetupConfig(
@@ -103,6 +152,7 @@ def test_apply_trade_filters_cost_and_session_gate():
         trend_strengths=("trend",),
         consolidation_states=("directional",),
         shock_alignments=("no_shock",),
+        dmi_alignments=("aligned",),
     )
 
     out = apply_trade_filters(trades, cfg)
@@ -187,6 +237,7 @@ def test_build_full_review_packet_exports_every_accepted_trade(tmp_path):
             "consolidation_state": ["directional", "range"],
             "shock_alignment": ["no_shock", "no_shock"],
             "compression_state": ["normal", "normal"],
+            "dmi_alignment": ["aligned", "opposed"],
             "base_net_r": [1.9, -1.1],
             "stress_net_r": [1.8, -1.2],
         }
