@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
+from backtesting.crypto.foundation_backtest import (
+    CostScenario,
+    _cost_model,
+    run_cost_fragility_audit,
+    trade_diagnostics,
+)
 from backtesting.crypto.strategies.mtf_cascade_foundation import MtfCascadeFoundation
 from backtesting.crypto.synthetic_ohlcv import make_staircase_series
 from backtesting.engine.base import BarData, EngineState
-from backtesting.engine.costs import CryptoCosts
+from backtesting.engine.costs import CryptoCosts, WorstCaseCryptoCosts
 from backtesting.engine.orders import Direction, Position
 from backtesting.engine.runner import run
 
@@ -63,7 +70,6 @@ def test_should_close_fires_exactly_at_horizon():
 
 
 def test_strategy_requires_all_three_timeframes():
-    import pytest
     strat = MtfCascadeFoundation()
     with pytest.raises(ValueError):
         strat.init({"240": pd.DataFrame(), "30": pd.DataFrame()})
@@ -109,3 +115,61 @@ def test_next_rejects_signal_when_stop_is_degenerate():
         return_value=(99.5, 101.0),  # ~0.5% away -- legitimate
     ):
         assert strat.next(bar, state) is not None
+
+
+def test_trade_diagnostics_reports_stop_geometry_and_exit_mix():
+    trades = pd.DataFrame(
+        {
+            "entry_price": [100.0, 100.0, 100.0, 100.0],
+            "sl": [99.0, 99.8, 99.95, 101.0],
+            "exit_reason": ["sl", "tp1", "signal", "eod"],
+        }
+    )
+
+    diag = trade_diagnostics(trades)
+
+    assert diag["median_stop_pct"] == pytest.approx(0.6)
+    assert round(diag["p10_stop_pct"], 3) == 0.095
+    assert diag["sub_10bps_stop_rate"] == 0.25
+    assert diag["sl_rate"] == 0.25
+    assert diag["tp_rate"] == 0.25
+    assert diag["signal_exit_rate"] == 0.25
+    assert diag["eod_exit_rate"] == 0.25
+
+
+def test_cost_model_uses_worst_case_only_for_adverse_cost_scenarios():
+    base = _cost_model(CostScenario("base_fee"), {"min_notional": 5.0}, leverage=25.0)
+    stress = _cost_model(CostScenario("stress", adverse_round_trip_pct=0.002), {}, leverage=50.0)
+
+    assert isinstance(base, CryptoCosts)
+    assert not isinstance(base, WorstCaseCryptoCosts)
+    assert base.min_notional == 5.0
+    assert isinstance(stress, WorstCaseCryptoCosts)
+    assert stress.round_trip_pct == 0.002
+
+
+def test_cost_fragility_audit_measures_drag_from_zero_fee(monkeypatch):
+    import backtesting.crypto.foundation_backtest as fb
+
+    scenarios = [
+        CostScenario("zero_fee", maker_fee=0.0, taker_fee=0.0),
+        CostScenario("base_fee"),
+    ]
+
+    def fake_backtest(symbol, *, cost_scenario, **kwargs):
+        avg_r = 0.25 if cost_scenario.name == "zero_fee" else 0.05
+        return {
+            "symbol": symbol,
+            "cost_scenario": cost_scenario.name,
+            "avg_r": avg_r,
+            "trades": 10,
+            "error": None,
+            "_trades_df": pd.DataFrame(),
+        }
+
+    monkeypatch.setattr(fb, "run_foundation_backtest", fake_backtest)
+
+    audit = run_cost_fragility_audit("BTCUSDT", scenarios=scenarios)
+
+    assert list(audit["cost_scenario"]) == ["zero_fee", "base_fee"]
+    assert list(audit["cost_drag_avg_r"]) == [0.0, 0.2]

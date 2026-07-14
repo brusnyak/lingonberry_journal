@@ -3548,3 +3548,80 @@ Building consolidation and re-running this exact baseline script is the correct 
 checkpoint: if consolidation doesn't measurably lift PF above 1.0 with real costs
 included, the foundation needs to change (wider stops to dilute the fee drag, a
 different entry timeframe, or a different signal) before any more layers get added.
+
+## Phase 29 -- Cost-fragility audit: the foundation has signal, but no execution margin
+
+User concern: "consider that the engine is broken and not working and
+overcomplicated if we can survive real costs... awful conditions." Added a
+reproducible cost audit mode to `backtesting/crypto/foundation_backtest.py`
+instead of creating another one-off test file:
+
+- `--cost-audit`: runs zero fee, base fee, taker/taker fee, 20bps stress,
+  30bps stress, and 200bps tail-risk stress per symbol.
+- `--next-bar-fill`: decides on close[i] and fills at open[i+1], so same-bar
+  execution optimism can be checked explicitly.
+- Per-trade diagnostics now report median/p10/p90 stop distance, sub-10bps
+  stop rate, and exit mix.
+
+Validation command:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_mtf_cascade_foundation.py backtesting/tests/test_mtf_cascade_direction.py -q
+# 27 passed
+
+PYTHONPATH=. python -m backtesting.crypto.foundation_backtest \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,BNBUSDT \
+  --days 400 --account CRYPTO_300 --cost-audit \
+  --output backtesting/results/crypto_mtf_cascade_direction/foundation_cost_fragility_audit.csv
+
+PYTHONPATH=. python -m backtesting.crypto.foundation_backtest \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,BNBUSDT \
+  --days 400 --account CRYPTO_300 --next-bar-fill \
+  --output backtesting/results/crypto_mtf_cascade_direction/foundation_next_bar_base_fee.csv
+```
+
+Core result, 400d all six symbols:
+
+| symbol | zero-fee PF / avgR | base-fee PF / avgR | 20bps stress PF / avgR | 30bps stress PF / avgR | median stop |
+|---|---:|---:|---:|---:|---:|
+| BTC | 1.517 / +0.269 | 0.940 / -0.028 | 0.172 / -0.700 | 0.056 / -0.942 | 0.273% |
+| ETH | 1.412 / +0.256 | 0.996 / +0.003 | 0.405 / -0.471 | 0.250 / -0.671 | 0.337% |
+| SOL | 1.331 / +0.182 | 0.927 / -0.046 | 0.396 / -0.441 | 0.263 / -0.574 | 0.395% |
+| XRP | 1.410 / +0.220 | 0.956 / -0.026 | 0.382 / -0.455 | 0.251 / -0.604 | 0.376% |
+| DOGE | 1.295 / +0.173 | 0.945 / -0.034 | 0.450 / -0.411 | 0.320 / -0.536 | 0.464% |
+| BNB | 1.402 / +0.230 | 0.931 / -0.045 | 0.313 / -0.529 | 0.179 / -0.679 | 0.294% |
+
+Next-bar-fill base-fee check did **not** change the verdict:
+
+| symbol | same-bar PF | next-bar PF |
+|---|---:|---:|
+| BTC | 0.940 | 0.939 |
+| ETH | 0.996 | 0.997 |
+| SOL | 0.927 | 0.922 |
+| XRP | 0.956 | 0.956 |
+| DOGE | 0.945 | 0.957 |
+| BNB | 0.931 | 0.932 |
+
+**Read:** this is not primarily a lookahead/fill-timing bug. Same signals and
+stops are profitable before costs and fail after realistic costs. A 20-30bps
+round-trip stress nearly destroys the curve. The 200bps "awful" scenario is a
+tail-risk sanity check, not a normal validation bar, and it kills the system
+outright as expected.
+
+**Stop layer status:** frozen for now. Stops are chart-logical and the
+degenerate sub-10bps bug is filtered, but they are still execution-fragile:
+median stops are only ~0.27-0.46% of price, so fees/slippage consume too much
+of the risk unit. Do not optimize stops yet; first measure cost-per-R and target
+geometry per accepted trade so we know whether the issue is signal selection,
+target distance, or simply intraday stops being too tight for crypto perps.
+
+**Decision:** do not add more checklist complexity. The next useful layer is a
+cost-survival gate plus forensics:
+
+1. Compute fee/slippage cost as R per trade (`cost_r = round_trip_pct * entry / risk`).
+2. Reject or bucket trades where base fee cost exceeds ~0.15R or 20bps stress
+   exceeds ~0.50R.
+3. Compare winners/losers by direction layer, session, consolidation state,
+   stop distance, target distance, MFE/MAE, and duration.
+4. Only then decide whether to widen timeframe/stops, require stronger trend
+   confirmation, or abandon this foundation.
