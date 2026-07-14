@@ -62,6 +62,8 @@ class SimpleSetupConfig:
     entry_delay_bars: int = 0
     partial_tp_pct: float = 0.0   # 0=no partial, 0.5=close 50% at 1R, let rest run
     ltf_monitor_tf: str = ""      # ""=no LTF monitoring, "5"=5m, "3"=3m
+    ltf_confirm_tf: str = ""      # ""=enter on HTF signal, otherwise wait for LTF BOS/CHoCH confirmation.
+    ltf_confirm_bars: int = 12
     fib_entry_pct: float = 0.0    # 0=market at close, 0.382/0.5/0.618=limit at Fib retrace of last swing
     structure_left: int = 2
     structure_right: int = 2
@@ -146,6 +148,18 @@ def frequency_audit_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -
     stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], structure_cfg)
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
+    ltf_confirm_bars = pd.DataFrame()
+    ltf_confirm_structure = pd.DataFrame()
+    if cfg.ltf_confirm_tf:
+        ltf_confirm_bars = load_crypto(
+            symbol,
+            tf=cfg.ltf_confirm_tf,
+            days=cfg.days,
+            exchange=cfg.exchange,
+            source=cfg.source,
+        ).reset_index(drop=True)
+        if not ltf_confirm_bars.empty:
+            ltf_confirm_structure = build_structure_index(ltf_confirm_bars, structure_cfg)
 
     signal_rows = []
     for i in signal_idx:
@@ -337,6 +351,18 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
     stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], structure_cfg)
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
+    ltf_confirm_bars = pd.DataFrame()
+    ltf_confirm_structure = pd.DataFrame()
+    if cfg.ltf_confirm_tf:
+        ltf_confirm_bars = load_crypto(
+            symbol,
+            tf=cfg.ltf_confirm_tf,
+            days=cfg.days,
+            exchange=cfg.exchange,
+            source=cfg.source,
+        ).reset_index(drop=True)
+        if not ltf_confirm_bars.empty:
+            ltf_confirm_structure = build_structure_index(ltf_confirm_bars, structure_cfg)
 
     # Precompute VWAP index and EMA slope for the entry timeframe
     vwap_df = build_vwap_index(entry_bars) if "volume" in entry_bars.columns else None
@@ -370,8 +396,28 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         if i >= len(entry_bars) - 1:
             continue
         direction = "long" if combo[i] == "bull" else "short"
+        signal_ts = pd.to_datetime(entry_bars["ts"].iat[i], utc=True)
         entry = float(entry_bars["close"].iat[i])
-        stop_row = asof_structure_row(stop_structure, pd.to_datetime(entry_bars["ts"].iat[i], utc=True))
+        actual_entry_ts = signal_ts
+        actual_entry_bars = entry_bars
+        actual_entry_i = i
+        ltf_confirm = None
+        if cfg.ltf_confirm_tf:
+            ltf_confirm = find_ltf_confirmation(
+                ltf_confirm_bars,
+                ltf_confirm_structure,
+                signal_ts=signal_ts,
+                direction=direction,
+                max_bars=cfg.ltf_confirm_bars,
+            )
+            if ltf_confirm is None:
+                continue
+            entry = float(ltf_confirm["entry"])
+            actual_entry_ts = pd.Timestamp(ltf_confirm["entry_ts"])
+            actual_entry_bars = ltf_confirm_bars
+            actual_entry_i = int(ltf_confirm["entry_i"])
+
+        stop_row = asof_structure_row(stop_structure, actual_entry_ts)
         if stop_row is None:
             continue
 
@@ -398,7 +444,17 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
             continue
 
         # Entry mode: limit order at fib level or market at close
-        if cfg.fib_entry_pct > 0:
+        if cfg.ltf_confirm_tf:
+            outcome = walk_outcome_from_price(
+                actual_entry_bars,
+                actual_entry_i,
+                direction,
+                entry,
+                sl,
+                tp,
+                horizon=cfg.horizon_bars * max(1, int(cfg.entry_tf) // int(cfg.ltf_confirm_tf)),
+            )
+        elif cfg.fib_entry_pct > 0:
             outcome = walk_limit_outcome(
                 entry_bars, i, direction, entry, sl, tp,
                 horizon=cfg.horizon_bars,
@@ -433,7 +489,7 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
             base_cost_r = cfg.base_round_trip_pct * entry / risk
             stress_cost_r = cfg.stress_round_trip_pct * entry / risk
         gross_r = float(outcome["r_multiple"])
-        pa = price_action_snapshot(entry_bars, entry_ts=pd.to_datetime(entry_bars["ts"].iat[i], utc=True), direction=direction)
+        pa = price_action_snapshot(entry_bars, entry_ts=actual_entry_ts, direction=direction)
 
         # VWAP state
         vwap_val = vwap_vals[i] if vwap_df is not None else np.nan
@@ -449,9 +505,14 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
                 "symbol": symbol,
                 "setup": setup,
                 "stop_tf": stop_tf,
-                "entry_ts": pd.to_datetime(entry_bars["ts"].iat[i], utc=True),
+                "signal_ts": signal_ts,
+                "entry_ts": actual_entry_ts,
+                "entry_model": "ltf_confirmation" if cfg.ltf_confirm_tf else ("fib_limit" if cfg.fib_entry_pct > 0 else "market_close"),
+                "ltf_confirm_tf": cfg.ltf_confirm_tf,
+                "ltf_confirm_ts": ltf_confirm.get("confirm_ts") if ltf_confirm else pd.NaT,
+                "ltf_confirm_kind": ltf_confirm.get("confirm_kind") if ltf_confirm else "",
                 "direction": direction,
-                "session_utc": session_bucket(pd.to_datetime(entry_bars["ts"].iat[i], utc=True)),
+                "session_utc": session_bucket(actual_entry_ts),
                 "entry": entry,
                 "sl": sl,
                 "tp": tp,
@@ -829,6 +890,118 @@ def asof_structure_row(structure: pd.DataFrame, entry_ts: pd.Timestamp) -> pd.Se
     if idx < 0:
         return None
     return structure.iloc[int(idx)]
+
+
+def find_ltf_confirmation(
+    ltf_bars: pd.DataFrame,
+    ltf_structure: pd.DataFrame,
+    *,
+    signal_ts: pd.Timestamp,
+    direction: str,
+    max_bars: int,
+) -> dict | None:
+    """Find first known LTF BOS/CHoCH confirmation after an HTF signal.
+
+    Uses `known_after_ts`, not structure row `ts`, so the event is only tradable
+    once the confirming LTF candle has closed.
+    """
+    if ltf_bars.empty or ltf_structure.empty or max_bars <= 0:
+        return None
+    signal = pd.Timestamp(signal_ts)
+    signal = signal.tz_convert("UTC") if signal.tzinfo else signal.tz_localize("UTC")
+    known = pd.to_datetime(ltf_structure.get("known_after_ts"), utc=True, errors="coerce")
+    if known.isna().all():
+        return None
+    ltf_ts = pd.to_datetime(ltf_bars["ts"], utc=True, errors="coerce").reset_index(drop=True)
+    if len(ltf_ts) < 2:
+        return None
+    delta = ltf_ts.diff().dropna().median()
+    if pd.isna(delta) or delta <= pd.Timedelta(0):
+        delta = pd.Timedelta(minutes=5)
+    deadline = signal + delta * max_bars
+    if direction == "long":
+        event = ltf_structure["bos_up"].astype(bool) | ltf_structure["choch_up"].astype(bool)
+    else:
+        event = ltf_structure["bos_down"].astype(bool) | ltf_structure["choch_down"].astype(bool)
+    candidates = ltf_structure[event & (known > signal) & (known <= deadline)].copy()
+    if candidates.empty:
+        return None
+    candidates["_known_after_ts"] = known.loc[candidates.index]
+    confirm = candidates.sort_values("_known_after_ts").iloc[0]
+    confirm_ts = pd.Timestamp(confirm["_known_after_ts"])
+    entry_i = int(ltf_ts.searchsorted(confirm_ts, side="left"))
+    if entry_i >= len(ltf_bars):
+        return None
+    return {
+        "entry_i": entry_i,
+        "entry_ts": pd.Timestamp(ltf_ts.iat[entry_i]),
+        "entry": float(ltf_bars["open"].iat[entry_i]) if "open" in ltf_bars.columns else float(ltf_bars["close"].iat[entry_i]),
+        "confirm_ts": confirm_ts,
+        "confirm_kind": _ltf_confirm_kind(confirm, direction),
+    }
+
+
+def _ltf_confirm_kind(row: pd.Series, direction: str) -> str:
+    if direction == "long":
+        if bool(row.get("bos_up", False)):
+            return "bos_up"
+        if bool(row.get("choch_up", False)):
+            return "choch_up"
+    else:
+        if bool(row.get("bos_down", False)):
+            return "bos_down"
+        if bool(row.get("choch_down", False)):
+            return "choch_down"
+    return "unknown"
+
+
+def walk_outcome_from_price(
+    bars: pd.DataFrame,
+    entry_i: int,
+    direction: str,
+    entry: float,
+    sl: float,
+    tp: float,
+    horizon: int,
+) -> dict | None:
+    risk = abs(entry - sl)
+    if risk <= 0 or entry_i >= len(bars):
+        return None
+    target_r = abs(tp - entry) / risk
+    end_i = min(entry_i + horizon, len(bars) - 1)
+    mfe = mae = 0.0
+    r_multiple = 0.0
+    hit = False
+    exit_i = end_i
+    for j in range(entry_i, end_i + 1):
+        hi = float(bars["high"].iat[j])
+        lo = float(bars["low"].iat[j])
+        if direction == "long":
+            hit_tp, hit_sl = hi >= tp, lo <= sl
+            mfe = max(mfe, (hi - entry) / risk)
+            mae = max(mae, (entry - lo) / risk)
+        else:
+            hit_tp, hit_sl = lo <= tp, hi >= sl
+            mfe = max(mfe, (entry - lo) / risk)
+            mae = max(mae, (hi - entry) / risk)
+        if hit_tp and hit_sl:
+            r_multiple, hit, exit_i = -1.0, False, j
+            break
+        if hit_tp:
+            r_multiple, hit, exit_i = target_r, True, j
+            break
+        if hit_sl:
+            r_multiple, hit, exit_i = -1.0, False, j
+            break
+    return {
+        "r_multiple": r_multiple,
+        "hit": hit,
+        "risk_price": risk,
+        "bars_to_exit": exit_i - entry_i,
+        "exit_reason": exit_kind(r_multiple),
+        "mfe_r": mfe,
+        "mae_r": -mae,
+    }
 
 
 def summarize_trades(trades: pd.DataFrame) -> pd.DataFrame:
@@ -1604,6 +1777,8 @@ def main() -> int:
     parser.add_argument("--run-label", default="", help="Optional suffix label for output files, e.g. no-btc.")
     parser.add_argument("--partial-tp", type=float, default=0.0, help="Close this fraction at 1R, let rest run to 2R. 0.5 = close half.")
     parser.add_argument("--ltf-monitor", default="", choices=["", "1", "3", "5"], help="Lower timeframe for position monitoring (1/3/5m). Empty = no LTF monitoring.")
+    parser.add_argument("--ltf-confirm", default="", choices=["", "1", "3", "5"], help="Lower timeframe entry confirmation by same-direction BOS/CHoCH.")
+    parser.add_argument("--ltf-confirm-bars", type=int, default=12, help="Max LTF bars to wait for entry confirmation after HTF signal.")
     parser.add_argument("--fib-entry", type=float, default=0.0, help="Fibonacci retracement entry: 0=market at close, 0.382/0.5/0.618=limit at Fib pct of last swing.")
     parser.add_argument("--structure-left", type=int, default=2, help="Left pivot bars for entry/stop structure detection.")
     parser.add_argument("--structure-right", type=int, default=2, help="Right pivot bars for entry/stop structure detection.")
@@ -1657,6 +1832,8 @@ def main() -> int:
         entry_delay_bars=args.entry_delay_bars,
         partial_tp_pct=args.partial_tp,
         ltf_monitor_tf=args.ltf_monitor,
+        ltf_confirm_tf=args.ltf_confirm,
+        ltf_confirm_bars=args.ltf_confirm_bars,
         fib_entry_pct=args.fib_entry,
         structure_left=args.structure_left,
         structure_right=args.structure_right,
@@ -1764,6 +1941,8 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append(f"fib{cfg.fib_entry_pct:g}")
     if cfg.ltf_monitor_tf:
         parts.append(f"ltf{cfg.ltf_monitor_tf}m")
+    if cfg.ltf_confirm_tf:
+        parts.append(f"confirm{cfg.ltf_confirm_tf}m{cfg.ltf_confirm_bars}b")
     if cfg.structure_left != 2 or cfg.structure_right != 2:
         parts.append(f"structL{cfg.structure_left}R{cfg.structure_right}")
     if cfg.context_structure_left != 2 or cfg.context_structure_right != 2:

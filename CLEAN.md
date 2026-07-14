@@ -4956,3 +4956,65 @@ Real top4 asia-only retests:
 Read: wider structure is better on clean synthetic trend, but worse on this real
 trade setup. Keep default context L2/R2 for now. The next improvement should be
 LTF confirmation entry or a separate session setup, not wider pivot tuning.
+
+## Phase 50 -- LTF confirmation entry and setup naming (2026-07-14)
+
+Built LTF confirmation as a separate entry mode:
+
+```
+--ltf-confirm 5 --ltf-confirm-bars N
+```
+
+Mechanics:
+- 15m context-change signal creates a candidate only.
+- 5m structure must print same-direction `BOS` or `CHoCH`.
+- Entry uses the first LTF bar available at/after `known_after_ts`, not the
+  unconfirmed event row.
+- Stop/target are recalculated from the causal stop structure at actual entry
+  time.
+- Outcome walks from actual LTF entry price, including the entry bar
+  conservatively.
+
+Tests added:
+- LTF confirmation waits until structure is known.
+- price-based walker treats same-entry-bar target+stop as stop.
+- output suffix includes confirmation config.
+
+Validation: focused suite passed, `66 passed`.
+
+### Top4 Asia, 180d stress portfolio
+
+Baseline for comparison: top4 asia-only, no LTF confirm:
+
+| Variant | Accepted | PF | Return | Max DD | Return/DD | Read |
+|---------|----------|----|--------|--------|-----------|------|
+| no confirm | 72 | 2.37 | +11.56% | 1.80% | 6.41 | current balance |
+| confirm 5m / 6 bars | 32 | 2.72 | +5.73% | 0.64% | 8.88 | very conservative sleeve |
+| confirm 5m / 12 bars | 47 | 2.36 | +7.23% | 1.19% | 6.05 | good quality, less frequency |
+| confirm 5m / 18 bars | 52 | 1.70 | +5.00% | 1.19% | 4.19 | worse |
+| confirm 5m / 24 bars | 53 | 1.70 | +4.98% | 1.19% | 4.17 | worse |
+
+Read:
+
+- LTF confirmation reduces drawdown and filters trades, but does not improve the
+  main top4 Asia baseline enough to replace it.
+- Short confirmation (`6` bars = 30m) is useful as a conservative sleeve.
+- Wider confirmation windows admit late confirmations and lose edge.
+
+Setup naming:
+
+- Current best baseline should be called **Asia Quiet Continuation** (`AQC`), not
+  simply "Asia". Logic: MTF context change, quiet/no-shock entry, Asia session,
+  structural stop, fixed 2R target.
+- LTF-confirm variant: **AQC-5C** (`Asia Quiet Continuation, 5m Confirmed`).
+
+London/NY research hypothesis:
+
+- Do not port `AQC` into NY/London. The session tests already rejected that.
+- Build a separate **London-to-NY Reversal** candidate later:
+  1. London creates expansion away from Asia range.
+  2. NY/overlap sweeps London high/low or completes missed HTF liquidity.
+  3. 1m/5m CHoCH/BOS confirms reversal.
+  4. Entry after retest/reclaim, stop behind sweep extreme, target midpoint,
+     Asia high/low, London midpoint, or previous day level.
+- This is a reversal/liquidity-sweep setup, not a quiet continuation setup.

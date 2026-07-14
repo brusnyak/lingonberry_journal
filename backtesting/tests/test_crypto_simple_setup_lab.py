@@ -18,6 +18,7 @@ from backtesting.crypto.simple_setup_lab import (
     dmi_alignment,
     dataframe_to_markdown,
     exit_kind,
+    find_ltf_confirmation,
     profit_factor,
     primary_daily_blocker,
     rolling_window_summary,
@@ -31,6 +32,7 @@ from backtesting.crypto.simple_setup_lab import (
     summarize_windows,
     write_candidate_filter_report,
     write_frequency_report,
+    walk_outcome_from_price,
 )
 
 
@@ -314,12 +316,65 @@ def test_output_suffix_records_non_default_structure_window():
         structure_right=8,
         context_structure_left=5,
         context_structure_right=5,
+        ltf_confirm_tf="5",
+        ltf_confirm_bars=9,
     )
 
     suffix = output_suffix("context_change", cfg)
 
     assert "structL8R8" in suffix
     assert "ctxL5R5" in suffix
+    assert "confirm5m9b" in suffix
+
+
+def test_find_ltf_confirmation_waits_until_structure_is_known():
+    ts = pd.date_range("2026-01-01T00:00Z", periods=6, freq="5min")
+    ltf_bars = pd.DataFrame(
+        {
+            "ts": ts,
+            "open": [100, 101, 102, 103, 104, 105],
+            "high": [101, 102, 103, 104, 105, 106],
+            "low": [99, 100, 101, 102, 103, 104],
+            "close": [100.5, 101.5, 102.5, 103.5, 104.5, 105.5],
+        }
+    )
+    structure = pd.DataFrame(
+        {
+            "known_after_ts": ts,
+            "bos_up": [False, False, False, True, False, False],
+            "choch_up": [False] * 6,
+            "bos_down": [False] * 6,
+            "choch_down": [False] * 6,
+        }
+    )
+
+    out = find_ltf_confirmation(
+        ltf_bars,
+        structure,
+        signal_ts=pd.Timestamp("2026-01-01T00:05Z"),
+        direction="long",
+        max_bars=3,
+    )
+
+    assert out is not None
+    assert out["entry_ts"] == ts[3]
+    assert out["entry"] == 103
+    assert out["confirm_kind"] == "bos_up"
+
+
+def test_walk_outcome_from_price_handles_same_entry_bar_stop_conservatively():
+    bars = pd.DataFrame(
+        {
+            "high": [106.0, 107.0],
+            "low": [94.0, 100.0],
+            "close": [100.0, 100.0],
+        }
+    )
+
+    out = walk_outcome_from_price(bars, 0, "long", entry=100.0, sl=95.0, tp=105.0, horizon=1)
+
+    assert out["exit_reason"] == "stop"
+    assert out["r_multiple"] == -1.0
 
 
 def test_apply_trade_filters_can_cap_stale_wide_stops():
