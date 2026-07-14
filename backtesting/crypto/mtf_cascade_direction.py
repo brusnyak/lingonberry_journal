@@ -400,6 +400,146 @@ def exit_kind_from_r(r_multiple: float) -> str:
     return "expiry"
 
 
+def walk_structural_outcome_ltf(
+    entry_bars: pd.DataFrame,
+    entry_i: int,
+    ltf_bars: pd.DataFrame,
+    direction: str,
+    sl: float,
+    tp: float,
+    partial_pct: float = 0.0,
+    horizon_bars: int = 96,
+) -> dict | None:
+    """Walk forward with LTF structure monitoring and optional partial TP.
+
+    After entry on the HTF (entry_bars), monitors LTF bars for structure
+    breaks (CHoCH/BOS) against the trade. If structure invalidates, exits
+    early. If partial_pct > 0, closes that fraction at 1R and lets the
+    remainder run to 2R.
+
+    Returns: dict with r_multiple, exit_reason, bars_to_exit, mfe_r, mae_r
+             or None if SL/TP is degenerate.
+    """
+    entry = float(entry_bars["close"].iat[entry_i])
+    entry_ts = pd.to_datetime(entry_bars["ts"].iat[entry_i], utc=True)
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return None
+    target_r = abs(tp - entry) / risk
+    tp1_price = entry + risk if direction == "long" else entry - risk  # 1R
+    tp2_price = tp  # 2R
+
+    # Find the LTF bar matching entry time
+    ltf_entry_idx = ltf_bars["ts"].searchsorted(entry_ts, side="right") - 1
+    if ltf_entry_idx < 0:
+        ltf_entry_idx = 0
+    ltf_end = min(ltf_entry_idx + horizon_bars * 3, len(ltf_bars) - 1)
+
+    # Build structure on LTF bars for the walk window
+    from backtesting.features.structure import build_structure_index, StructureConfig
+    ltf_window = ltf_bars.iloc[:ltf_end + 1].copy().reset_index(drop=True)
+    ltf_structure = build_structure_index(ltf_window, StructureConfig(left=2, right=2))
+
+    mfe = mae = 0.0
+    r_multiple = 0.0  # expiry default
+    hit = False
+    partial_closed = False
+    partial_r = 0.0
+    remaining_pct = 1.0
+    adjusted_sl = sl
+    partial_filled = False
+
+    # The LTF index may differ from ltf_bars index after reset; remap
+    for j in range(ltf_entry_idx + 1, ltf_end + 1):
+        if j >= len(ltf_window):
+            break
+        hi = float(ltf_window["high"].iat[j])
+        lo = float(ltf_window["low"].iat[j])
+        close = float(ltf_window["close"].iat[j])
+
+        # Track excursion
+        if direction == "long":
+            mfe = max(mfe, (hi - entry) / risk)
+            mae = max(mae, (entry - lo) / risk)
+            hit_tp1 = partial_pct > 0 and not partial_filled and hi >= tp1_price
+            hit_tp2 = hi >= tp2_price
+            hit_sl = lo <= sl if not partial_filled else lo <= adjusted_sl
+        else:
+            mfe = max(mfe, (entry - lo) / risk)
+            mae = max(mae, (hi - entry) / risk)
+            hit_tp1 = partial_pct > 0 and not partial_filled and lo <= tp1_price
+            hit_tp2 = lo <= tp2_price
+            hit_sl = hi >= sl if not partial_filled else hi >= adjusted_sl
+
+        # Check structure invalidation on LTF
+        struct = ltf_structure.iloc[j] if j < len(ltf_structure) else None
+        structure_broken = False
+        if struct is not None:
+            if direction == "long":
+                # CHoCH down or BOS down breaks a long
+                structure_broken = bool(struct.get("choch_down", False)) or bool(struct.get("bos_down", False))
+            else:
+                # CHoCH up or BOS up breaks a short
+                structure_broken = bool(struct.get("choch_up", False)) or bool(struct.get("bos_up", False))
+
+        if structure_broken:
+            # Exit at current LTF close
+            exit_price = close
+            exit_r = (exit_price - entry) / risk if direction == "long" else (entry - exit_price) / risk
+            if partial_filled:
+                r_multiple = partial_r + exit_r * remaining_pct
+            else:
+                # Exit full at market
+                r_multiple = exit_r
+                if r_multiple > 0:
+                    r_multiple = min(r_multiple, target_r)  # cap at target
+            hit = r_multiple > 0
+            exit_bar = j
+            break
+
+        # Handle partial fill at 1R
+        if hit_tp1 and not partial_filled:
+            partial_filled = True
+            partial_r = partial_pct * 1.0
+            remaining_pct = 1.0 - partial_pct
+            # Move SL to breakeven for the remainder
+            adjusted_sl = entry
+            # Continue walking without exiting
+
+        if hit_tp2:
+            if partial_filled:
+                r_multiple = partial_r + remaining_pct * target_r
+            else:
+                r_multiple = target_r
+            hit = True
+            exit_bar = j
+            break
+
+        if hit_sl:
+            if partial_filled:
+                # SL at BE = 0R for remaining
+                r_multiple = partial_r
+            else:
+                r_multiple = -1.0
+            hit = False
+            exit_bar = j
+            break
+    else:
+        # Expiry: if partial was filled, keep that profit; else 0
+        r_multiple = partial_r if partial_filled else 0.0
+        exit_bar = ltf_end
+
+    return {
+        "r_multiple": r_multiple,
+        "hit": hit,
+        "risk_price": risk,
+        "bars_to_exit": exit_bar - ltf_entry_idx,
+        "exit_reason": exit_kind_from_r(r_multiple),
+        "mfe_r": mfe,
+        "mae_r": -mae,
+    }
+
+
 def sweep_preceded(structure: pd.DataFrame, entry_i: int, direction: str, lookback_bars: int = 20) -> bool:
     """True if a liquidity sweep in the reversal-supporting direction (sweep_low
     for a long, sweep_high for a short -- price wicked past a swing level and

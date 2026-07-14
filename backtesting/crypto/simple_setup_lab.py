@@ -23,6 +23,7 @@ from backtesting.crypto.mtf_cascade_direction import (
     structure_ema_direction,
     vec_ema_state,
     walk_structural_outcome,
+    walk_structural_outcome_ltf,
 )
 from backtesting.crypto.portfolio_validation import PortfolioRiskConfig, simulate_portfolio
 from backtesting.crypto.structure_regime_journal import price_action_snapshot
@@ -58,6 +59,8 @@ class SimpleSetupConfig:
     vwap_alignments: tuple[str, ...] | None = None
     ema_alignments: tuple[str, ...] | None = None
     entry_delay_bars: int = 0
+    partial_tp_pct: float = 0.0   # 0=no partial, 0.5=close 50% at 1R, let rest run
+    ltf_monitor_tf: str = ""      # ""=no LTF monitoring, "5"=5m, "3"=3m
     run_label: str = ""
 
 
@@ -353,15 +356,21 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         stop_pct = risk / entry * 100.0
         if stop_pct < cfg.min_stop_pct:
             continue
-        outcome = walk_structural_outcome(
-            entry_bars,
-            i,
-            direction,
-            sl,
-            tp,
-            horizon=cfg.horizon_bars,
-            track_excursion=True,
-        )
+        if cfg.ltf_monitor_tf:
+            # Load LTF bars for monitoring
+            ltf_data = load_crypto(symbol, tf=cfg.ltf_monitor_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source)
+            outcome = walk_structural_outcome_ltf(
+                entry_bars, i, ltf_data,
+                direction, sl, tp,
+                partial_pct=cfg.partial_tp_pct,
+                horizon_bars=cfg.horizon_bars,
+            )
+        else:
+            outcome = walk_structural_outcome(
+                entry_bars, i, direction, sl, tp,
+                horizon=cfg.horizon_bars,
+                track_excursion=True,
+            )
         if outcome is None:
             continue
         if cfg.slippage_mode == "atr_scaled" and i < len(atr_arr) and np.isfinite(atr_arr[i]) and atr_arr[i] > 0:
@@ -1539,6 +1548,8 @@ def main() -> int:
     parser.add_argument("--ema-alignments", default="", help="Comma-separated EMA slope alignment states: aligned,opposed,flat,unknown")
     parser.add_argument("--entry-delay-bars", type=int, default=0, help="For context_change: wait N entry bars after a fresh context change.")
     parser.add_argument("--run-label", default="", help="Optional suffix label for output files, e.g. no-btc.")
+    parser.add_argument("--partial-tp", type=float, default=0.0, help="Close this fraction at 1R, let rest run to 2R. 0.5 = close half.")
+    parser.add_argument("--ltf-monitor", default="", choices=["", "1", "3", "5"], help="Lower timeframe for position monitoring (1/3/5m). Empty = no LTF monitoring.")
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--step-days", type=int, default=7)
     parser.add_argument("--portfolio", action="store_true")
@@ -1585,6 +1596,8 @@ def main() -> int:
         vwap_alignments=vwap_alignments,
         ema_alignments=ema_alignments,
         entry_delay_bars=args.entry_delay_bars,
+        partial_tp_pct=args.partial_tp,
+        ltf_monitor_tf=args.ltf_monitor,
         slippage_mode=args.slippage_mode,
         base_round_trip_pct=args.base_cost_pct,
         stress_round_trip_pct=args.stress_cost_pct,
@@ -1681,6 +1694,10 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append("ema-" + "-".join(cfg.ema_alignments))
     if cfg.entry_delay_bars:
         parts.append(f"delay{cfg.entry_delay_bars}b")
+    if cfg.partial_tp_pct > 0:
+        parts.append(f"part{cfg.partial_tp_pct:g}")
+    if cfg.ltf_monitor_tf:
+        parts.append(f"ltf{cfg.ltf_monitor_tf}m")
     if cfg.run_label:
         parts.append(cfg.run_label)
     if cfg.context_mode != "strict":
