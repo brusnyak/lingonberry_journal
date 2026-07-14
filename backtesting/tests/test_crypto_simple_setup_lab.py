@@ -289,6 +289,24 @@ def test_apply_trade_filters_cost_and_session_gate():
     assert out.iloc[0]["base_cost_r"] == 0.10
 
 
+def test_asof_structure_row_uses_known_after_ts_when_available():
+    structure = pd.DataFrame(
+        {
+            "ts": pd.to_datetime(["2026-01-01T00:00Z", "2026-01-01T00:15Z"]),
+            "known_after_ts": pd.to_datetime(["2026-01-01T00:15Z", "2026-01-01T00:30Z"]),
+            "regime": ["bull", "bear"],
+        }
+    )
+
+    early = asof_structure_row(structure, pd.Timestamp("2026-01-01T00:14Z"))
+    at_first_confirm = asof_structure_row(structure, pd.Timestamp("2026-01-01T00:15Z"))
+    before_second_confirm = asof_structure_row(structure, pd.Timestamp("2026-01-01T00:29Z"))
+
+    assert early is None
+    assert at_first_confirm["regime"] == "bull"
+    assert before_second_confirm["regime"] == "bull"
+
+
 def test_apply_trade_filters_can_cap_stale_wide_stops():
     trades = pd.DataFrame(
         {

@@ -22,6 +22,7 @@ from backtesting.crypto.mtf_cascade_direction import (
     summarize_checklist,
     sweep_preceded,
     vec_ema_state,
+    walk_limit_outcome,
     walk_structural_outcome,
 )
 from backtesting.crypto.synthetic_ohlcv import make_random_walk_series, make_staircase_series
@@ -120,6 +121,41 @@ def test_walk_structural_outcome_hits_target_before_stop():
     outcome = walk_structural_outcome(bars, entry_i=0, direction="long", sl=95.0, tp=108.0, horizon=3)
     assert outcome["hit"] is True
     assert outcome["r_multiple"] > 0
+
+
+def test_walk_limit_outcome_rejects_invalid_passive_limit_side():
+    bars = pd.DataFrame({
+        "close": [100, 100, 100],
+        "high": [100, 103, 104],
+        "low": [100, 99, 98],
+    })
+
+    assert walk_limit_outcome(bars, 0, "long", limit_price=101.0, sl=95.0, tp=110.0) is None
+    assert walk_limit_outcome(bars, 0, "short", limit_price=99.0, sl=105.0, tp=90.0) is None
+
+
+def test_walk_limit_outcome_counts_same_fill_bar_stop_conservatively():
+    bars = pd.DataFrame({
+        "close": [100, 100, 100],
+        "high": [100, 110, 100],
+        "low": [100, 94, 100],
+    })
+
+    outcome = walk_limit_outcome(
+        bars,
+        entry_i=0,
+        direction="long",
+        limit_price=99.0,
+        sl=95.0,
+        tp=107.0,
+        horizon=2,
+        track_excursion=True,
+    )
+
+    assert outcome["exit_reason"] == "stop"
+    assert outcome["r_multiple"] == -1.0
+    assert outcome["mfe_r"] > 0
+    assert outcome["mae_r"] < 0
 
 
 def test_rolling_stability_real_sltp_returns_tiled_windows():

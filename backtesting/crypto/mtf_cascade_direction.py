@@ -400,6 +400,100 @@ def exit_kind_from_r(r_multiple: float) -> str:
     return "expiry"
 
 
+def walk_limit_outcome(
+    bars: pd.DataFrame,
+    entry_i: int,
+    direction: str,
+    limit_price: float,
+    sl: float,
+    tp: float,
+    horizon: int = 200,
+    track_excursion: bool = False,
+) -> dict | None:
+    """Limit-order version of walk_structural_outcome.
+
+    Instead of entering at the bar close, places a limit order at `limit_price`.
+    Walks forward until the limit is filled (price touches the level), then
+    tracks SL/TP from the fill point. Returns None if the limit never fills
+    within the horizon.
+
+    Returns: dict with r_multiple, hit, risk_price, bars_to_exit, exit_reason
+             or None if limit never hits.
+    """
+    risk = abs(limit_price - sl)
+    if risk <= 0:
+        return None
+    target_r = abs(tp - limit_price) / risk
+    end_i = min(entry_i + horizon, len(bars) - 1)
+
+    # Walk forward looking for limit fill. Limit orders only make sense as
+    # passive retracement orders: buy below/at current close, sell above/at it.
+    signal_close = float(bars["close"].iat[entry_i])
+    if direction == "long" and limit_price > signal_close:
+        return None
+    if direction == "short" and limit_price < signal_close:
+        return None
+
+    filled = False
+    fill_bar = entry_i
+    for j in range(entry_i + 1, end_i + 1):
+        hi = float(bars["high"].iat[j])
+        lo = float(bars["low"].iat[j])
+        if direction == "long" and lo <= limit_price:
+            filled = True
+            fill_bar = j
+            break
+        if direction == "short" and hi >= limit_price:
+            filled = True
+            fill_bar = j
+            break
+
+    if not filled:
+        return None  # Limit never hit, no trade
+
+    mfe = mae = 0.0
+    # Now walk from fill_bar tracking SL/TP. Include the fill candle. If the
+    # fill candle also spans the stop and target, assume the conservative stop.
+    for j in range(fill_bar, end_i + 1):
+        hi = float(bars["high"].iat[j])
+        lo = float(bars["low"].iat[j])
+        if direction == "long":
+            hit_tp, hit_sl = hi >= tp, lo <= sl
+            if track_excursion:
+                mfe = max(mfe, (hi - limit_price) / risk)
+                mae = max(mae, (limit_price - lo) / risk)
+        else:
+            hit_tp, hit_sl = lo <= tp, hi >= sl
+            if track_excursion:
+                mfe = max(mfe, (limit_price - lo) / risk)
+                mae = max(mae, (hi - limit_price) / risk)
+        if hit_tp and hit_sl:
+            result = {"r_multiple": -1.0, "hit": False, "risk_price": risk,
+                      "bars_to_exit": j - entry_i, "exit_reason": "stop"}
+            if track_excursion:
+                result.update({"mfe_r": mfe, "mae_r": -mae})
+            return result
+        if hit_tp:
+            result = {"r_multiple": target_r, "hit": True, "risk_price": risk,
+                      "bars_to_exit": j - entry_i, "exit_reason": "target"}
+            if track_excursion:
+                result.update({"mfe_r": mfe, "mae_r": -mae})
+            return result
+        if hit_sl:
+            result = {"r_multiple": -1.0, "hit": False, "risk_price": risk,
+                      "bars_to_exit": j - entry_i, "exit_reason": "stop"}
+            if track_excursion:
+                result.update({"mfe_r": mfe, "mae_r": -mae})
+            return result
+
+    # Expiry
+    result = {"r_multiple": 0.0, "hit": False, "risk_price": risk,
+              "bars_to_exit": end_i - entry_i, "exit_reason": "expiry"}
+    if track_excursion:
+        result.update({"mfe_r": mfe, "mae_r": -mae})
+    return result
+
+
 def walk_structural_outcome_ltf(
     entry_bars: pd.DataFrame,
     entry_i: int,

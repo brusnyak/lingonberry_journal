@@ -4847,3 +4847,52 @@ target, structural stop, 96-bar max horizon, asia-only, DMI aligned, no shock.
    whether a different setup or exclusion is the answer.
 3. **Complementary setup** — for low-ADX / non-trending regimes that the
    context_change setup handles poorly.
+
+## Phase 48 -- Causal structure lookup fixed; frequency vs drawdown retested (2026-07-14)
+
+Audit found a foundation bug in the simple setup lab: `asof_structure_row()` was
+using structure row `ts` instead of `known_after_ts`. Because structure rows are
+confirmed after the bar closes, lookup by raw `ts` can leak same-bar structure
+into the entry decision. Fixed lookup to prefer `known_after_ts`.
+
+Also hardened `walk_limit_outcome()` before using fib/limit results:
+- reject invalid passive limits (`long` limit above signal close, `short` limit
+  below signal close);
+- evaluate SL/TP on the fill candle, conservatively treating same-candle
+  stop+target spans as stop;
+- return MFE/MAE when requested.
+
+Validation: focused crypto suite now passes: `54 passed`.
+
+### Causal reruns, 180d stress portfolio
+
+| Variant | Candidates | Accepted | WR | PF | Return | Max DD | Return/DD | Read |
+|---------|------------|----------|----|----|--------|--------|-----------|------|
+| strict asia+DMI, 6 symbols | 96 | 79 | 58.2% | 2.39 | +12.36% | 2.44% | 5.07 | baseline survived causal fix |
+| no-BTC asia/london/ny | 257 | 203 | 46.8% | 1.44 | +10.48% | 3.83% | 2.73 | frequency up, quality down |
+| daily_first_context no-BTC | 134 | 127 | 44.9% | 1.37 | +5.51% | 1.75% | 3.15 | not a baseline upgrade |
+| no-BTC asia-only | 113 | 90 | 55.6% | 2.06 | +9.48% | 2.16% | 4.39 | decent frequency compromise |
+| ETH/SOL/XRP asia-only | 66 | 54 | 61.1% | 2.60 | +9.61% | 0.99% | 9.75 | best drawdown quality, low frequency |
+| ETH/SOL/XRP/BNB asia-only | 84 | 72 | 59.7% | 2.37 | +11.56% | 1.80% | 6.41 | best current candidate balance |
+
+Read:
+
+- The old strict setup was not invalidated by the causality fix. Good.
+- Adding sessions is the wrong frequency lever: it increases trades but damages
+  rolling-window stability and drawdown.
+- `daily_first_context` is not the answer. It improves frequency but loses too
+  much quality.
+- Symbol selection is currently the cleanest drawdown lever. The best candidate
+  balance is `ETH/SOL/XRP/BNB`, asia-only, no-shock, no DMI filter.
+- Top-3 `ETH/SOL/XRP` has excellent risk profile but only `54` accepted trades
+  in 180d; too sparse for a full engine, useful as the conservative sleeve.
+
+Next meaningful work:
+
+1. Build LTF confirmation entry as a separate entry mode, not as a replacement
+   for stop logic. Use 5m confirmation close, then compare HTF and LTF stops with
+   guardrails.
+2. Add a day-level setup atlas: classify untraded days by trend/range/shock and
+   label which setup family should be allowed.
+3. Keep `no_shock` as a default gate for this setup. Do not loosen it for
+   frequency.

@@ -22,6 +22,7 @@ from backtesting.crypto.mtf_cascade_direction import (
     structural_stop_target,
     structure_ema_direction,
     vec_ema_state,
+    walk_limit_outcome,
     walk_structural_outcome,
     walk_structural_outcome_ltf,
 )
@@ -61,6 +62,7 @@ class SimpleSetupConfig:
     entry_delay_bars: int = 0
     partial_tp_pct: float = 0.0   # 0=no partial, 0.5=close 50% at 1R, let rest run
     ltf_monitor_tf: str = ""      # ""=no LTF monitoring, "5"=5m, "3"=3m
+    fib_entry_pct: float = 0.0    # 0=market at close, 0.382/0.5/0.618=limit at Fib retrace of last swing
     run_label: str = ""
 
 
@@ -348,6 +350,19 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         stop_row = asof_structure_row(stop_structure, pd.to_datetime(entry_bars["ts"].iat[i], utc=True))
         if stop_row is None:
             continue
+
+        # Fibonacci retracement entry: limit order at % of last swing range
+        if cfg.fib_entry_pct > 0:
+            last_lo = float(stop_row.get("last_swing_low", np.nan))
+            last_hi = float(stop_row.get("last_swing_high", np.nan))
+            if not (np.isfinite(last_lo) and np.isfinite(last_hi) and last_hi > last_lo):
+                continue
+            sw_range = last_hi - last_lo
+            if direction == "long":
+                entry = last_lo + sw_range * cfg.fib_entry_pct
+            else:
+                entry = last_hi - sw_range * cfg.fib_entry_pct
+
         sl, tp = structural_stop_target(stop_row, direction, entry, cfg.min_rr)
         if not np.isfinite(sl):
             continue
@@ -357,7 +372,15 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         stop_pct = risk / entry * 100.0
         if stop_pct < cfg.min_stop_pct:
             continue
-        if cfg.ltf_monitor_tf:
+
+        # Entry mode: limit order at fib level or market at close
+        if cfg.fib_entry_pct > 0:
+            outcome = walk_limit_outcome(
+                entry_bars, i, direction, entry, sl, tp,
+                horizon=cfg.horizon_bars,
+                track_excursion=True,
+            )
+        elif cfg.ltf_monitor_tf:
             # Load LTF bars for monitoring
             ltf_data = load_crypto(symbol, tf=cfg.ltf_monitor_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source)
             outcome = walk_structural_outcome_ltf(
@@ -768,9 +791,12 @@ def _rolling_recent_bool(values: pd.Series, lookback: int) -> pd.Series:
 
 
 def asof_structure_row(structure: pd.DataFrame, entry_ts: pd.Timestamp) -> pd.Series | None:
-    if structure.empty or "ts" not in structure.columns:
+    if structure.empty:
         return None
-    ts_ns = pd.to_datetime(structure["ts"], utc=True).to_numpy(dtype="datetime64[ns]").astype("int64")
+    lookup_col = "known_after_ts" if "known_after_ts" in structure.columns else "ts"
+    if lookup_col not in structure.columns:
+        return None
+    ts_ns = pd.to_datetime(structure[lookup_col], utc=True).to_numpy(dtype="datetime64[ns]").astype("int64")
     entry = pd.Timestamp(entry_ts)
     entry_ns = entry.tz_convert("UTC").value if entry.tzinfo else entry.tz_localize("UTC").value
     idx = ts_ns.searchsorted(entry_ns, side="right") - 1
@@ -1552,6 +1578,7 @@ def main() -> int:
     parser.add_argument("--run-label", default="", help="Optional suffix label for output files, e.g. no-btc.")
     parser.add_argument("--partial-tp", type=float, default=0.0, help="Close this fraction at 1R, let rest run to 2R. 0.5 = close half.")
     parser.add_argument("--ltf-monitor", default="", choices=["", "1", "3", "5"], help="Lower timeframe for position monitoring (1/3/5m). Empty = no LTF monitoring.")
+    parser.add_argument("--fib-entry", type=float, default=0.0, help="Fibonacci retracement entry: 0=market at close, 0.382/0.5/0.618=limit at Fib pct of last swing.")
     parser.add_argument("--window-days", type=int, default=30)
     parser.add_argument("--step-days", type=int, default=7)
     parser.add_argument("--portfolio", action="store_true")
@@ -1600,6 +1627,7 @@ def main() -> int:
         entry_delay_bars=args.entry_delay_bars,
         partial_tp_pct=args.partial_tp,
         ltf_monitor_tf=args.ltf_monitor,
+        fib_entry_pct=args.fib_entry,
         slippage_mode=args.slippage_mode,
         base_round_trip_pct=args.base_cost_pct,
         stress_round_trip_pct=args.stress_cost_pct,
@@ -1698,6 +1726,8 @@ def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
         parts.append(f"delay{cfg.entry_delay_bars}b")
     if cfg.partial_tp_pct > 0:
         parts.append(f"part{cfg.partial_tp_pct:g}")
+    if cfg.fib_entry_pct > 0:
+        parts.append(f"fib{cfg.fib_entry_pct:g}")
     if cfg.ltf_monitor_tf:
         parts.append(f"ltf{cfg.ltf_monitor_tf}m")
     if cfg.run_label:
