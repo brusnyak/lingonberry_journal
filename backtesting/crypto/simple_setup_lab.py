@@ -37,10 +37,12 @@ class SimpleSetupConfig:
     global_tf: str = "240"
     local_tf: str = "30"
     entry_tf: str = "15"
+    stop_tf: str = ""
     context_mode: str = "strict"
     min_rr: float = 1.5
     horizon_bars: int = 96
     min_stop_pct: float = 0.1
+    max_stop_pct: float | None = None
     base_round_trip_pct: float = 0.0006
     stress_round_trip_pct: float = 0.0020
     max_base_cost_r: float | None = None
@@ -108,6 +110,10 @@ def frequency_audit_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -
         "local": load_crypto(symbol, tf=cfg.local_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True),
         "entry": load_crypto(symbol, tf=cfg.entry_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True),
     }
+    stop_tf = cfg.stop_tf or cfg.entry_tf
+    bars["stop"] = bars["entry"] if stop_tf == cfg.entry_tf else load_crypto(
+        symbol, tf=stop_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source
+    ).reset_index(drop=True)
     if any(df.empty for df in bars.values()):
         return pd.DataFrame(), pd.DataFrame()
 
@@ -115,12 +121,13 @@ def frequency_audit_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -
     entry_ts = pd.to_datetime(entry_bars["ts"], utc=True)
     combo = direction_context(bars["global"], bars["local"], entry_bars, mode=cfg.context_mode)
     structure = build_structure_index(entry_bars, StructureConfig(left=2, right=2))
+    stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], StructureConfig(left=2, right=2))
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
 
     signal_rows = []
     for i in signal_idx:
-        row = signal_diagnostic_row(symbol, cfg, setup, entry_bars, structure, combo, int(i))
+        row = signal_diagnostic_row(symbol, cfg, setup, entry_bars, stop_structure, combo, int(i))
         if row:
             signal_rows.append(row)
     signals = pd.DataFrame(signal_rows)
@@ -165,6 +172,7 @@ FREQUENCY_COUNT_COLS = [
     "pre_portfolio_pass",
     "invalid_stop",
     "stop_too_tight",
+    "stop_too_wide",
     "no_outcome",
     "blocked_session",
     "blocked_context",
@@ -186,7 +194,10 @@ def signal_diagnostic_row(
     entry_ts = pd.to_datetime(entry_bars["ts"].iat[i], utc=True)
     direction = "long" if combo[i] == "bull" else "short"
     entry = float(entry_bars["close"].iat[i])
-    sl, tp = structural_stop_target(structure.iloc[i], direction, entry, cfg.min_rr)
+    stop_row = asof_structure_row(structure, entry_ts)
+    if stop_row is None:
+        return row
+    sl, tp = structural_stop_target(stop_row, direction, entry, cfg.min_rr)
     row = {
         "symbol": symbol,
         "setup": setup,
@@ -196,6 +207,7 @@ def signal_diagnostic_row(
         "session_utc": session_bucket(entry_ts),
         "valid_stop": False,
         "min_stop_pass": False,
+        "max_stop_pass": False,
         "session_pass": False,
         "context_filter_pass": False,
         "cost_pass": False,
@@ -213,6 +225,10 @@ def signal_diagnostic_row(
         row["stage_status"] = "stop_too_tight"
         return row
     row["min_stop_pass"] = True
+    if cfg.max_stop_pct is not None and stop_pct > cfg.max_stop_pct:
+        row["stage_status"] = "stop_too_wide"
+        return row
+    row["max_stop_pass"] = True
     outcome = walk_structural_outcome(entry_bars, i, direction, sl, tp, horizon=cfg.horizon_bars)
     if outcome is None:
         row["stage_status"] = "no_outcome"
@@ -260,6 +276,7 @@ def primary_daily_blocker(row: pd.Series) -> str:
         "blocked_context": int(row.get("blocked_context", 0)),
         "blocked_session": int(row.get("blocked_session", 0)),
         "stop_too_tight": int(row.get("stop_too_tight", 0)),
+        "stop_too_wide": int(row.get("stop_too_wide", 0)),
         "invalid_stop": int(row.get("invalid_stop", 0)),
         "no_outcome": int(row.get("no_outcome", 0)),
     }
@@ -272,12 +289,17 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
         "local": load_crypto(symbol, tf=cfg.local_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True),
         "entry": load_crypto(symbol, tf=cfg.entry_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True),
     }
+    stop_tf = cfg.stop_tf or cfg.entry_tf
+    bars["stop"] = bars["entry"] if stop_tf == cfg.entry_tf else load_crypto(
+        symbol, tf=stop_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source
+    ).reset_index(drop=True)
     if any(df.empty for df in bars.values()):
         return pd.DataFrame()
 
     entry_bars = bars["entry"]
     combo = direction_context(bars["global"], bars["local"], entry_bars, mode=cfg.context_mode)
     structure = build_structure_index(entry_bars, StructureConfig(left=2, right=2))
+    stop_structure = structure if stop_tf == cfg.entry_tf else build_structure_index(bars["stop"], StructureConfig(left=2, right=2))
     signal_mask = setup_signal(entry_bars, combo, setup, structure=structure, entry_delay_bars=cfg.entry_delay_bars)
     signal_idx = np.where(signal_mask)[0]
 
@@ -287,7 +309,10 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
             continue
         direction = "long" if combo[i] == "bull" else "short"
         entry = float(entry_bars["close"].iat[i])
-        sl, tp = structural_stop_target(structure.iloc[i], direction, entry, cfg.min_rr)
+        stop_row = asof_structure_row(stop_structure, pd.to_datetime(entry_bars["ts"].iat[i], utc=True))
+        if stop_row is None:
+            continue
+        sl, tp = structural_stop_target(stop_row, direction, entry, cfg.min_rr)
         if not np.isfinite(sl):
             continue
         risk = abs(entry - sl)
@@ -315,6 +340,7 @@ def evaluate_symbol(symbol: str, cfg: SimpleSetupConfig, *, setup: str) -> pd.Da
             {
                 "symbol": symbol,
                 "setup": setup,
+                "stop_tf": stop_tf,
                 "entry_ts": pd.to_datetime(entry_bars["ts"].iat[i], utc=True),
                 "direction": direction,
                 "session_utc": session_bucket(pd.to_datetime(entry_bars["ts"].iat[i], utc=True)),
@@ -374,7 +400,7 @@ def setup_signal(
     structure: pd.DataFrame | None = None,
     entry_delay_bars: int = 0,
 ) -> np.ndarray:
-    if setup not in {"pullback_reclaim", "context_change", "daily_first_context", "structure_confirmed_context"}:
+    if setup not in {"pullback_reclaim", "context_change", "daily_first_context", "micro_reclaim_context", "structure_confirmed_context"}:
         raise ValueError(f"unknown setup: {setup}")
     combo_s = pd.Series(combo)
     active = combo_s.isin(["bull", "bear"])
@@ -382,6 +408,10 @@ def setup_signal(
         return delayed_context_signal(combo_s, delay_bars=entry_delay_bars).to_numpy()
     if setup == "daily_first_context":
         return daily_first_context_signal(entry_bars, combo_s).to_numpy()
+    if setup == "micro_reclaim_context":
+        if structure is None or structure.empty:
+            return np.zeros(len(combo_s), dtype=bool)
+        return micro_reclaim_context_signal(entry_bars, combo_s, structure).to_numpy()
     if setup == "structure_confirmed_context":
         if structure is None or structure.empty:
             return np.zeros(len(combo_s), dtype=bool)
@@ -420,6 +450,32 @@ def daily_first_context_signal(entry_bars: pd.DataFrame, combo_s: pd.Series) -> 
     first_active = active & ~active_seen.shift(1, fill_value=False)
     previous_day = pd.Series(days).ne(pd.Series(days).shift(1))
     return first_active | (active & previous_day)
+
+
+def micro_reclaim_context_signal(
+    entry_bars: pd.DataFrame,
+    combo_s: pd.Series,
+    structure: pd.DataFrame,
+    *,
+    confirm_lookback: int = 20,
+) -> pd.Series:
+    """1m/5m reclaim confirmation inside an already-active higher-timeframe context."""
+    close = pd.to_numeric(entry_bars["close"], errors="coerce")
+    low = pd.to_numeric(entry_bars["low"], errors="coerce")
+    high = pd.to_numeric(entry_bars["high"], errors="coerce")
+    ema21 = close.ewm(span=21, adjust=False).mean()
+    ema55 = close.ewm(span=55, adjust=False).mean()
+
+    bull_reclaim = (combo_s == "bull") & (low.shift(1) <= ema21.shift(1)) & (close > ema21) & (ema21 >= ema55)
+    bear_reclaim = (combo_s == "bear") & (high.shift(1) >= ema21.shift(1)) & (close < ema21) & (ema21 <= ema55)
+
+    bull_structure = _rolling_recent_bool(structure["bos_up"].astype(bool) | structure["choch_up"].astype(bool), confirm_lookback)
+    bear_structure = _rolling_recent_bool(structure["bos_down"].astype(bool) | structure["choch_down"].astype(bool), confirm_lookback)
+    recent_bear_choch = _rolling_recent_bool(structure["choch_down"].astype(bool), confirm_lookback)
+    recent_bull_choch = _rolling_recent_bool(structure["choch_up"].astype(bool), confirm_lookback)
+
+    signal = (bull_reclaim & bull_structure & ~recent_bear_choch) | (bear_reclaim & bear_structure & ~recent_bull_choch)
+    return signal & ~signal.shift(1, fill_value=False)
 
 
 def structure_confirmed_context_signal(
@@ -469,6 +525,17 @@ def _rolling_recent_bool(values: pd.Series, lookback: int) -> pd.Series:
     return values.astype(int).rolling(lookback, min_periods=1).max().astype(bool)
 
 
+def asof_structure_row(structure: pd.DataFrame, entry_ts: pd.Timestamp) -> pd.Series | None:
+    if structure.empty or "ts" not in structure.columns:
+        return None
+    ts = pd.to_datetime(structure["ts"], utc=True)
+    entry_ns = pd.Timestamp(entry_ts).tz_convert("UTC").value if pd.Timestamp(entry_ts).tzinfo else pd.Timestamp(entry_ts).tz_localize("UTC").value
+    idx = ts.astype("int64").to_numpy().searchsorted(entry_ns, side="right") - 1
+    if idx < 0:
+        return None
+    return structure.iloc[int(idx)]
+
+
 def summarize_trades(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty:
         return pd.DataFrame()
@@ -487,6 +554,8 @@ def apply_trade_filters(trades: pd.DataFrame, cfg: SimpleSetupConfig) -> pd.Data
         out = out[out["base_cost_r"] <= cfg.max_base_cost_r]
     if cfg.max_stress_cost_r is not None:
         out = out[out["stress_cost_r"] <= cfg.max_stress_cost_r]
+    if cfg.max_stop_pct is not None:
+        out = out[out["stop_pct"] <= cfg.max_stop_pct]
     if cfg.sessions:
         out = out[out["session_utc"].isin(cfg.sessions)]
     if cfg.trend_strengths:
@@ -910,12 +979,16 @@ def dataframe_to_markdown(df: pd.DataFrame) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a narrow crypto setup lab.")
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
-    parser.add_argument("--setup", default="pullback_reclaim", choices=["pullback_reclaim", "context_change", "daily_first_context", "structure_confirmed_context"])
+    parser.add_argument("--setup", default="pullback_reclaim", choices=["pullback_reclaim", "context_change", "daily_first_context", "micro_reclaim_context", "structure_confirmed_context"])
     parser.add_argument("--days", type=int, default=400)
+    parser.add_argument("--entry-tf", default="15", help="Entry/confirmation timeframe.")
+    parser.add_argument("--stop-tf", default="", help="Optional structure timeframe for SL/TP. Defaults to entry tf.")
     parser.add_argument("--min-rr", type=float, default=1.5)
+    parser.add_argument("--horizon-bars", type=int, default=96)
     parser.add_argument("--context-mode", default="strict", choices=["strict", "htf_only"], help="strict=240/30/15 agree; htf_only=240/30 agree.")
     parser.add_argument("--max-base-cost-r", type=float, default=None)
     parser.add_argument("--max-stress-cost-r", type=float, default=None)
+    parser.add_argument("--max-stop-pct", type=float, default=None)
     parser.add_argument("--sessions", default="", help="Comma-separated UTC session buckets: asia,london,ny,late_us")
     parser.add_argument("--trend-strengths", default="", help="Comma-separated trend buckets: weak_or_range,transition,trend,strong_trend")
     parser.add_argument("--consolidation-states", default="", help="Comma-separated consolidation states.")
@@ -945,10 +1018,14 @@ def main() -> int:
     dmi_alignments = tuple(s.strip() for s in args.dmi_alignments.split(",") if s.strip()) or None
     cfg = SimpleSetupConfig(
         days=args.days,
+        entry_tf=args.entry_tf,
+        stop_tf=args.stop_tf,
         context_mode=args.context_mode,
         min_rr=args.min_rr,
+        horizon_bars=args.horizon_bars,
         max_base_cost_r=args.max_base_cost_r,
         max_stress_cost_r=args.max_stress_cost_r,
+        max_stop_pct=args.max_stop_pct,
         sessions=sessions,
         trend_strengths=trend_strengths,
         consolidation_states=consolidation_states,
@@ -977,6 +1054,7 @@ def main() -> int:
             max_open_per_symbol=args.max_open_per_symbol,
             daily_loss_limit_pct=args.daily_loss_limit_pct,
             cooldown_after_loss_bars=args.cooldown_after_loss_bars,
+            tf_minutes=int(cfg.entry_tf),
         )
         portfolio_suffix = f"{suffix}_portfolio_{args.portfolio_net}_risk{args.risk_pct:g}".replace(".", "p")
         accepted.to_csv(out_dir / f"{portfolio_suffix}_accepted.csv", index=False)
@@ -1005,10 +1083,16 @@ def main() -> int:
 
 def output_suffix(setup: str, cfg: SimpleSetupConfig) -> str:
     parts = [setup, f"rr{cfg.min_rr:g}"]
+    if cfg.entry_tf != "15":
+        parts.append(f"entry{cfg.entry_tf}m")
+    if cfg.stop_tf and cfg.stop_tf != cfg.entry_tf:
+        parts.append(f"stop{cfg.stop_tf}m")
     if cfg.max_base_cost_r is not None:
         parts.append(f"basecost{cfg.max_base_cost_r:g}r")
     if cfg.max_stress_cost_r is not None:
         parts.append(f"stresscost{cfg.max_stress_cost_r:g}r")
+    if cfg.max_stop_pct is not None:
+        parts.append(f"maxstop{cfg.max_stop_pct:g}pct")
     if cfg.sessions:
         parts.append("sessions-" + "-".join(cfg.sessions))
     if cfg.trend_strengths:

@@ -7,6 +7,7 @@ import pytest
 from backtesting.crypto.simple_setup_lab import (
     SimpleSetupConfig,
     apply_trade_filters,
+    asof_structure_row,
     build_full_review_packet,
     delayed_context_signal,
     daily_first_context_signal,
@@ -19,6 +20,7 @@ from backtesting.crypto.simple_setup_lab import (
     run_portfolio_validation,
     session_bucket,
     setup_signal,
+    micro_reclaim_context_signal,
     structure_confirmed_context_signal,
     summarize_trades,
     summarize_windows,
@@ -62,6 +64,43 @@ def test_daily_first_context_signal_fires_once_per_active_day():
     signal = daily_first_context_signal(bars, combo)
 
     assert signal.tolist() == [False, True, False, True, False]
+
+
+def test_micro_reclaim_context_requires_reclaim_and_recent_structure():
+    bars = pd.DataFrame(
+        {
+            "close": [100, 99, 98, 99, 101, 102, 103] + [104] * 60,
+            "high": [101, 100, 99, 100, 102, 103, 104] + [105] * 60,
+            "low": [99, 98, 97, 98, 99, 101, 102] + [103] * 60,
+        }
+    )
+    combo = pd.Series(["bull"] * len(bars))
+    structure = pd.DataFrame(
+        {
+            "bos_up": [False, False, True, False, False, False, False] + [False] * 60,
+            "choch_up": [False] * len(bars),
+            "bos_down": [False] * len(bars),
+            "choch_down": [False] * len(bars),
+        }
+    )
+
+    signal = micro_reclaim_context_signal(bars, combo, structure, confirm_lookback=5)
+
+    assert signal.any()
+
+
+def test_asof_structure_row_returns_latest_known_row():
+    structure = pd.DataFrame(
+        {
+            "ts": pd.to_datetime(["2026-01-01T00:00Z", "2026-01-01T00:15Z"]),
+            "long_structural_sl": [90.0, 95.0],
+        }
+    )
+
+    row = asof_structure_row(structure, pd.Timestamp("2026-01-01T00:16Z"))
+
+    assert row is not None
+    assert row["long_structural_sl"] == 95.0
 
 
 def test_direction_context_htf_only_ignores_entry_ema_disagreement(monkeypatch):
@@ -195,6 +234,21 @@ def test_apply_trade_filters_cost_and_session_gate():
 
     assert len(out) == 1
     assert out.iloc[0]["base_cost_r"] == 0.10
+
+
+def test_apply_trade_filters_can_cap_stale_wide_stops():
+    trades = pd.DataFrame(
+        {
+            "base_cost_r": [0.01, 0.01],
+            "stress_cost_r": [0.02, 0.02],
+            "stop_pct": [1.0, 12.0],
+        }
+    )
+    cfg = SimpleSetupConfig(max_stop_pct=2.0)
+
+    out = apply_trade_filters(trades, cfg)
+
+    assert out["stop_pct"].tolist() == [1.0]
 
 
 def test_rolling_window_summary_and_summary_windows():

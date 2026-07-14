@@ -4235,3 +4235,74 @@ Conclusion:
   setup is inactive, or testing the `30/1 approach` for better entry confirmation
   inside already-valid context.
 - Do not loosen the session gate or direction stack just to increase activity.
+
+## Phase 37 -- 30/1 micro-confirmation tested; not enough frequency yet
+
+User asked to test the `30/1 approach` before moving to different setup families
+or ML/candle-pattern work.
+
+Implemented in `simple_setup_lab.py`:
+
+- `--entry-tf` and `--stop-tf` are now separate.
+  - This lets 1m/5m confirmation use wider 15m structural stops instead of noisy
+    1m stops.
+- `micro_reclaim_context` setup:
+  - requires active higher-timeframe context;
+  - waits for 1m/5m EMA21 reclaim in the trade direction;
+  - requires recent same-direction BOS/ChoCH on the entry timeframe;
+  - blocks recent opposite CHoCH.
+- `--max-stop-pct`:
+  - added because 1m entries with 15m structure can inherit stale swing stops
+    that are many percent away.
+- `--horizon-bars`:
+  - needed because 1m `96` bars is only 96 minutes, while the 15m baseline used
+    24h (`96 x 15m`). 30/1 was tested with `1440` 1m bars.
+
+Validation:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_simple_setup_lab.py -q
+# 20 passed
+```
+
+Tested no-BTC basket (`ETH, SOL, XRP, DOGE`) with same cost/session/no-shock
+gates as the current baseline.
+
+Current no-BTC baseline for comparison:
+
+| Variant | Candidates | Accepted | PF | Return | Max DD | Return/DD |
+|---|---:|---:|---:|---:|---:|---:|
+| 15m context-change baseline | 479 | 360 | 1.605 | +23.6% | 2.37% | 9.96 |
+
+30/1 and 30/5 results:
+
+| Variant | Candidates | Accepted | PF | Return | Max DD | Return/DD | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 30/1, 15m stops, no max stop | 394 | 21 | 1.172 | +0.16% | 0.28% | 0.59 | reject: stale stops, 89% expiry |
+| 30/1, max stop 2% | 20 | 5 | 2.023 | +0.54% | 0.26% | 2.03 | too sparse |
+| 30/1, max stop 5% | 54 | 9 | 1.932 | +0.89% | 0.48% | 1.85 | too sparse |
+| 30/5, max stop 5% | 21 | 7 | 4.383 | +1.47% | 0.22% | 6.74 | too sparse |
+
+Read:
+
+- The first 30/1 formulation does **not** beat the 15m baseline.
+- Uncapped 30/1 shows the real failure mode: 1m entries inside a 15m trend often
+  inherit stale 15m structural stops (`12-31%` median stops by symbol), so
+  targets are too far and most trades expire.
+- Adding a max-stop cap fixes quality but destroys frequency. The result becomes
+  a tiny research slice, not an engine.
+- 30/5 is cleaner than 30/1 but still only `21` candidates / `7` accepted in
+  400 days. Good PF on that sample is not statistically meaningful.
+
+Next:
+
+1. Do not replace the current baseline with 30/1.
+2. If continuing micro-confirmation, stop logic must be reworked to use a nearer
+   valid structural level without touching the legacy 15m stop model for the
+   existing baseline.
+3. Better near-term path: add a second independent setup family for days where
+   no active context-change trade exists.
+4. ML/candle-pattern work should be used only after candidate events exist:
+   build a feature table from accepted/rejected candidates and label whether the
+   setup quality was good, not train a model directly on raw candles and hope it
+   finds structure.
