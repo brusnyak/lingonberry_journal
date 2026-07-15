@@ -7,6 +7,7 @@ from backtesting.crypto.session_range_setup_lab import (
     candidate_passes_filters,
     output_suffix,
     primary_session_blocker,
+    reference_direction,
     session_range_signal,
 )
 
@@ -62,6 +63,53 @@ def test_session_range_signal_fakeout_requires_sweep_and_mid_reclaim():
         swept_low=False,
         breakout_buffer_atr=0.25,
         reclaim_buffer_atr=0.0,
+    ) is None
+
+
+def test_reference_direction_requires_body_and_edge_close():
+    ref = pd.DataFrame(
+        {
+            "open": [100.0, 101.0],
+            "high": [104.0, 105.0],
+            "low": [99.0, 100.0],
+            "close": [102.0, 104.5],
+        }
+    )
+    cfg = SessionRangeConfig(reference_close_location_threshold=0.7, min_reference_body_atr=0.5)
+
+    assert reference_direction(ref, ref_high=105.0, ref_low=99.0, atr=5.0, cfg=cfg) == "long"
+
+    weak_body = ref.copy()
+    weak_body.loc[1, "close"] = 101.0
+    assert reference_direction(weak_body, ref_high=105.0, ref_low=99.0, atr=5.0, cfg=cfg) is None
+
+
+def test_session_range_signal_continuation_uses_reference_bias():
+    assert session_range_signal(
+        mode="continuation",
+        close=102.0,
+        ref_high=100.0,
+        ref_low=95.0,
+        ref_mid=97.5,
+        atr=2.0,
+        swept_high=False,
+        swept_low=False,
+        breakout_buffer_atr=0.25,
+        reclaim_buffer_atr=0.0,
+        reference_bias="long",
+    ) == "long"
+    assert session_range_signal(
+        mode="continuation",
+        close=102.0,
+        ref_high=100.0,
+        ref_low=95.0,
+        ref_mid=97.5,
+        atr=2.0,
+        swept_high=False,
+        swept_low=False,
+        breakout_buffer_atr=0.25,
+        reclaim_buffer_atr=0.0,
+        reference_bias="short",
     ) is None
 
 

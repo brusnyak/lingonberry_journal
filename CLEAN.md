@@ -5855,3 +5855,77 @@ Next:
 3. Add HTF/session state columns to the forensics table before trying ML or
    indicator chemistry, otherwise we will not know which market state each setup
    belongs to.
+
+## Phase 65 -- Wide-range continuation rejects as a setup family (2026-07-15)
+
+Added continuation mode to `backtesting.crypto.session_range_setup_lab`:
+
+- `london_asia_continuation`;
+- `ny_london_continuation`;
+- reference session must have directional body and close near the range edge;
+- trade session must break the reference range in the same direction;
+- knobs:
+  - `--reference-close-location-threshold`;
+  - `--min-reference-body-atr`.
+
+Why tested:
+
+- Phase 64 showed the biggest London Asia fakeout blocker was
+  `reference_range_too_large`.
+- Instead of relaxing the fakeout, this tests whether wide Asia/London ranges
+  should be a separate continuation setup.
+
+Synthetic coverage:
+
+- reference direction requires body strength and edge close;
+- continuation only fires in reference-bias direction.
+
+Verified:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_session_range_setup_lab.py -q
+```
+
+Result: `8 passed`.
+
+Wide London Asia continuation, `reference_range_atr=6-14`, `min_rr=1.5`:
+
+| Basket / window | Accepted | Stress PF | Portfolio R | Max DD | Win rate | Expiry rate | Read |
+|-----------------|---------:|----------:|------------:|-------:|---------:|------------:|------|
+| Top4 360d | 203 | 0.54 | -30.67R | 7.67% | 12.81% | 60.10% | reject |
+| All6 360d | 272 | 0.61 | -34.86R | 9.11% | 13.97% | 60.29% | reject |
+| Top4 720d | 483 | 0.79 | -36.24R | 10.74% | 19.46% | 51.14% | reject |
+| All6 720d | 598 | 0.78 | -47.57R | 14.47% | 19.73% | 50.84% | reject |
+
+RR diagnostics on Top4 360d:
+
+| Variant | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|---------:|----------:|------------:|-------:|------|
+| RR 1.0 | 209 | 0.81 | -11.99R | 3.92% | still negative |
+| RR 1.5 | 203 | 0.54 | -30.67R | 7.67% | reject |
+| RR 2.0 | 202 | 0.41 | -40.57R | 10.14% | worse |
+
+NY London continuation, `reference_range_atr=6-14`, `min_rr=1.5`:
+
+| Basket / window | Accepted | Stress PF | Portfolio R | Max DD | Win rate | Expiry rate | Read |
+|-----------------|---------:|----------:|------------:|-------:|---------:|------------:|------|
+| Top4 360d | 145 | 0.73 | -14.27R | 5.98% | 18.62% | 50.34% | reject |
+| All6 360d | 172 | 0.66 | -21.61R | 8.36% | 17.44% | 51.16% | reject |
+
+Read:
+
+- Wide-range continuation creates frequency, but the trade quality is bad.
+- This is not just a target-distance problem. RR 1.0 is still negative and
+  RR 2.0 gets worse.
+- The rejected fakeout days are not automatically continuation days.
+- Keep continuation mode in the lab as a comparison tool, but do not promote it
+  into the engine.
+
+Next:
+
+1. Stop trying to monetize wide-range continuation directly.
+2. Try NY reversal/fade after London displacement, because continuation after
+   expansion is empirically weak.
+3. Add session-state features to forensics:
+   London displacement direction, London close location, distance to VWAP/EMA,
+   and whether NY reverses or continues after the first NY hour.

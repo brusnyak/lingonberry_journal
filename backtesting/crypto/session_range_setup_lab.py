@@ -42,6 +42,8 @@ class SessionRangeConfig:
     stress_round_trip_pct: float = 0.0020
     breakout_close_buffer_atr: float = 0.15
     reclaim_close_buffer_atr: float = 0.0
+    reference_close_location_threshold: float = 0.7
+    min_reference_body_atr: float = 0.5
     min_reference_range_atr: float = 0.75
     max_reference_range_atr: float = 6.0
     stop_buffer_atr: float = 0.1
@@ -53,8 +55,10 @@ class SessionRangeConfig:
 SETUP_SESSIONS = {
     "london_asia_breakout": ("asia", "london", "breakout"),
     "london_asia_fakeout": ("asia", "london", "fakeout"),
+    "london_asia_continuation": ("asia", "london", "continuation"),
     "ny_london_breakout": ("london", "ny", "breakout"),
     "ny_london_fakeout": ("london", "ny", "fakeout"),
+    "ny_london_continuation": ("london", "ny", "continuation"),
 }
 
 
@@ -110,6 +114,9 @@ def evaluate_symbol(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
         ref_range_atr = (ref_high - ref_low) / atr_now
         if ref_range_atr < cfg.min_reference_range_atr or ref_range_atr > cfg.max_reference_range_atr:
             continue
+        ref_bias = reference_direction(ref, ref_high, ref_low, atr_now, cfg)
+        if mode == "continuation" and ref_bias is None:
+            continue
         day_count = 0
         swept_high = False
         swept_low = False
@@ -133,6 +140,7 @@ def evaluate_symbol(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
                 atr=atr_i,
                 swept_high=swept_high,
                 swept_low=swept_low,
+                reference_bias=ref_bias,
                 breakout_buffer_atr=cfg.breakout_close_buffer_atr,
                 reclaim_buffer_atr=cfg.reclaim_close_buffer_atr,
             )
@@ -169,6 +177,7 @@ def audit_symbol_sessions(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
             "reference_bars": 0,
             "trade_bars": 0,
             "reference_range_atr": np.nan,
+            "reference_bias": "",
             "swept_high": 0,
             "swept_low": 0,
             "signal_attempts": 0,
@@ -202,6 +211,11 @@ def audit_symbol_sessions(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
         if ref_range_atr < cfg.min_reference_range_atr or ref_range_atr > cfg.max_reference_range_atr:
             rows.append(row)
             continue
+        ref_bias = reference_direction(ref, ref_high, ref_low, atr_now, cfg)
+        row["reference_bias"] = ref_bias or ""
+        if mode == "continuation" and ref_bias is None:
+            rows.append(row)
+            continue
 
         swept_high = False
         swept_low = False
@@ -227,6 +241,7 @@ def audit_symbol_sessions(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
                 atr=atr_i,
                 swept_high=swept_high,
                 swept_low=swept_low,
+                reference_bias=ref_bias,
                 breakout_buffer_atr=cfg.breakout_close_buffer_atr,
                 reclaim_buffer_atr=cfg.reclaim_close_buffer_atr,
             )
@@ -272,6 +287,7 @@ def session_range_signal(
     swept_low: bool,
     breakout_buffer_atr: float,
     reclaim_buffer_atr: float,
+    reference_bias: str | None = None,
 ) -> str | None:
     if mode == "breakout":
         if close > ref_high + breakout_buffer_atr * atr:
@@ -285,7 +301,33 @@ def session_range_signal(
         if swept_low and close > ref_low + reclaim_buffer_atr * atr and close >= ref_mid:
             return "long"
         return None
+    if mode == "continuation":
+        if reference_bias == "long" and close > ref_high + breakout_buffer_atr * atr:
+            return "long"
+        if reference_bias == "short" and close < ref_low - breakout_buffer_atr * atr:
+            return "short"
+        return None
     raise ValueError(f"unknown session range mode: {mode}")
+
+
+def reference_direction(ref: pd.DataFrame, ref_high: float, ref_low: float, atr: float, cfg: SessionRangeConfig) -> str | None:
+    if ref.empty or not np.isfinite(atr) or atr <= 0:
+        return None
+    ref_open = float(ref["open"].iloc[0])
+    ref_close = float(ref["close"].iloc[-1])
+    ref_range = ref_high - ref_low
+    if ref_range <= 0:
+        return None
+    body_atr = abs(ref_close - ref_open) / atr
+    if body_atr < cfg.min_reference_body_atr:
+        return None
+    close_location = (ref_close - ref_low) / ref_range
+    threshold = cfg.reference_close_location_threshold
+    if close_location >= threshold and ref_close > ref_open:
+        return "long"
+    if close_location <= 1.0 - threshold and ref_close < ref_open:
+        return "short"
+    return None
 
 
 def trade_row(
@@ -442,6 +484,9 @@ def output_suffix(cfg: SessionRangeConfig) -> str:
         f"tf{cfg.entry_tf}",
         f"ref{cfg.min_reference_range_atr:g}-{cfg.max_reference_range_atr:g}",
     ]
+    if cfg.setup.endswith("_continuation"):
+        parts.append(f"refloc{cfg.reference_close_location_threshold:g}")
+        parts.append(f"refbody{cfg.min_reference_body_atr:g}")
     if cfg.max_stress_cost_r is not None:
         parts.append(f"stresscost{cfg.max_stress_cost_r:g}r")
     if cfg.base_round_trip_pct != 0.0006:
@@ -501,6 +546,8 @@ def main() -> int:
     parser.add_argument("--max-reference-range-atr", type=float, default=6.0)
     parser.add_argument("--breakout-close-buffer-atr", type=float, default=0.15)
     parser.add_argument("--reclaim-close-buffer-atr", type=float, default=0.0)
+    parser.add_argument("--reference-close-location-threshold", type=float, default=0.7)
+    parser.add_argument("--min-reference-body-atr", type=float, default=0.5)
     parser.add_argument("--max-trades-per-symbol-day", type=int, default=1)
     parser.add_argument("--reuse-filtered-day-slot", action="store_true")
     parser.add_argument("--portfolio", action="store_true")
@@ -527,6 +574,8 @@ def main() -> int:
         max_reference_range_atr=args.max_reference_range_atr,
         breakout_close_buffer_atr=args.breakout_close_buffer_atr,
         reclaim_close_buffer_atr=args.reclaim_close_buffer_atr,
+        reference_close_location_threshold=args.reference_close_location_threshold,
+        min_reference_body_atr=args.min_reference_body_atr,
         max_trades_per_symbol_day=args.max_trades_per_symbol_day,
         filtered_candidate_uses_day_slot=not args.reuse_filtered_day_slot,
         run_label=args.run_label.strip(),
