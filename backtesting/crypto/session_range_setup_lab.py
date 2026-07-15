@@ -57,6 +57,7 @@ class SessionRangeConfig:
     entry_ema_alignments: tuple[str, ...] | None = None
     entry_ema_stacks: tuple[str, ...] | None = None
     first_trade_hour_directions: tuple[str, ...] | None = None
+    entry_hours_utc: tuple[int, ...] | None = None
     run_label: str = ""
 
 
@@ -606,6 +607,9 @@ def apply_filters(trades: pd.DataFrame, cfg: SessionRangeConfig) -> pd.DataFrame
     out = apply_feature_filter(out, "entry_ema_alignment", cfg.entry_ema_alignments)
     out = apply_feature_filter(out, "entry_ema_stack", cfg.entry_ema_stacks)
     out = apply_feature_filter(out, "first_trade_hour_direction", cfg.first_trade_hour_directions)
+    if cfg.entry_hours_utc:
+        hours = pd.to_datetime(out["entry_ts"], utc=True).dt.hour
+        out = out[hours.isin(cfg.entry_hours_utc)]
     return out.sort_values(["entry_ts", "symbol"]).reset_index(drop=True)
 
 
@@ -703,6 +707,8 @@ def output_suffix(cfg: SessionRangeConfig) -> str:
         parts.append("emastack-" + "-".join(cfg.entry_ema_stacks))
     if cfg.first_trade_hour_directions:
         parts.append("firsthour-" + "-".join(cfg.first_trade_hour_directions))
+    if cfg.entry_hours_utc:
+        parts.append("hours-" + "-".join(str(h) for h in cfg.entry_hours_utc))
     if cfg.run_label:
         parts.append(cfg.run_label)
     return "_".join(parts).replace(".", "p")
@@ -773,6 +779,11 @@ def parse_csv_tuple(value: str) -> tuple[str, ...] | None:
     return parsed or None
 
 
+def parse_int_tuple(value: str) -> tuple[int, ...] | None:
+    parsed = tuple(int(part.strip()) for part in str(value).split(",") if part.strip())
+    return parsed or None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Session range setup lab.")
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
@@ -797,6 +808,7 @@ def main() -> int:
     parser.add_argument("--entry-ema-alignments", default="", help="Comma-separated feature filter: aligned,opposed,flat,unknown.")
     parser.add_argument("--entry-ema-stacks", default="", help="Comma-separated feature filter: bullish,bearish,mixed,unknown.")
     parser.add_argument("--first-trade-hour-directions", default="", help="Comma-separated feature filter: up,down,flat,unknown.")
+    parser.add_argument("--entry-hours-utc", default="", help="Comma-separated UTC entry hours, e.g. 13,14,15,16.")
     parser.add_argument("--portfolio", action="store_true")
     parser.add_argument("--frequency-audit", action="store_true")
     parser.add_argument("--risk-pct", type=float, default=0.0025)
@@ -830,6 +842,7 @@ def main() -> int:
         entry_ema_alignments=parse_csv_tuple(args.entry_ema_alignments),
         entry_ema_stacks=parse_csv_tuple(args.entry_ema_stacks),
         first_trade_hour_directions=parse_csv_tuple(args.first_trade_hour_directions),
+        entry_hours_utc=parse_int_tuple(args.entry_hours_utc),
         run_label=args.run_label.strip(),
     )
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]

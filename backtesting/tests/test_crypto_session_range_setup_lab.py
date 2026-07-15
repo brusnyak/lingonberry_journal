@@ -8,6 +8,7 @@ from backtesting.crypto.session_range_setup_lab import (
     candidate_passes_filters,
     output_suffix,
     parse_csv_tuple,
+    parse_int_tuple,
     primary_session_blocker,
     reference_direction,
     session_range_signal,
@@ -164,6 +165,7 @@ def test_output_suffix_records_session_range_config():
         min_reference_range_atr=1.0,
         max_reference_range_atr=4.0,
         stress_round_trip_pct=0.004,
+        entry_hours_utc=(13, 14, 15, 16),
     )
 
     suffix = output_suffix(cfg)
@@ -171,6 +173,7 @@ def test_output_suffix_records_session_range_config():
     assert "ny_london_breakout" in suffix
     assert "ref1-4" in suffix
     assert "stressfee0p004" in suffix
+    assert "hours-13-14-15-16" in suffix
 
 
 def test_candidate_passes_filters_rejects_cost_before_day_slot():
@@ -233,3 +236,8 @@ def test_output_suffix_records_feature_filters():
 def test_parse_csv_tuple_returns_none_for_empty_input():
     assert parse_csv_tuple("") is None
     assert parse_csv_tuple("up, down") == ("up", "down")
+
+
+def test_parse_int_tuple_returns_none_for_empty_input():
+    assert parse_int_tuple("") is None
+    assert parse_int_tuple("13, 14,15") == (13, 14, 15)

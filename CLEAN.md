@@ -6273,3 +6273,76 @@ Read:
   the week starting `2026-06-29`.
 - Use the packet to label actual chart context before writing rules. The raw
   forward outcome only says where to look, not what rule is valid.
+
+## Phase 71 -- NY/London reversal research and filter validation (2026-07-15)
+
+External research checked:
+
+- Krohn, Mueller, Whelan -- `Foreign Exchange Fixings and Returns Around the
+  Clock`: FX returns reverse around major institutional benchmark fixings.
+- Breedon/Ranaldo -- `Intraday Patterns in FX Returns and Order Flow`: FX has
+  predictable time-of-day return/order-flow patterns.
+- Brauneis/Mestel et al. -- `The crypto world trades at tea time`: crypto has
+  pronounced intraday activity/volatility/liquidity patterns, with activity
+  peaking around `16:00-17:00 UTC`.
+
+Read: session-time reversal is a valid mechanism class to test. It does **not**
+validate raw breakout logic or generic ICT labels.
+
+Current bucket definitions:
+
+```text
+asia    00:00-06:59 UTC
+london  07:00-11:59 UTC
+ny      12:00-16:59 UTC
+late_us 17:00-23:59 UTC
+```
+
+Added a reusable `--entry-hours-utc` filter to
+`backtesting/crypto/session_range_setup_lab.py` so session ideas can be tested
+without hardcoding a new strategy.
+
+Recent-week packet anatomy:
+
+- ETH/XRP NY/London reversal winners cluster after early NY: mostly `13:00-16:00 UTC`.
+- Better winners usually appear after London short bias and first NY hour
+  `down` or `flat`.
+- Losses stop quickly; this points to missing confirmation/management, not bad
+  legacy stop placement.
+
+Filter grid on ETH+XRP, setup `ny_london_reversal`, RR `1.5`, normal stress
+costs:
+
+| Variant | 360d accepted | 360d PF/R | 720d accepted | 720d PF/R | 1080d accepted | 1080d PF/R | Read |
+|---------|--------------:|-----------|--------------:|-----------|---------------:|------------|------|
+| base | 79 | 0.70 / -15.34R | 124 | 0.57 / -38.12R | not kept | bad | reject |
+| `ref_short + first_down_flat` | 26 | 0.98 / -0.28R | 36 | 0.95 / -0.98R | 41 | 0.92 / -2.01R | nearly breakeven, not edge |
+| `hours14_16 + ref_short + first_down_flat` | 21 | 1.04 / +0.48R | 29 | 1.07 / +1.14R | 33 | 1.07 / +1.34R | weak survivor |
+
+By-symbol stress test for survivor (`14-16 UTC`, London short bias, first NY
+hour down/flat):
+
+| Symbol | Window | Normal PF/R | 2x cost with cap | 2x cost no cap | Read |
+|--------|--------|-------------|------------------|----------------|------|
+| ETH | 1080d | 0.77 / -3.22R | 0.34 / -2.44R | 0.49 / -11.38R | reject |
+| XRP | 1080d | 1.98 / +4.57R | 0.00 / -1.21R | 0.78 / -2.25R | research lead only |
+
+XRP target RR grid for survivor:
+
+| RR | 1080d PF | 1080d R | Read |
+|----|---------:|--------:|------|
+| 1.0 | 1.23 | +1.07R | too small |
+| 1.25 | 1.60 | +2.82R | okay |
+| 1.5 | 1.98 | +4.57R | best |
+| 1.75 | 0.76 | -1.93R | too far |
+| 2.0 | 0.89 | -0.93R | too far |
+
+Verdict:
+
+- Do **not** promote ETH/XRP NY reversal as a basket.
+- Do **not** chase raw NY/London breakout frequency; it is frequent and bad.
+- XRP-only NY/London reversal is a narrow research lead under normal costs, but
+  not deployment-ready because doubled costs break it.
+- Next useful test is manual review of XRP survivor trades plus an LTF
+  confirmation/entry-management variant. The goal is to reduce quick stopouts
+  without widening the already-good stop logic.
