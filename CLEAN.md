@@ -6171,3 +6171,58 @@ Next:
 3. Validate whether increasing minimum stop distance or requiring lower
    `stress_cost_r` improves 1080d and harsh-cost survivability without killing
    frequency.
+
+## Phase 69 -- Manual discovery packet for missed intraday setup research (2026-07-15)
+
+Built `backtesting/crypto/session_discovery_packet.py`.
+
+Purpose: step back from low-frequency accepted trades and review actual
+symbol-weeks manually. This is a research packet exporter, not another setup.
+
+Default symbols deliberately exclude DOGE because of the user's data-quality
+concern:
+
+```text
+BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT
+```
+
+Each symbol packet writes:
+
+- `*_bars.csv` -- 15m bars with session, ATR, EMA/VWAP, structure labels,
+  BOS/CHoCH, sweeps, structural stop/target context.
+- `*_sessions.csv` -- daily Asia/London/NY/Late-US summaries.
+- `*_candidates.csv` -- broad current setup candidates with forward outcome
+  columns and blank `manual_label` / `manual_reason` fields.
+- `*_review.md` -- quick review instructions and counts.
+
+Smoke command:
+
+```bash
+PYTHONPATH=. python -m backtesting.crypto.session_discovery_packet \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,DOGEUSDT \
+  --days 45 --recent-weeks 1 --entry-tf 15 \
+  --output-dir backtesting/results/crypto_session_discovery_packet_smoke
+```
+
+DOGE was passed intentionally and filtered out by the CLI guard. Output:
+`20` files for `5` symbols.
+
+Candidate counts in the smoke week:
+
+| Symbol | Candidates | Main read |
+|--------|-----------:|-----------|
+| BNBUSDT | 104 | many breakout candidates, few fakeouts/reversals |
+| BTCUSDT | 105 | many breakout candidates, NY reversal present |
+| ETHUSDT | 88 | mostly NY/London and London/Asia breakouts |
+| SOLUSDT | 66 | lower count, still enough for manual review |
+| XRPUSDT | 79 | balanced enough for review |
+
+Read:
+
+- Low accepted-trade frequency is partly a setup/filter issue, not a lack of
+  intraday price action.
+- The next useful step is manual labeling of a few symbol-weeks from these
+  packets: `valid_long`, `valid_short`, `skip`, `missed_move`, plus reason.
+- Only after labels are made should we convert patterns into deterministic
+  rules and run out-of-sample tests. Using the forward outcome columns while
+  inventing labels would contaminate the research.

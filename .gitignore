@@ -40,6 +40,7 @@ hermes/
 backtesting/results/*.html
 backtesting/results/crypto_path_setup_lab/
 backtesting/results/crypto_session_range_setup_lab*/
+backtesting/results/crypto_session_discovery_packet*/
 
 # ── Scratch / random text files ──
 qwen37.txt
