@@ -5,6 +5,7 @@ import pandas as pd
 from backtesting.crypto.event_atlas import _atr
 from backtesting.crypto.path_setup_lab import (
     PathSetupConfig,
+    entry_move_atr,
     find_followthrough_confirmation,
     find_displacement_confirmation,
     primary_frequency_blocker,
@@ -98,6 +99,12 @@ def test_output_suffix_records_non_default_entry_tf():
     assert "tf5" in output_suffix(cfg)
 
 
+def test_output_suffix_records_min_entry_move():
+    cfg = PathSetupConfig(min_entry_move_atr=1.25)
+
+    assert "entrymove1p25" in output_suffix(cfg)
+
+
 def test_path_extreme_stop_places_stop_behind_candle_extreme():
     bars = pd.DataFrame({
         "open": [100.0] * 20,
@@ -167,6 +174,19 @@ def test_find_followthrough_confirmation_requires_move_before_adverse_limit():
 
     assert long_i == 2
     assert blocked_i is None
+
+
+def test_entry_move_atr_is_directional():
+    bars = pd.DataFrame({
+        "open": [100.0, 101.0],
+        "high": [101.0, 103.0],
+        "low": [99.0, 100.0],
+        "close": [100.0, 102.0],
+    })
+    atr_values = _atr(bars, 1)
+
+    assert entry_move_atr(bars, atr_values, 0, 1, "long") > 0
+    assert entry_move_atr(bars, atr_values, 0, 1, "short") < 0
 
 
 def test_primary_frequency_blocker_orders_tradeable_before_signal_gaps():

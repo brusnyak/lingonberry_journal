@@ -5675,3 +5675,32 @@ Read:
   future comparison, but do not include it in the engine.
 - Next setup should be session-specific, not a weaker variant of Asia sweep:
   London continuation/fakeout or NY reversal after London displacement.
+
+## Phase 62 -- Momentum-gated displacement rejects outside Asia (2026-07-15)
+
+Added `--min-entry-move-atr` as a causal gate:
+
+- measures directional move from original signal close to actual confirmation
+  entry close;
+- known at entry time, so it is valid for filtering;
+- intended to test forensic buckets where strong post-signal movement looked
+  profitable in London/NY.
+
+Results:
+
+| Variant | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|---------:|----------:|------------:|-------:|------|
+| London+NY, entry move >= 1.50 ATR | 43 | 0.96 | -1.04R | 1.59% | reject |
+| London+NY, entry move >= 1.25 ATR | 57 | 0.96 | -1.45R | 1.56% | reject |
+| Asia, entry move >= 1.50 ATR | 16 | 0.79 | -1.75R | 1.18% | reject |
+
+Read:
+
+- Strong signal-to-entry movement does not create a second setup.
+- The forensic bucket was descriptive, not a tradable standalone edge.
+- Both follow-through and momentum-gated displacement are sweep-family
+  derivatives; both fail to become a robust second setup.
+- Next useful setup family should be different:
+  1. London range break/fakeout from the prior Asia range;
+  2. NY reversal/continuation after London displacement;
+  3. trend-continuation pullback using HTF direction + local CHOCH/BOS.

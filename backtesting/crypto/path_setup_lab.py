@@ -62,6 +62,7 @@ class PathSetupConfig:
     followthrough_bars: int = 2
     followthrough_atr: float = 0.5
     followthrough_max_adverse_atr: float = 0.5
+    min_entry_move_atr: float = 0.0
     run_label: str = ""
 
 
@@ -256,10 +257,13 @@ def signal_forensic_row(
         "confirmation_ts": entry_ts,
         "entry_ts": entry_ts,
         "entry_session_utc": session_bucket(entry_ts),
+        "entry_move_atr": entry_move_atr(bars, atr_values, signal_i, entry_i, direction),
         "entry": entry,
         "sl": sl,
         "tp": tp,
     }
+    if float(common["entry_move_atr"]) < cfg.min_entry_move_atr:
+        return {**common, **empty_outcome_fields("blocked_entry_move", signal_probe)}
     if entry_i >= len(bars) - 1 or not np.isfinite(sl):
         return {**common, **empty_outcome_fields("invalid_path", signal_probe)}
     risk = abs(entry - sl)
@@ -473,6 +477,22 @@ def post_direction_move_atr(
     return float(move / atr_now)
 
 
+def entry_move_atr(
+    bars: pd.DataFrame,
+    atr_values: pd.Series,
+    signal_i: int,
+    entry_i: int,
+    direction: str,
+) -> float:
+    atr_now = _atr_at(atr_values, signal_i)
+    if not np.isfinite(atr_now) or atr_now <= 0:
+        return np.nan
+    move = float(bars["close"].iat[entry_i]) - float(bars["close"].iat[signal_i])
+    if direction == "short":
+        move = -move
+    return float(move / atr_now)
+
+
 def _atr_at(atr_values: pd.Series, i: int) -> float:
     if i >= len(atr_values):
         return np.nan
@@ -554,6 +574,7 @@ def audit_symbol_frequency(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
             "invalid_path",
             "blocked_session",
             "blocked_cost",
+            "blocked_entry_move",
             "pre_portfolio_pass",
         ]:
             out[col] = 0
@@ -591,6 +612,7 @@ def audit_symbol_frequency(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
         "invalid_path",
         "blocked_session",
         "blocked_cost",
+        "blocked_entry_move",
         "pre_portfolio_pass",
     ]:
         if col not in out:
@@ -608,6 +630,7 @@ def _empty_frequency_days(days: pd.DataFrame) -> pd.DataFrame:
         "invalid_path",
         "blocked_session",
         "blocked_cost",
+        "blocked_entry_move",
         "pre_portfolio_pass",
     ]:
         out[col] = 0
@@ -631,6 +654,8 @@ def audit_call_stage(
 
     entry_ts = pd.Timestamp(bars["ts"].iat[entry_i]) if entry_i != signal_i else pd.Timestamp(call["ts"])
     direction = str(call["trade_direction"])
+    if entry_move_atr(bars, atr_values, signal_i, entry_i, direction) < cfg.min_entry_move_atr:
+        return "blocked_entry_move"
     entry = float(bars["close"].iat[entry_i])
     sl, tp = path_stop_target(
         bars,
@@ -668,7 +693,7 @@ def primary_frequency_blocker(row: pd.Series) -> str:
         return "accepted"
     if int(row.get("pre_portfolio_pass", 0)) > 0:
         return "portfolio_throttle"
-    for col in ["blocked_cost", "blocked_session", "invalid_path", "no_confirmation"]:
+    for col in ["blocked_cost", "blocked_entry_move", "blocked_session", "invalid_path", "no_confirmation"]:
         if int(row.get(col, 0)) > 0:
             return col
     if int(row.get("setup_signals", 0)) == 0 and int(row.get("raw_events", 0)) > 0:
@@ -725,6 +750,9 @@ def evaluate_symbol(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
             continue
         direction = str(call["trade_direction"])
         entry_ts = pd.Timestamp(bars["ts"].iat[i]) if i != signal_i else pd.Timestamp(call["ts"])
+        move_atr = entry_move_atr(bars, atr_values, signal_i, i, direction)
+        if move_atr < cfg.min_entry_move_atr:
+            continue
         entry = float(bars["close"].iat[i])
         sl, tp = path_stop_target(
             bars,
@@ -772,6 +800,7 @@ def evaluate_symbol(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
             "confirm_bars": cfg.confirm_bars,
             "require_reversal_close": cfg.require_reversal_close,
             "displacement_atr": cfg.displacement_atr,
+            "entry_move_atr": move_atr,
             "gross_r": gross_r,
             "base_cost_r": base_cost_r,
             "stress_cost_r": stress_cost_r,
@@ -965,6 +994,8 @@ def output_suffix(cfg: PathSetupConfig) -> str:
         parts.append(f"stressfee{cfg.stress_round_trip_pct:g}")
     if cfg.max_stress_cost_r is not None:
         parts.append(f"stresscost{cfg.max_stress_cost_r:g}r")
+    if cfg.min_entry_move_atr > 0:
+        parts.append(f"entrymove{cfg.min_entry_move_atr:g}")
     if cfg.include_sweep_reclaim_long:
         parts.append("with-sweep-long")
     if cfg.confirm_bars:
@@ -1017,6 +1048,7 @@ def write_frequency_report(daily: pd.DataFrame, output: Path) -> None:
             invalid_path=("invalid_path", "sum"),
             blocked_session=("blocked_session", "sum"),
             blocked_cost=("blocked_cost", "sum"),
+            blocked_entry_move=("blocked_entry_move", "sum"),
             pre_portfolio_pass=("pre_portfolio_pass", "sum"),
             portfolio_accepted=("portfolio_accepted", "sum"),
         ).reset_index().sort_values("symbol_days", ascending=False)
@@ -1038,6 +1070,7 @@ def write_frequency_report(daily: pd.DataFrame, output: Path) -> None:
             "- `invalid_path`: confirmation existed, but stop/outcome geometry was not tradable.",
             "- `blocked_session`: tradable path existed outside the configured sessions.",
             "- `blocked_cost`: tradable path existed but stress cost in R was too high.",
+            "- `blocked_entry_move`: confirmation existed but signal-to-entry move was too weak.",
             "- `portfolio_throttle`: trade passed setup gates but portfolio risk rules skipped it.",
         ])
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1157,6 +1190,7 @@ def main() -> int:
     parser.add_argument("--followthrough-bars", type=int, default=2)
     parser.add_argument("--followthrough-atr", type=float, default=0.5)
     parser.add_argument("--followthrough-max-adverse-atr", type=float, default=0.5)
+    parser.add_argument("--min-entry-move-atr", type=float, default=0.0)
     parser.add_argument("--portfolio", action="store_true")
     parser.add_argument("--frequency-audit", action="store_true")
     parser.add_argument("--signal-forensics", action="store_true")
@@ -1194,6 +1228,7 @@ def main() -> int:
         followthrough_bars=args.followthrough_bars,
         followthrough_atr=args.followthrough_atr,
         followthrough_max_adverse_atr=args.followthrough_max_adverse_atr,
+        min_entry_move_atr=args.min_entry_move_atr,
         run_label=args.run_label.strip(),
     )
     trades, summary = run_path_setup_lab(symbols, config=cfg)
