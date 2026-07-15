@@ -5402,3 +5402,51 @@ Read:
   2. run rolling walk-forward by 30/60/90d windows and identify bad regimes;
   3. test BNB+XRP only vs BNB+DOGE+XRP;
   4. test stricter confirmation on DOGE only or remove DOGE if it remains weak.
+
+## Phase 57 -- BNB+XRP Asia sleeve improves the lead (2026-07-15)
+
+Follow-up falsification after Phase 56:
+
+- Removed DOGE from the current best sleeve.
+- Tested DOGE with stricter displacement confirmation.
+- Kept the same stop model, cost cap, Asia session, RR 1.5, portfolio throttles,
+  and 0.25% risk per trade.
+
+### BNB+XRP only
+
+| Window | Candidates | Accepted | Stress PF | Portfolio R | Max DD | Rolling read |
+|--------|-----------:|---------:|----------:|------------:|-------:|--------------|
+| 360d | 54 | 53 | 1.43 | +10.76R | 0.93% | 23/24 positive stress windows |
+| 180d | 24 | 24 | 1.66 | +6.43R | 0.58% | 10/10 positive stress windows |
+| 90d | 10 | 10 | 1.81 | +3.02R | 0.35% | 4/4 positive stress windows |
+| 60d | 9 | 9 | 2.59 | +4.14R | 0.35% | 2/2 positive stress windows |
+| 30d | 3 | 3 | inf | +4.04R | 0.00% | sample too small |
+
+360d symbol split:
+
+| Symbol | Trades | Win rate | Stress PF | Stress avg R | Stop rate | Expiry rate |
+|--------|-------:|---------:|----------:|-------------:|----------:|------------:|
+| BNBUSDT | 22 | 59.09% | 2.05 | +0.40R | 31.82% | 9.09% |
+| XRPUSDT | 32 | 46.88% | 1.20 | +0.10R | 43.75% | 9.38% |
+| ALL | 54 | 51.85% | 1.48 | +0.22R | 38.89% | 9.26% |
+
+### DOGE stricter confirmation
+
+| Variant | Candidates | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|-----------:|---------:|----------:|------------:|-------:|------|
+| DOGE, displacement ATR 1.25 | 12 | 12 | 0.71 | -2.40R | 0.95% | reject |
+| DOGE, displacement ATR 1.50 | 9 | 9 | 0.61 | -2.72R | 1.03% | reject |
+
+Read:
+
+- BNB+XRP Asia sweep-reclaim-displacement is the current best research lead.
+- DOGE is not a quality add right now. It helped frequency in Phase 56 but
+  reduced quality and gets worse when confirmation is stricter.
+- The setup is still not deployment-ready: the 360d sample has only 53 accepted
+  trades across two symbols, and the 30/60/90d windows are too small to prove
+  robustness.
+- Next useful work is not more random filters. It is:
+  1. export/review all 53 BNB+XRP trades with before/after structure context;
+  2. test frequency expansion through additional high-quality symbols/sessions;
+  3. add a blocked-day/candidate audit so we know why valid-looking days do not
+     become trades.
