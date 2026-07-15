@@ -5493,3 +5493,72 @@ Read:
   must be tested as a setup variant, not blended into the current lead.
 - Cost remains a real execution constraint. Do not remove the stress cost gate
   just to make frequency look better.
+
+## Phase 59 -- Setup-signal forensics and confirmation quality (2026-07-15)
+
+Added `--signal-forensics` to `path_setup_lab.py`.
+
+Purpose:
+
+- export every selected setup signal, not only accepted trades;
+- label the exact gate: `no_confirmation`, `invalid_path`,
+  `blocked_session`, `blocked_cost`, `portfolio_throttle`, `accepted`;
+- include pre/post price-action fields: pre-8-bar move/range in ATR, signal
+  body in ATR, close location, 4-bar directional follow-through, stop/cost,
+  MFE/MAE, exit reason when computable;
+- match accepted rows by `symbol + signal_ts + entry_ts + direction` so duplicate
+  setup signals do not inflate accepted counts.
+
+BNB+XRP Asia 360d, old confirmation close-location 0.60:
+
+| Stage | Signals | Stress PF | Avg stress R | Read |
+|-------|--------:|----------:|-------------:|------|
+| no_confirmation | 963 | n/a | n/a | most blocked signals did not confirm |
+| blocked_session | 397 | 0.56 | -0.34R | session filter is currently justified |
+| blocked_cost | 80 | 0.46 | -0.48R | stress-cost gate is justified |
+| accepted | 53 | 1.43 | +0.20R | current baseline lead |
+| invalid_path | 38 | n/a | n/a | mostly too-tight/invalid path |
+| portfolio_throttle | 1 | n/a | +1.35R | one duplicate/risk-throttled winner |
+
+Important read:
+
+- The rejected groups are not secretly profitable. `blocked_session` and
+  `blocked_cost` both lose money under the same outcome model.
+- `no_confirmation` median 4-bar directional follow-through is negative, so the
+  confirmation gate is doing real work. It should not be loosened blindly.
+- The best improvement came from stronger confirmation close location, not more
+  time or larger displacement body.
+
+### Confirmation variants
+
+BNB+XRP Asia, 360d:
+
+| Variant | Accepted | Stress PF | Portfolio R | Max DD | Win rate | Read |
+|---------|---------:|----------:|------------:|-------:|---------:|------|
+| close location 0.60 | 53 | 1.43 | +10.76R | 0.93% | 50.94% | previous lead |
+| close location 0.75 | 44 | 1.77 | +13.82R | 0.82% | 54.55% | new quality lead |
+| confirm 2 bars | 31 | 1.63 | +8.30R | 0.87% | 51.61% | good but lower return |
+| confirm 6 bars | 70 | 1.05 | +1.91R | 1.61% | 42.86% | reject; late confirmations add noise |
+| displacement ATR 1.00 | 30 | 1.11 | +1.54R | 1.73% | 40.00% | reject |
+| displacement ATR 1.25 | 18 | 0.63 | -3.92R | 1.50% | 27.78% | reject |
+| RR 2.0 | 52 | 1.15 | +4.47R | 2.66% | 36.54% | reject |
+
+Close-location 0.75 validation:
+
+| Window | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|--------|---------:|----------:|------------:|-------:|------|
+| 360d | 44 | 1.77 | +13.82R | 0.82% | best quality lead |
+| 180d | 21 | 2.04 | +7.49R | 0.58% | holds, but thin |
+| 90d | 7 | 4.20 | +4.08R | 0.28% | positive, too small |
+| 60d | 6 | 34.45 | +5.20R | 0.04% | positive, too small |
+| 30d | 3 | inf | +4.04R | 0.00% | meaningless sample |
+
+Read:
+
+- New best research lead: BNB+XRP Asia sweep-reclaim-displacement with
+  `displacement_atr=0.75`, `displacement_close_location=0.75`, `confirm_bars=4`,
+  stress cost cap `<=0.25R`, RR `1.5`.
+- This improves PF/DD/win rate but cuts frequency from 53 to 44 accepted trades
+  over 360d. It is better quality, not deployment-ready.
+- Next work: export the close-location 0.75 trades/signals for UI review, then
+  test controlled symbol/session expansion using this stricter confirmation.

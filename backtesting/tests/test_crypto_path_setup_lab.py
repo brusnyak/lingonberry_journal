@@ -10,8 +10,11 @@ from backtesting.crypto.path_setup_lab import (
     reversal_confirmed,
     select_expansion_exhaustion_calls,
     select_sweep_reclaim_calls,
+    signal_forensic_row,
+    output_suffix,
 )
 from backtesting.crypto.path_setup_lab import path_stop_target
+from backtesting.features.structure import StructureConfig, build_structure_index
 
 
 def test_select_expansion_exhaustion_calls_maps_expected_fade_directions():
@@ -54,6 +57,17 @@ def test_select_sweep_reclaim_calls_maps_reclaim_direction():
 
     assert selected["path_context"].tolist() == ["sweep_reclaim_long", "sweep_reclaim_short"]
     assert selected["trade_direction"].tolist() == ["long", "short"]
+
+
+def test_output_suffix_records_displacement_close_location():
+    cfg = PathSetupConfig(
+        setup="sweep_reclaim_displacement",
+        displacement_atr=0.75,
+        displacement_close_location=0.75,
+    )
+
+    assert "disp0p75" in output_suffix(cfg)
+    assert "close0p75" in output_suffix(cfg)
 
 
 def test_path_extreme_stop_places_stop_behind_candle_extreme():
@@ -119,3 +133,30 @@ def test_primary_frequency_blocker_orders_tradeable_before_signal_gaps():
     assert primary_frequency_blocker(row) == "portfolio_throttle"
     assert primary_frequency_blocker(pd.Series({"setup_signals": 0, "raw_events": 2})) == "no_setup_signal"
     assert primary_frequency_blocker(pd.Series({"setup_signals": 0, "raw_events": 0})) == "no_raw_event"
+
+
+def test_signal_forensic_row_marks_no_confirmation_stage():
+    ts = pd.date_range("2026-01-01", periods=6, freq="15min", tz="UTC")
+    bars = pd.DataFrame({
+        "ts": ts,
+        "open": [100.0, 100.1, 100.0, 100.1, 100.0, 100.1],
+        "high": [101.0, 101.0, 101.0, 101.0, 101.0, 101.0],
+        "low": [99.0, 99.0, 99.0, 99.0, 99.0, 99.0],
+        "close": [100.0, 100.1, 100.0, 100.1, 100.0, 100.1],
+    })
+    atr_values = _atr(bars, 1)
+    structure = build_structure_index(bars, StructureConfig(left=1, right=1))
+    call = pd.Series({
+        "symbol": "SYNTH",
+        "entry_i": 0,
+        "ts": ts[0],
+        "trade_direction": "long",
+        "path_context": "sweep_reclaim_long",
+    })
+    cfg = PathSetupConfig(setup="sweep_reclaim_displacement", confirm_bars=2, displacement_atr=2.0)
+
+    row = signal_forensic_row(call, bars, structure, atr_values, cfg, set())
+
+    assert row["stage"] == "no_confirmation"
+    assert row["entry"] != row["entry"]
+    assert row["post_4bar_direction_move_atr"] == row["post_4bar_direction_move_atr"]

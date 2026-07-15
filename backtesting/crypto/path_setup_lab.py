@@ -101,6 +101,322 @@ def run_frequency_audit(
     return daily.sort_values(["symbol", "day"]).reset_index(drop=True)
 
 
+def build_signal_forensics(
+    symbols: list[str],
+    *,
+    config: PathSetupConfig,
+    accepted: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    accepted_keys = _accepted_trade_keys(accepted)
+    rows = []
+    for symbol in symbols:
+        rows.extend(signal_forensics_symbol(symbol, config, accepted_keys).to_dict("records"))
+    if not rows:
+        return pd.DataFrame()
+    data = pd.DataFrame(rows)
+    data["portfolio_accepted"] = data.apply(
+        lambda row: _trade_key(row.get("symbol"), row.get("signal_ts"), row.get("entry_ts"), row.get("direction")) in accepted_keys,
+        axis=1,
+    )
+    data["review_stage"] = data["stage"]
+    data.loc[data["portfolio_accepted"], "review_stage"] = "accepted"
+    data.loc[(data["stage"] == "pre_portfolio_pass") & ~data["portfolio_accepted"], "review_stage"] = "portfolio_throttle"
+    return data.sort_values(["signal_ts", "symbol"]).reset_index(drop=True)
+
+
+def signal_forensics_symbol(
+    symbol: str,
+    cfg: PathSetupConfig,
+    accepted_keys: set[tuple[str, str, str, str]] | None = None,
+) -> pd.DataFrame:
+    bars = load_crypto(symbol, tf=cfg.entry_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True)
+    if bars.empty:
+        return pd.DataFrame()
+    bars["ts"] = pd.to_datetime(bars["ts"], utc=True)
+    calls = selected_setup_calls_for_symbol(symbol, bars, cfg)
+    if calls.empty:
+        return pd.DataFrame()
+
+    structure = build_structure_index(bars, StructureConfig(left=2, right=2))
+    atr_values = _atr(bars, 14)
+    rows = [
+        signal_forensic_row(call, bars, structure, atr_values, cfg, accepted_keys or set())
+        for _, call in calls.iterrows()
+    ]
+    return pd.DataFrame(rows)
+
+
+def selected_setup_calls_for_symbol(symbol: str, bars: pd.DataFrame, cfg: PathSetupConfig) -> pd.DataFrame:
+    path_cfg = PathContextConfig(
+        days=cfg.days,
+        exchange=cfg.exchange,
+        source=cfg.source,
+        entry_tf=cfg.entry_tf,
+        lookback_bars=cfg.lookback_bars,
+        expansion_atr=cfg.expansion_atr,
+        direction_mode="fade",
+    )
+    context = build_path_context(symbol, bars, path_cfg)
+    calls = sample_path_calls(context, sample_mode="events")
+    if calls.empty:
+        return pd.DataFrame()
+    foundation = build_foundation_states(
+        symbol,
+        FoundationDirectionConfig(
+            days=cfg.days,
+            exchange=cfg.exchange,
+            source=cfg.source,
+            entry_tf=cfg.entry_tf,
+        ),
+    )
+    if not foundation.empty:
+        calls = calls.merge(
+            foundation[["symbol", "ts", "foundation_state", "direction"]].rename(columns={"direction": "foundation_direction"}),
+            on=["symbol", "ts"],
+            how="left",
+        )
+    return select_setup_calls(calls, cfg)
+
+
+def signal_forensic_row(
+    call: pd.Series,
+    bars: pd.DataFrame,
+    structure: pd.DataFrame,
+    atr_values: pd.Series,
+    cfg: PathSetupConfig,
+    accepted_keys: set[tuple[str, str, str, str]],
+) -> dict:
+    symbol = str(call.get("symbol", ""))
+    signal_i = int(call["entry_i"])
+    signal_ts = pd.Timestamp(call["ts"])
+    direction = str(call["trade_direction"])
+    base = {
+        "symbol": symbol,
+        "setup": cfg.setup,
+        "signal_ts": signal_ts,
+        "signal_i": signal_i,
+        "signal_session_utc": session_bucket(signal_ts),
+        "direction": direction,
+        "path_context": call.get("path_context", ""),
+        "foundation_state": call.get("foundation_state", ""),
+        "foundation_direction": call.get("foundation_direction", ""),
+        "pre_8bar_move_atr": window_move_atr(bars, atr_values, signal_i, lookback=8),
+        "pre_8bar_range_atr": window_range_atr(bars, atr_values, signal_i, lookback=8),
+        "signal_body_atr": candle_body_atr(bars, atr_values, signal_i),
+        "signal_close_location": candle_close_location(bars, signal_i),
+        "post_4bar_direction_move_atr": post_direction_move_atr(bars, atr_values, signal_i, direction, bars_forward=4),
+    }
+
+    confirm_i = confirmed_entry_index(call, bars, atr_values, cfg)
+    if confirm_i is None:
+        return {
+            **base,
+            "stage": "no_confirmation",
+            "confirmation_ts": pd.NaT,
+            "entry_ts": pd.NaT,
+            "entry_session_utc": "",
+            "entry": np.nan,
+            "sl": np.nan,
+            "tp": np.nan,
+            "stop_pct": np.nan,
+            "stress_cost_r": np.nan,
+            "gross_r": np.nan,
+            "stress_net_r": np.nan,
+            "mfe_r": np.nan,
+            "mae_r": np.nan,
+            "bars_to_exit": np.nan,
+            "exit_kind": "",
+            "portfolio_accepted": False,
+        }
+
+    entry_i = int(confirm_i)
+    entry_ts = pd.Timestamp(bars["ts"].iat[entry_i])
+    entry = float(bars["close"].iat[entry_i])
+    sl, tp = path_stop_target(
+        bars,
+        signal_i if cfg.stop_model == "path_extreme" else entry_i,
+        direction,
+        entry,
+        cfg.min_rr,
+        atr_values,
+        stop_model=cfg.stop_model,
+        stop_buffer_atr=cfg.stop_buffer_atr,
+        structure=structure,
+        entry_ts=entry_ts,
+    )
+    common = {
+        **base,
+        "confirmation_ts": entry_ts,
+        "entry_ts": entry_ts,
+        "entry_session_utc": session_bucket(entry_ts),
+        "entry": entry,
+        "sl": sl,
+        "tp": tp,
+    }
+    if entry_i >= len(bars) - 1 or not np.isfinite(sl):
+        return {**common, **empty_outcome_fields("invalid_path")}
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return {**common, **empty_outcome_fields("invalid_path")}
+    stop_pct = risk / entry * 100.0
+    if stop_pct < cfg.min_stop_pct:
+        return {**common, **empty_outcome_fields("invalid_path"), "stop_pct": stop_pct}
+
+    base_cost_r = cfg.base_round_trip_pct * entry / risk
+    stress_cost_r = cfg.stress_round_trip_pct * entry / risk
+    stage = "pre_portfolio_pass"
+    if cfg.sessions and session_bucket(entry_ts) not in cfg.sessions:
+        stage = "blocked_session"
+    elif cfg.max_stress_cost_r is not None and stress_cost_r > cfg.max_stress_cost_r:
+        stage = "blocked_cost"
+
+    outcome = walk_structural_outcome(bars, entry_i, direction, sl, tp, horizon=cfg.horizon_bars, track_excursion=True)
+    if outcome is None:
+        return {**common, **empty_outcome_fields("invalid_path"), "stop_pct": stop_pct, "stress_cost_r": stress_cost_r}
+    gross_r = float(outcome["r_multiple"])
+    accepted = _trade_key(symbol, signal_ts, entry_ts, direction) in accepted_keys
+    return {
+        **common,
+        "stage": stage,
+        "stop_pct": stop_pct,
+        "target_pct": abs(tp - entry) / entry * 100.0,
+        "planned_rr": abs(tp - entry) / risk,
+        "base_cost_r": base_cost_r,
+        "stress_cost_r": stress_cost_r,
+        "gross_r": gross_r,
+        "base_net_r": gross_r - base_cost_r,
+        "stress_net_r": gross_r - stress_cost_r,
+        "mfe_r": float(outcome.get("mfe_r", np.nan)),
+        "mae_r": float(outcome.get("mae_r", np.nan)),
+        "bars_to_exit": int(outcome.get("bars_to_exit", cfg.horizon_bars)),
+        "exit_kind": str(outcome.get("exit_reason", "expiry")),
+        "portfolio_accepted": accepted,
+    }
+
+
+def confirmed_entry_index(call: pd.Series, bars: pd.DataFrame, atr_values: pd.Series, cfg: PathSetupConfig) -> int | None:
+    signal_i = int(call["entry_i"])
+    direction = str(call["trade_direction"])
+    if cfg.setup == "sweep_reclaim_displacement":
+        return find_displacement_confirmation(
+            bars,
+            signal_i,
+            direction,
+            atr_values,
+            max_bars=max(1, cfg.confirm_bars or 4),
+            displacement_atr=cfg.displacement_atr,
+            close_location=cfg.displacement_close_location,
+        )
+    entry_i = signal_i + cfg.confirm_bars
+    if cfg.confirm_bars and cfg.require_reversal_close and not reversal_confirmed(bars, signal_i, entry_i, direction):
+        return None
+    return entry_i
+
+
+def empty_outcome_fields(stage: str) -> dict:
+    return {
+        "stage": stage,
+        "stop_pct": np.nan,
+        "target_pct": np.nan,
+        "planned_rr": np.nan,
+        "base_cost_r": np.nan,
+        "stress_cost_r": np.nan,
+        "gross_r": np.nan,
+        "base_net_r": np.nan,
+        "stress_net_r": np.nan,
+        "mfe_r": np.nan,
+        "mae_r": np.nan,
+        "bars_to_exit": np.nan,
+        "exit_kind": "",
+        "portfolio_accepted": False,
+    }
+
+
+def window_move_atr(bars: pd.DataFrame, atr_values: pd.Series, end_i: int, *, lookback: int) -> float:
+    start = max(0, end_i - lookback)
+    if end_i <= start:
+        return np.nan
+    atr_now = _atr_at(atr_values, end_i)
+    if not np.isfinite(atr_now) or atr_now <= 0:
+        return np.nan
+    return float((float(bars["close"].iat[end_i]) - float(bars["close"].iat[start])) / atr_now)
+
+
+def window_range_atr(bars: pd.DataFrame, atr_values: pd.Series, end_i: int, *, lookback: int) -> float:
+    start = max(0, end_i - lookback)
+    window = bars.iloc[start : end_i + 1]
+    atr_now = _atr_at(atr_values, end_i)
+    if window.empty or not np.isfinite(atr_now) or atr_now <= 0:
+        return np.nan
+    return float((float(window["high"].max()) - float(window["low"].min())) / atr_now)
+
+
+def candle_body_atr(bars: pd.DataFrame, atr_values: pd.Series, i: int) -> float:
+    atr_now = _atr_at(atr_values, i)
+    if not np.isfinite(atr_now) or atr_now <= 0:
+        return np.nan
+    return float(abs(float(bars["close"].iat[i]) - float(bars["open"].iat[i])) / atr_now)
+
+
+def candle_close_location(bars: pd.DataFrame, i: int) -> float:
+    high = float(bars["high"].iat[i])
+    low = float(bars["low"].iat[i])
+    if high <= low:
+        return np.nan
+    return float((float(bars["close"].iat[i]) - low) / (high - low))
+
+
+def post_direction_move_atr(
+    bars: pd.DataFrame,
+    atr_values: pd.Series,
+    signal_i: int,
+    direction: str,
+    *,
+    bars_forward: int,
+) -> float:
+    end_i = min(signal_i + bars_forward, len(bars) - 1)
+    if end_i <= signal_i:
+        return np.nan
+    atr_now = _atr_at(atr_values, signal_i)
+    if not np.isfinite(atr_now) or atr_now <= 0:
+        return np.nan
+    move = float(bars["close"].iat[end_i]) - float(bars["close"].iat[signal_i])
+    if direction == "short":
+        move = -move
+    return float(move / atr_now)
+
+
+def _atr_at(atr_values: pd.Series, i: int) -> float:
+    if i >= len(atr_values):
+        return np.nan
+    value = float(atr_values.iat[i])
+    return value if np.isfinite(value) else np.nan
+
+
+def _accepted_trade_keys(accepted: pd.DataFrame | None) -> set[tuple[str, str, str, str]]:
+    if accepted is None or accepted.empty:
+        return set()
+    return {
+        _trade_key(row.symbol, row.signal_ts, row.entry_ts, row.direction)
+        for row in accepted[["symbol", "signal_ts", "entry_ts", "direction"]].itertuples(index=False)
+    }
+
+
+def _trade_key(symbol: object, signal_ts: object, entry_ts: object, direction: object) -> tuple[str, str, str, str]:
+    return str(symbol), _ts_key(signal_ts), _ts_key(entry_ts), str(direction)
+
+
+def _ts_key(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.isoformat()
+
+
 def audit_symbol_frequency(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
     bars = load_crypto(symbol, tf=cfg.entry_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True)
     if bars.empty:
@@ -559,6 +875,7 @@ def output_suffix(cfg: PathSetupConfig) -> str:
         parts.append("reversal-close")
     if cfg.setup == "sweep_reclaim_displacement":
         parts.append(f"disp{cfg.displacement_atr:g}")
+        parts.append(f"close{cfg.displacement_close_location:g}")
     if cfg.run_label:
         parts.append(cfg.run_label)
     return "_".join(parts).replace(".", "p")
@@ -625,6 +942,60 @@ def write_frequency_report(daily: pd.DataFrame, output: Path) -> None:
     output.write_text("\n".join(lines) + "\n")
 
 
+def write_signal_forensics_report(forensics: pd.DataFrame, output: Path) -> None:
+    lines = ["# Path Setup Signal Forensics", "", "## Stage Summary", ""]
+    if forensics.empty:
+        lines.append("_empty_")
+    else:
+        summary = forensics.groupby("review_stage").agg(
+            signals=("signal_ts", "count"),
+            target_rate=("exit_kind", lambda s: float((s == "target").mean())),
+            stop_rate=("exit_kind", lambda s: float((s == "stop").mean())),
+            expiry_rate=("exit_kind", lambda s: float((s == "expiry").mean())),
+            avg_stress_r=("stress_net_r", "mean"),
+            median_stop_pct=("stop_pct", "median"),
+            median_stress_cost_r=("stress_cost_r", "median"),
+            median_pre_move_atr=("pre_8bar_move_atr", "median"),
+            median_post_4bar_move_atr=("post_4bar_direction_move_atr", "median"),
+        ).reset_index().sort_values("signals", ascending=False)
+        lines.extend(_markdown_table(summary))
+
+        lines.extend(["", "## By Symbol And Stage", ""])
+        by_symbol = forensics.groupby(["symbol", "review_stage"]).agg(
+            signals=("signal_ts", "count"),
+            avg_stress_r=("stress_net_r", "mean"),
+            target_rate=("exit_kind", lambda s: float((s == "target").mean())),
+            stop_rate=("exit_kind", lambda s: float((s == "stop").mean())),
+        ).reset_index().sort_values(["symbol", "signals"], ascending=[True, False])
+        lines.extend(_markdown_table(by_symbol))
+
+        lines.extend(["", "## Cost And Session Reads", ""])
+        cost = forensics[forensics["review_stage"].eq("blocked_cost")]
+        session = forensics[forensics["review_stage"].eq("blocked_session")]
+        accepted = forensics[forensics["review_stage"].eq("accepted")]
+        rows = []
+        for name, frame in [("blocked_cost", cost), ("blocked_session", session), ("accepted", accepted)]:
+            rows.append({
+                "bucket": name,
+                "signals": len(frame),
+                "stress_pf": profit_factor(frame["stress_net_r"].dropna().to_numpy(dtype=float)) if len(frame) else np.nan,
+                "avg_stress_r": float(frame["stress_net_r"].mean()) if len(frame) else np.nan,
+                "median_stop_pct": float(frame["stop_pct"].median()) if len(frame) else np.nan,
+                "median_stress_cost_r": float(frame["stress_cost_r"].median()) if len(frame) else np.nan,
+            })
+        lines.extend(_markdown_table(pd.DataFrame(rows)))
+
+        lines.extend(["", "## Read", ""])
+        lines.extend([
+            "- Use the CSV to review individual rejected setup signals, not just accepted trades.",
+            "- `blocked_session` rows show whether non-Asia signals had edge before promoting a wider session.",
+            "- `no_confirmation` rows show whether displacement confirmation is too strict or correctly blocking chop.",
+            "- `blocked_cost` rows show whether the stress-cost gate blocks winners or correctly blocks untradable tight stops.",
+        ])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines) + "\n")
+
+
 def _markdown_table(df: pd.DataFrame) -> list[str]:
     if df.empty:
         return ["_empty_"]
@@ -659,6 +1030,7 @@ def main() -> int:
     parser.add_argument("--displacement-close-location", type=float, default=0.6)
     parser.add_argument("--portfolio", action="store_true")
     parser.add_argument("--frequency-audit", action="store_true")
+    parser.add_argument("--signal-forensics", action="store_true")
     parser.add_argument("--risk-pct", type=float, default=0.0025)
     parser.add_argument("--max-open", type=int, default=3)
     parser.add_argument("--max-open-per-symbol", type=int, default=1)
@@ -718,6 +1090,10 @@ def main() -> int:
         daily = run_frequency_audit(symbols, config=cfg, accepted=accepted)
         daily.to_csv(out_dir / f"{suffix}_frequency_daily.csv", index=False)
         write_frequency_report(daily, out_dir / f"{suffix}_frequency_report.md")
+    if args.signal_forensics:
+        forensics = build_signal_forensics(symbols, config=cfg, accepted=accepted)
+        forensics.to_csv(out_dir / f"{suffix}_signal_forensics.csv", index=False)
+        write_signal_forensics_report(forensics, out_dir / f"{suffix}_signal_forensics_report.md")
     print(summary.to_string(index=False))
     if not windows.empty:
         print("\nRolling windows")
