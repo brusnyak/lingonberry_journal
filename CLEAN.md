@@ -6113,3 +6113,61 @@ Next:
 2. Compare filtered fakeout vs baseline in one portfolio bundle.
 3. Keep ETH reversal as a separate asset-specific lead; do not mix it into the
    broad engine until it has walk-forward validation.
+
+## Phase 68 -- Filtered London Asia fakeout becomes research baseline, not deployment ready (2026-07-15)
+
+Validated the best Phase 67 fakeout gate:
+
+```bash
+--setup london_asia_fakeout
+--symbols ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT
+--reference-biases missing,short
+--first-trade-hour-directions up,down,flat
+--min-rr 1.5
+--max-stress-cost-r 0.25
+```
+
+Normal modeled stress costs:
+
+| Window | Accepted | Stress PF | Portfolio R | Max DD | Win rate | Read |
+|--------|---------:|----------:|------------:|-------:|---------:|------|
+| 180d | 33 | 2.26 | +15.32R | 1.24% | 63.64% | strong, thin |
+| 360d | 58 | 2.21 | +26.05R | 1.24% | 62.07% | strong |
+| 720d | 98 | 1.52 | +24.53R | 3.25% | 55.10% | good |
+| 1080d | 132 | 1.27 | +18.91R | 3.25% | 50.00% | positive but weakens |
+
+Baseline comparison:
+
+| Variant | Window | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|--------|---------:|----------:|------------:|-------:|------|
+| baseline Top4 fakeout | 720d | 154 | 1.22 | +18.23R | 4.74% | weaker |
+| filtered Top4 fakeout | 720d | 98 | 1.52 | +24.53R | 3.25% | better |
+| baseline Top4 fakeout | 1080d | 207 | 1.10 | +11.79R | 4.74% | weak |
+| filtered Top4 fakeout | 1080d | 132 | 1.27 | +18.91R | 3.25% | better |
+
+Doubled stress-cost checks:
+
+| Cost model | Window | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|------------|--------|---------:|----------:|------------:|-------:|------|
+| 2x cost, no effective cost cap | 720d | 153 | 0.83 | -17.02R | 6.50% | fails true harsh costs |
+| 2x cost, no effective cost cap | 1080d | 218 | 0.66 | -54.14R | 15.19% | fails badly |
+| 2x cost, `stress_cost_r<=0.25` cap | 720d | 21 | 1.70 | +5.97R | 1.46% | survivors only |
+| 2x cost, `stress_cost_r<=0.25` cap | 1080d | 35 | 1.51 | +7.56R | 1.46% | survives but too thin |
+
+Read:
+
+- The filtered London Asia fakeout is the new research baseline.
+- It clearly improves the unfiltered fakeout on normal modeled stress costs.
+- It weakens over 1080d but remains positive.
+- It is not deployment-ready because true doubled costs without cost filtering
+  turn it negative.
+- The practical blocker is still stop/cost geometry: profitable samples are
+  those where costs remain small relative to R.
+
+Next:
+
+1. Treat filtered London Asia fakeout as the primary setup candidate.
+2. Add a cost-safe stop/entry geometry variant rather than loosening filters.
+3. Validate whether increasing minimum stop distance or requiring lower
+   `stress_cost_r` improves 1080d and harsh-cost survivability without killing
+   frequency.
