@@ -351,6 +351,141 @@ def write_discovery_packet(symbol: str, packet: dict[str, pd.DataFrame], cfg: Di
     return written
 
 
+def build_packet_manifest(packets: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    rows = []
+    for symbol, packet in packets.items():
+        bars = packet.get("bars", pd.DataFrame())
+        sessions = packet.get("sessions", pd.DataFrame())
+        candidates = packet.get("candidates", pd.DataFrame())
+        if bars.empty:
+            continue
+        data = bars.copy()
+        data["week_start"] = pd.to_datetime(data["week_start"], utc=True)
+        for week, group in data.groupby("week_start", sort=True):
+            week_start = pd.Timestamp(week)
+            week_end = week_start + pd.Timedelta(days=7)
+            sess = sessions.copy()
+            if not sess.empty:
+                sess["start_ts"] = pd.to_datetime(sess["start_ts"], utc=True)
+                sess = sess[(sess["start_ts"] >= week_start) & (sess["start_ts"] < week_end)]
+            cand = candidates.copy()
+            if not cand.empty:
+                cand["entry_ts"] = pd.to_datetime(cand["entry_ts"], utc=True)
+                cand = cand[(cand["entry_ts"] >= week_start) & (cand["entry_ts"] < week_end)]
+            rows.append(_manifest_row(symbol, week_start, group, sess, cand))
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["review_priority", "candidate_count"], ascending=[False, False]).reset_index(drop=True)
+
+
+def build_candidate_summary(packets: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    frames = []
+    for packet in packets.values():
+        candidates = packet.get("candidates", pd.DataFrame())
+        if not candidates.empty:
+            frames.append(candidates)
+    if not frames:
+        return pd.DataFrame()
+    data = pd.concat(frames, ignore_index=True)
+    if data.empty:
+        return data
+    data["stress_net_r"] = pd.to_numeric(data.get("stress_net_r", np.nan), errors="coerce")
+    data["passes_stress_cost"] = data.get("passes_stress_cost", False).astype(bool)
+    return (
+        data.groupby(["symbol", "setup"], dropna=False)
+        .agg(
+            candidates=("entry_ts", "size"),
+            passes_stress_cost=("passes_stress_cost", "sum"),
+            target_rate=("exit_kind", lambda s: float((s == "target").mean()) if len(s) else np.nan),
+            stop_rate=("exit_kind", lambda s: float((s == "stop").mean()) if len(s) else np.nan),
+            expiry_rate=("exit_kind", lambda s: float((s == "expiry").mean()) if len(s) else np.nan),
+            avg_stress_r=("stress_net_r", "mean"),
+            median_stop_pct=("stop_pct", "median"),
+        )
+        .reset_index()
+        .sort_values(["candidates", "avg_stress_r"], ascending=[False, False])
+    )
+
+
+def _manifest_row(
+    symbol: str,
+    week_start: pd.Timestamp,
+    bars: pd.DataFrame,
+    sessions: pd.DataFrame,
+    candidates: pd.DataFrame,
+) -> dict:
+    active_session_count = int((pd.to_numeric(sessions.get("range_atr", pd.Series(dtype=float)), errors="coerce") >= 2.0).sum()) if not sessions.empty else 0
+    max_range_atr = float(pd.to_numeric(sessions.get("range_atr", pd.Series(dtype=float)), errors="coerce").max()) if not sessions.empty else np.nan
+    candidate_count = int(len(candidates))
+    target_count = int((candidates.get("exit_kind", pd.Series(dtype=object)) == "target").sum()) if not candidates.empty else 0
+    stop_count = int((candidates.get("exit_kind", pd.Series(dtype=object)) == "stop").sum()) if not candidates.empty else 0
+    priority = candidate_count + active_session_count * 3 + target_count * 2
+    return {
+        "symbol": symbol,
+        "week_start": week_start,
+        "week_end": week_start + pd.Timedelta(days=7),
+        "bars": int(len(bars)),
+        "session_days": int(bars["day"].nunique()) if "day" in bars else 0,
+        "active_session_count_range_atr_ge_2": active_session_count,
+        "max_session_range_atr": max_range_atr,
+        "bos_up": int(pd.to_numeric(bars.get("bos_up", pd.Series(dtype=float)), errors="coerce").sum()),
+        "bos_down": int(pd.to_numeric(bars.get("bos_down", pd.Series(dtype=float)), errors="coerce").sum()),
+        "choch_up": int(pd.to_numeric(bars.get("choch_up", pd.Series(dtype=float)), errors="coerce").sum()),
+        "choch_down": int(pd.to_numeric(bars.get("choch_down", pd.Series(dtype=float)), errors="coerce").sum()),
+        "candidate_count": candidate_count,
+        "candidate_target_count": target_count,
+        "candidate_stop_count": stop_count,
+        "candidate_expiry_count": int((candidates.get("exit_kind", pd.Series(dtype=object)) == "expiry").sum()) if not candidates.empty else 0,
+        "review_priority": int(priority),
+    }
+
+
+def write_aggregate_files(packets: dict[str, dict[str, pd.DataFrame]], cfg: DiscoveryPacketConfig) -> list[Path]:
+    out_dir = Path(cfg.output_dir)
+    written = []
+    manifest = build_packet_manifest(packets)
+    manifest_path = out_dir / "review_manifest.csv"
+    manifest.to_csv(manifest_path, index=False)
+    written.append(manifest_path)
+
+    candidate_summary = build_candidate_summary(packets)
+    summary_path = out_dir / "candidate_summary.csv"
+    candidate_summary.to_csv(summary_path, index=False)
+    written.append(summary_path)
+
+    note_path = out_dir / "README.md"
+    note_path.write_text(build_aggregate_note(manifest, candidate_summary), encoding="utf-8")
+    written.append(note_path)
+    return written
+
+
+def build_aggregate_note(manifest: pd.DataFrame, candidate_summary: pd.DataFrame) -> str:
+    lines = [
+        "# Crypto Session Discovery Packet",
+        "",
+        "Use `review_manifest.csv` to pick symbol-weeks for manual labeling.",
+        "",
+        "Recommended review order:",
+        "1. High `review_priority` with multiple candidates and active sessions.",
+        "2. Weeks with high BOS/CHoCH counts but weak candidate quality.",
+        "3. Weeks with strong session movement but few/no candidates.",
+        "",
+        "Do not promote rules from candidate forward outcomes alone. Label the chart context first.",
+        "",
+        "Top review weeks:",
+    ]
+    if manifest.empty:
+        lines.append("_empty_")
+    else:
+        lines.extend(["```", manifest.head(12).to_string(index=False), "```"])
+    lines.extend(["", "Candidate summary:"])
+    if candidate_summary.empty:
+        lines.append("_empty_")
+    else:
+        lines.extend(["```", candidate_summary.head(20).to_string(index=False), "```"])
+    return "\n".join(lines) + "\n"
+
+
 def build_review_note(symbol: str, packet: dict[str, pd.DataFrame], cfg: DiscoveryPacketConfig) -> str:
     bars = packet.get("bars", pd.DataFrame())
     sessions = packet.get("sessions", pd.DataFrame())
@@ -434,9 +569,12 @@ def main() -> int:
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     symbols = [s for s in symbols if s != "DOGEUSDT"]
     all_written = []
+    packets = {}
     for symbol in symbols:
         packet = build_discovery_packet(symbol, cfg)
+        packets[symbol] = packet
         all_written.extend(write_discovery_packet(symbol, packet, cfg))
+    all_written.extend(write_aggregate_files(packets, cfg))
     print(f"wrote {len(all_written)} files to {Path(cfg.output_dir)}")
     for path in all_written:
         print(path)

@@ -4,6 +4,8 @@ import pandas as pd
 
 from backtesting.crypto.session_discovery_packet import (
     DiscoveryPacketConfig,
+    build_candidate_summary,
+    build_packet_manifest,
     monday_week_start,
     mode_or_missing,
     parse_csv,
@@ -67,3 +69,26 @@ def test_parse_helpers():
     assert parse_csv("ETHUSDT,SOLUSDT") == ("ETHUSDT", "SOLUSDT")
     assert parse_weeks("2026-01-05")[0] == pd.Timestamp("2026-01-05", tz="UTC")
     assert mode_or_missing(pd.Series(["bear", "bull", "bull"])) == "bull"
+
+
+def test_packet_manifest_ranks_symbol_weeks():
+    bars = _bars().iloc[:48].copy()
+    candidates = pd.DataFrame(
+        {
+            "symbol": ["ETHUSDT", "ETHUSDT"],
+            "setup": ["london_asia_breakout", "ny_london_reversal"],
+            "entry_ts": [pd.Timestamp("2026-01-05 08:00:00Z"), pd.Timestamp("2026-01-05 13:00:00Z")],
+            "exit_kind": ["target", "stop"],
+            "stress_net_r": [1.2, -1.0],
+            "passes_stress_cost": [True, False],
+            "stop_pct": [0.5, 0.8],
+        }
+    )
+    packets = {"ETHUSDT": {"bars": bars, "sessions": summarize_sessions("ETHUSDT", bars), "candidates": candidates}}
+
+    manifest = build_packet_manifest(packets)
+    summary = build_candidate_summary(packets)
+
+    assert int(manifest.iloc[0]["candidate_count"]) == 2
+    assert int(manifest.iloc[0]["candidate_target_count"]) == 1
+    assert int(summary["candidates"].sum()) == 2

@@ -6226,3 +6226,50 @@ Read:
 - Only after labels are made should we convert patterns into deterministic
   rules and run out-of-sample tests. Using the forward outcome columns while
   inventing labels would contaminate the research.
+
+## Phase 70 -- Discovery packet manifest and first non-DOGE review sample (2026-07-15)
+
+Extended `session_discovery_packet.py` with aggregate files:
+
+- `review_manifest.csv` -- ranks symbol-weeks by candidate volume, active
+  session movement, structure activity, and target hits.
+- `candidate_summary.csv` -- symbol/setup summary of raw candidates.
+- `README.md` -- top review weeks and candidate summary.
+
+Command:
+
+```bash
+PYTHONPATH=. python -m backtesting.crypto.session_discovery_packet \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT \
+  --days 90 --recent-weeks 4 --entry-tf 15 \
+  --output-dir backtesting/results/crypto_session_discovery_packet_90d4w
+```
+
+Output: `23` ignored files, no DOGE.
+
+Top review weeks:
+
+| Symbol | Week start | Raw candidates | Candidate targets | Max session range ATR | Review priority |
+|--------|------------|---------------:|------------------:|----------------------:|----------------:|
+| ETHUSDT | 2026-06-29 | 118 | 49 | 8.35 | 300 |
+| XRPUSDT | 2026-06-29 | 122 | 43 | 11.74 | 292 |
+| SOLUSDT | 2026-06-15 | 121 | 23 | 12.32 | 251 |
+| BTCUSDT | 2026-06-29 | 113 | 27 | 13.10 | 251 |
+| ETHUSDT | 2026-06-22 | 105 | 25 | 9.51 | 239 |
+
+Candidate summary read:
+
+| Setup | Read |
+|-------|------|
+| NY/London breakout | Very frequent, negative across all 5 symbols. Do not chase this for frequency. |
+| London/Asia breakout | Frequent, mostly negative; ETH is near flat only. Not enough. |
+| NY/London reversal | Best raw lead: ETH `66` candidates, avg stress R `+0.315`; XRP `45`, avg stress R `+0.319`; BTC near flat; SOL/BNB bad. |
+| London/Asia fakeout | Current filtered baseline exists, but raw recent 4-week candidates are mostly bad. Needs filtering; do not loosen blindly. |
+
+Read:
+
+- Frequency is available in the market, but most broad breakout logic is losing.
+- The strongest next manual review target is **ETH/XRP NY-London reversal** in
+  the week starting `2026-06-29`.
+- Use the packet to label actual chart context before writing rules. The raw
+  forward outcome only says where to look, not what rule is valid.
