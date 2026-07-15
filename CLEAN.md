@@ -5285,3 +5285,59 @@ Read:
   3. optional sweep_reclaim_long + range_or_unresolved -> short fade.
 - This is still a direction/path edge only. It needs entry timing, stop geometry,
   and cost stress before being considered a strategy.
+
+## Phase 55 -- Expansion Exhaustion Fade setup falsification (2026-07-15)
+
+Built `path_setup_lab.py` to convert the path-context edge into actual trades:
+
+- setup: `expansion_exhaustion_fade`;
+- selected buckets:
+  - `expansion_up + range_or_unresolved -> short`;
+  - `expansion_down + local_trend_htf_neutral -> long`;
+  - `expansion_down + confirmed_trend -> long`;
+  - optional `sweep_reclaim_long + range_or_unresolved -> short`;
+- supports legacy `structural` stops and setup-specific `path_extreme` stops;
+- supports one-bar reversal confirmation;
+- uses fixed-R targets, cost-per-R, rolling windows, and portfolio throttling.
+
+Synthetic/unit tests validate:
+
+- bucket selection maps to the intended fade direction;
+- path-extreme stops are placed behind the candle extreme;
+- one-bar reversal confirmation requires close back against the signal;
+- path-context tests still pass.
+
+### Real 6-symbol 360d results
+
+Structural stops are incompatible with this fade setup:
+
+| Stage | Count |
+|-------|------:|
+| selected expansion calls | 333-472 per symbol |
+| valid structural-stop trades | 0-3 per symbol |
+
+Reason: legacy structural stop geometry is mostly invalid for fading an
+expansion candle. Do not change legacy stops for this; they are still useful for
+continuation setups.
+
+Path-extreme stops restore frequency but fail costs/edge:
+
+| Variant | Candidates | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|-----------:|---------:|----------:|------------:|-------:|------|
+| path_extreme, no confirmation | 1259 | 587 | 0.15 | -643.46R | 160.86% | reject, costs huge |
+| path_extreme, stress cost <= 0.25R | 13 | 12 | 0.78 | -1.83R | 1.77% | too sparse, still negative |
+| path_extreme, RR2, stress cost <= 0.25R | 13 | 12 | 0.76 | -2.33R | 1.77% | reject |
+| path_extreme + 1-bar reversal close | 1386 | 808 | 0.33 | -542.57R | 136.23% | reject |
+| confirmation + stress cost <= 0.25R | 179 | 152 | 0.76 | -25.09R | 8.13% | reject |
+
+Read:
+
+- The path-context report found a weak fade tendency, but it is not directly
+  tradable with naive close-entry and simple stop geometry.
+- Failure mode is execution geometry: either stops are too tight and costs kill
+  R, or wider/cost-capped samples are sparse and still not positive.
+- Do not build on Expansion Exhaustion Fade as currently defined.
+- Next attempt should not be another naive fade. It should test a **liquidity
+  sweep with reclaim + displacement confirmation** where the stop naturally sits
+  behind the sweep extreme and the entry happens after confirmation, not at the
+  expansion close.
