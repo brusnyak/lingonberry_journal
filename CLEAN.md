@@ -5784,3 +5784,74 @@ Next:
 3. Only then test frequency expansion:
    second reclaim per day, Asia range compression/expansion buckets, and HTF
    direction conditioning.
+
+## Phase 64 -- Session fakeout forensics: frequency is gated for a reason (2026-07-15)
+
+Added session-range frequency forensics:
+
+- `--frequency-audit`;
+- day-level blocker CSV/report;
+- blockers: missing sessions, invalid reference ATR, reference range too
+  large/small, no sweep, sweep without reclaim, cost block, invalid path,
+  pre-portfolio pass;
+- explicit `filtered_candidate_uses_day_slot=True` default so the setup remains
+  "first valid path candidate of the day" instead of silently retrying later
+  lower-quality reclaims.
+
+Verified:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_session_range_setup_lab.py \
+  backtesting/tests/test_crypto_path_setup_lab.py \
+  backtesting/tests/test_crypto_path_context_report.py -q
+```
+
+Result: `28 passed`.
+
+London Asia fakeout, 360d frequency audit:
+
+| Basket | Symbol-days | Too-large Asia range | Sweep no reclaim | No sweep | Pre-portfolio pass days | Cost-block days |
+|--------|------------:|---------------------:|-----------------:|---------:|------------------------:|----------------:|
+| All 6 | 2166 | 1107 | 638 | 198 | 162 | 55 |
+| Top4: BNB,DOGE,ETH,SOL | 1444 | 763 | 402 | 128 | 117 | 30 |
+
+Signal-level read:
+
+- All6 360d: `1334` signal attempts, `951` pre-portfolio pass signals,
+  `383` cost-blocked signals.
+- Top4 360d: `933` signal attempts, `709` pre-portfolio pass signals,
+  `224` cost-blocked signals.
+- Most missing frequency is not a lack of intraday movement; it is either a
+  too-wide Asia range or a sweep that never reclaims.
+
+Expansion tests:
+
+| Variant | Basket | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|--------|---------:|----------:|------------:|-------:|------|
+| baseline explicit first candidate | All6 360d | 118 | 1.35 | +21.20R | 2.67% | keep |
+| baseline explicit first candidate | Top4 360d | 91 | 1.50 | +21.93R | 2.36% | keep |
+| reuse filtered day slot | Top4 360d | 113 | 1.14 | +8.68R | 2.97% | reject; more trades, worse edge |
+| max Asia range 8 ATR | All6 360d | 162 | 0.96 | -3.90R | 3.88% | reject |
+| max Asia range 10 ATR | All6 360d | 176 | 0.99 | -1.38R | 4.30% | reject |
+| max Asia range 8 ATR | Top4 360d | 131 | 1.11 | +8.23R | 3.02% | weaker |
+| max Asia range 10 ATR | Top4 360d | 141 | 1.17 | +12.94R | 3.24% | weaker |
+| min Asia range 1.5/2 ATR | All6/Top4 360d | same as baseline | same | same | same | no effect |
+
+Read:
+
+- Do not increase frequency by taking later reclaims after a cost-blocked first
+  candidate. It adds trades but degrades PF and return.
+- Do not relax the wide Asia-range filter. Those days are mostly chaotic for
+  this setup.
+- The current setup's quality comes from being early and selective. Frequency
+  must come from additional setup families, not by loosening this one.
+
+Next:
+
+1. Keep London Asia fakeout as a selective setup.
+2. Add a separate wide-range setup instead of relaxing this one:
+   London continuation after Asia expansion or NY reversal after London
+   displacement.
+3. Add HTF/session state columns to the forensics table before trying ML or
+   indicator chemistry, otherwise we will not know which market state each setup
+   belongs to.

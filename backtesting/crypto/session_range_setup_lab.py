@@ -46,6 +46,7 @@ class SessionRangeConfig:
     max_reference_range_atr: float = 6.0
     stop_buffer_atr: float = 0.1
     max_trades_per_symbol_day: int = 1
+    filtered_candidate_uses_day_slot: bool = True
     run_label: str = ""
 
 
@@ -69,6 +70,18 @@ def run_session_range_lab(
     trades = pd.DataFrame(rows)
     trades = apply_filters(trades, cfg)
     return trades, summarize_trades(trades)
+
+
+def run_session_range_frequency_audit(symbols: list[str] | None = None, *, config: SessionRangeConfig | None = None) -> pd.DataFrame:
+    cfg = config or SessionRangeConfig()
+    rows = []
+    for symbol in symbols or DEFAULT_SYMBOLS:
+        rows.extend(audit_symbol_sessions(symbol, cfg).to_dict("records"))
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows)
+    out["primary_blocker"] = out.apply(lambda row: primary_session_blocker(row, cfg), axis=1)
+    return out.sort_values(["symbol", "day"]).reset_index(drop=True)
 
 
 def evaluate_symbol(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
@@ -125,10 +138,125 @@ def evaluate_symbol(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
             )
             if signal is None:
                 continue
-            row = trade_row(symbol, bars, atr_values, int(i), signal, cfg, ref_high, ref_low, ref_range_atr)
+            row, _stage = trade_candidate(symbol, bars, atr_values, int(i), signal, cfg, ref_high, ref_low, ref_range_atr)
             if row:
-                rows.append(row)
-                day_count += 1
+                passes_filters = candidate_passes_filters(row, cfg)
+                if passes_filters:
+                    rows.append(row)
+                if passes_filters or cfg.filtered_candidate_uses_day_slot:
+                    day_count += 1
+    return pd.DataFrame(rows)
+
+
+def audit_symbol_sessions(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
+    bars = load_crypto(symbol, tf=cfg.entry_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True)
+    if bars.empty:
+        return pd.DataFrame()
+    bars["ts"] = pd.to_datetime(bars["ts"], utc=True)
+    bars["day"] = bars["ts"].dt.floor("D")
+    bars["session_utc"] = bars["ts"].map(session_bucket)
+    atr_values = _atr(bars, 14)
+
+    rows = []
+    reference_session, trade_session, mode = SETUP_SESSIONS[cfg.setup]
+    for day, day_bars in bars.groupby("day", sort=True):
+        row = {
+            "symbol": symbol,
+            "day": pd.Timestamp(day),
+            "setup": cfg.setup,
+            "reference_session": reference_session,
+            "trade_session": trade_session,
+            "reference_bars": 0,
+            "trade_bars": 0,
+            "reference_range_atr": np.nan,
+            "swept_high": 0,
+            "swept_low": 0,
+            "signal_attempts": 0,
+            "blocked_cost": 0,
+            "invalid_path": 0,
+            "stop_too_tight": 0,
+            "pre_portfolio_pass": 0,
+            "target_at_signal": 0,
+            "stop_at_signal": 0,
+            "expiry_at_signal": 0,
+            "median_stress_cost_r": np.nan,
+            "median_stop_pct": np.nan,
+        }
+        ref = day_bars[day_bars["session_utc"].eq(reference_session)]
+        trade = day_bars[day_bars["session_utc"].eq(trade_session)]
+        row["reference_bars"] = int(len(ref))
+        row["trade_bars"] = int(len(trade))
+        if ref.empty or trade.empty:
+            rows.append(row)
+            continue
+        ref_high = float(ref["high"].max())
+        ref_low = float(ref["low"].min())
+        ref_mid = (ref_high + ref_low) / 2.0
+        ref_end_i = int(ref.index[-1])
+        atr_now = _atr_at(atr_values, ref_end_i)
+        if not np.isfinite(atr_now) or atr_now <= 0:
+            rows.append(row)
+            continue
+        ref_range_atr = (ref_high - ref_low) / atr_now
+        row["reference_range_atr"] = ref_range_atr
+        if ref_range_atr < cfg.min_reference_range_atr or ref_range_atr > cfg.max_reference_range_atr:
+            rows.append(row)
+            continue
+
+        swept_high = False
+        swept_low = False
+        costs = []
+        stops = []
+        for i in trade.index:
+            high = float(bars["high"].iat[i])
+            low = float(bars["low"].iat[i])
+            close = float(bars["close"].iat[i])
+            atr_i = _atr_at(atr_values, int(i))
+            if not np.isfinite(atr_i) or atr_i <= 0:
+                continue
+            swept_high = swept_high or high > ref_high
+            swept_low = swept_low or low < ref_low
+            row["swept_high"] = int(swept_high)
+            row["swept_low"] = int(swept_low)
+            signal = session_range_signal(
+                mode=mode,
+                close=close,
+                ref_high=ref_high,
+                ref_low=ref_low,
+                ref_mid=ref_mid,
+                atr=atr_i,
+                swept_high=swept_high,
+                swept_low=swept_low,
+                breakout_buffer_atr=cfg.breakout_close_buffer_atr,
+                reclaim_buffer_atr=cfg.reclaim_close_buffer_atr,
+            )
+            if signal is None:
+                continue
+            row["signal_attempts"] += 1
+            candidate, stage = trade_candidate(symbol, bars, atr_values, int(i), signal, cfg, ref_high, ref_low, ref_range_atr)
+            if candidate is None:
+                if stage == "stop_too_tight":
+                    row["stop_too_tight"] += 1
+                else:
+                    row["invalid_path"] += 1
+                continue
+            costs.append(float(candidate["stress_cost_r"]))
+            stops.append(float(candidate["stop_pct"]))
+            if cfg.max_stress_cost_r is not None and float(candidate["stress_cost_r"]) > cfg.max_stress_cost_r:
+                row["blocked_cost"] += 1
+                continue
+            row["pre_portfolio_pass"] += 1
+            if candidate["exit_kind"] == "target":
+                row["target_at_signal"] += 1
+            elif candidate["exit_kind"] == "stop":
+                row["stop_at_signal"] += 1
+            elif candidate["exit_kind"] == "expiry":
+                row["expiry_at_signal"] += 1
+        if costs:
+            row["median_stress_cost_r"] = float(np.median(costs))
+        if stops:
+            row["median_stop_pct"] = float(np.median(stops))
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -171,10 +299,25 @@ def trade_row(
     ref_low: float,
     ref_range_atr: float,
 ) -> dict | None:
+    row, _stage = trade_candidate(symbol, bars, atr_values, i, direction, cfg, ref_high, ref_low, ref_range_atr)
+    return row
+
+
+def trade_candidate(
+    symbol: str,
+    bars: pd.DataFrame,
+    atr_values: pd.Series,
+    i: int,
+    direction: str,
+    cfg: SessionRangeConfig,
+    ref_high: float,
+    ref_low: float,
+    ref_range_atr: float,
+) -> tuple[dict | None, str]:
     entry = float(bars["close"].iat[i])
     atr_i = _atr_at(atr_values, i)
     if not np.isfinite(atr_i) or atr_i <= 0:
-        return None
+        return None, "invalid_atr"
     buffer = cfg.stop_buffer_atr * atr_i
     if direction == "long":
         sl = min(float(bars["low"].iat[i]) - buffer, ref_low - buffer)
@@ -185,15 +328,15 @@ def trade_row(
         risk = sl - entry
         tp = entry - cfg.min_rr * risk
     else:
-        return None
+        return None, "invalid_direction"
     if risk <= 0:
-        return None
+        return None, "invalid_risk"
     stop_pct = risk / entry * 100.0
     if stop_pct < cfg.min_stop_pct:
-        return None
+        return None, "stop_too_tight"
     outcome = walk_structural_outcome(bars, i, direction, sl, tp, horizon=cfg.horizon_bars, track_excursion=True)
     if outcome is None:
-        return None
+        return None, "invalid_outcome"
     base_cost_r = cfg.base_round_trip_pct * entry / risk
     stress_cost_r = cfg.stress_round_trip_pct * entry / risk
     gross_r = float(outcome["r_multiple"])
@@ -223,7 +366,7 @@ def trade_row(
         "mae_r": float(outcome.get("mae_r", np.nan)),
         "bars_to_exit": int(outcome.get("bars_to_exit", cfg.horizon_bars)),
         "exit_kind": str(outcome.get("exit_reason", "expiry")),
-    }
+    }, "candidate"
 
 
 def apply_filters(trades: pd.DataFrame, cfg: SessionRangeConfig) -> pd.DataFrame:
@@ -233,6 +376,63 @@ def apply_filters(trades: pd.DataFrame, cfg: SessionRangeConfig) -> pd.DataFrame
     if cfg.max_stress_cost_r is not None:
         out = out[out["stress_cost_r"] <= cfg.max_stress_cost_r]
     return out.sort_values(["entry_ts", "symbol"]).reset_index(drop=True)
+
+
+def candidate_passes_filters(row: dict, cfg: SessionRangeConfig) -> bool:
+    if cfg.max_stress_cost_r is not None and float(row["stress_cost_r"]) > cfg.max_stress_cost_r:
+        return False
+    return True
+
+
+def primary_session_blocker(row: pd.Series, cfg: SessionRangeConfig | None = None) -> str:
+    cfg = cfg or SessionRangeConfig()
+    if int(row.get("pre_portfolio_pass", 0)) > 0:
+        return "pre_portfolio_pass"
+    if int(row.get("blocked_cost", 0)) > 0:
+        return "blocked_cost"
+    if int(row.get("stop_too_tight", 0)) > 0:
+        return "stop_too_tight"
+    if int(row.get("invalid_path", 0)) > 0:
+        return "invalid_path"
+    if int(row.get("signal_attempts", 0)) > 0:
+        return "signal_no_trade"
+    if float(row.get("reference_bars", 0) or 0) == 0:
+        return "missing_reference_session"
+    if float(row.get("trade_bars", 0) or 0) == 0:
+        return "missing_trade_session"
+    ref_range = row.get("reference_range_atr", np.nan)
+    if not np.isfinite(ref_range):
+        return "invalid_reference_atr"
+    if ref_range < cfg.min_reference_range_atr:
+        return "reference_range_too_small"
+    if ref_range > cfg.max_reference_range_atr:
+        return "reference_range_too_large"
+    if not int(row.get("swept_high", 0)) and not int(row.get("swept_low", 0)):
+        return "no_sweep"
+    return "sweep_without_reclaim"
+
+
+def write_frequency_report(daily: pd.DataFrame, output: Path) -> None:
+    lines = ["# Session Range Frequency Audit", ""]
+    if daily.empty:
+        lines.append("_empty_")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("\n".join(lines) + "\n")
+        return
+    blocker = daily.groupby("primary_blocker").size().rename("days").reset_index().sort_values("days", ascending=False)
+    by_symbol = (
+        daily.groupby(["symbol", "primary_blocker"])
+        .size()
+        .rename("days")
+        .reset_index()
+        .sort_values(["symbol", "days"], ascending=[True, False])
+    )
+    lines.extend(["## Primary Blockers", ""])
+    lines.extend(_markdown_table(blocker))
+    lines.extend(["", "## By Symbol", ""])
+    lines.extend(_markdown_table(by_symbol))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines) + "\n")
 
 
 def output_suffix(cfg: SessionRangeConfig) -> str:
@@ -248,6 +448,10 @@ def output_suffix(cfg: SessionRangeConfig) -> str:
         parts.append(f"basefee{cfg.base_round_trip_pct:g}")
     if cfg.stress_round_trip_pct != 0.0020:
         parts.append(f"stressfee{cfg.stress_round_trip_pct:g}")
+    if cfg.max_trades_per_symbol_day != 1:
+        parts.append(f"maxday{cfg.max_trades_per_symbol_day}")
+    if not cfg.filtered_candidate_uses_day_slot:
+        parts.append("reuse-filtered-slot")
     if cfg.run_label:
         parts.append(cfg.run_label)
     return "_".join(parts).replace(".", "p")
@@ -297,7 +501,10 @@ def main() -> int:
     parser.add_argument("--max-reference-range-atr", type=float, default=6.0)
     parser.add_argument("--breakout-close-buffer-atr", type=float, default=0.15)
     parser.add_argument("--reclaim-close-buffer-atr", type=float, default=0.0)
+    parser.add_argument("--max-trades-per-symbol-day", type=int, default=1)
+    parser.add_argument("--reuse-filtered-day-slot", action="store_true")
     parser.add_argument("--portfolio", action="store_true")
+    parser.add_argument("--frequency-audit", action="store_true")
     parser.add_argument("--risk-pct", type=float, default=0.0025)
     parser.add_argument("--max-open", type=int, default=3)
     parser.add_argument("--max-open-per-symbol", type=int, default=1)
@@ -320,6 +527,8 @@ def main() -> int:
         max_reference_range_atr=args.max_reference_range_atr,
         breakout_close_buffer_atr=args.breakout_close_buffer_atr,
         reclaim_close_buffer_atr=args.reclaim_close_buffer_atr,
+        max_trades_per_symbol_day=args.max_trades_per_symbol_day,
+        filtered_candidate_uses_day_slot=not args.reuse_filtered_day_slot,
         run_label=args.run_label.strip(),
     )
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -347,6 +556,10 @@ def main() -> int:
         pd.DataFrame([portfolio_summary]).to_csv(out_dir / f"{portfolio_suffix}_summary.csv", index=False)
         print("\nPortfolio")
         print(pd.DataFrame([portfolio_summary]).to_string(index=False))
+    if args.frequency_audit:
+        daily = run_session_range_frequency_audit(symbols, config=cfg)
+        daily.to_csv(out_dir / f"{suffix}_frequency_daily.csv", index=False)
+        write_frequency_report(daily, out_dir / f"{suffix}_frequency_report.md")
     print(summary.to_string(index=False))
     if not windows.empty:
         print("\nRolling windows")
