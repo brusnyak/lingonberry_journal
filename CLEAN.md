@@ -5704,3 +5704,83 @@ Read:
   1. London range break/fakeout from the prior Asia range;
   2. NY reversal/continuation after London displacement;
   3. trend-continuation pullback using HTF direction + local CHOCH/BOS.
+
+## Phase 63 -- Session range setup lab finds a second lead, but not deployment quality (2026-07-15)
+
+Added `backtesting.crypto.session_range_setup_lab` as a separate setup family:
+
+- London trades around prior Asia range;
+- NY trades around prior London range;
+- breakout and fakeout modes;
+- fixed structural stop from signal bar and reference range;
+- configurable base/stress round-trip costs;
+- portfolio validation and rolling-window reports.
+
+Synthetic coverage:
+
+- breakout direction detection;
+- fakeout requires sweep plus mid-range reclaim;
+- output suffix records setup/cost config.
+
+Verified:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_session_range_setup_lab.py \
+  backtesting/tests/test_crypto_path_setup_lab.py \
+  backtesting/tests/test_crypto_path_context_report.py -q
+```
+
+Result: `25 passed`.
+
+Setup scan, BNB+XRP, 360d, 15m, `min_rr=1.5`, normal stress-cost cap:
+
+| Setup | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|-------|---------:|----------:|------------:|-------:|------|
+| London Asia fakeout | 44 | 1.41 | +9.27R | 0.89% | second lead |
+| London Asia breakout | 225 | 0.52 | -67.01R | 17.33% | reject |
+| NY London fakeout | 137 | 1.05 | +3.85R | 3.97% | weak |
+| NY London breakout | 407 | 0.88 | -23.10R | 11.26% | reject |
+
+London Asia fakeout validation:
+
+| Basket / window | Accepted | Stress PF | Portfolio R | Max DD | Rolling positive stress windows | Read |
+|-----------------|---------:|----------:|------------:|-------:|--------------------------------:|------|
+| BNB+XRP 720d | 68 | 1.15 | +6.05R | 2.80% | 72.22% | positive but weaker |
+| BNB+XRP 180d | 23 | 1.60 | +6.41R | 0.89% | 100.00% | good, thin |
+| BNB+XRP 90d | 6 | 0.53 | -2.27R | 0.89% | n/a | recent weak/thin |
+| All 6 360d | 118 | 1.35 | +21.20R | 2.67% | 72.50% | broad lead |
+| Top4 360d: BNB,DOGE,ETH,SOL | 91 | 1.50 | +21.93R | 2.36% | 70.00% | stronger basket |
+| All 6 720d | 194 | 1.13 | +14.46R | 7.01% | 51.25% | too weak long history |
+| Top4 720d | 154 | 1.22 | +18.23R | 4.74% | 57.75% | better, still fragile |
+
+Harsh doubled-cost check:
+
+| Basket / cost model | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------------------|---------:|----------:|------------:|-------:|------|
+| All 6 360d, 2x stress cost, normal `stress_cost_r<=0.25` cap | 21 | 1.51 | +4.42R | 0.58% | survivors only; not comparable |
+| Top4 360d, 2x stress cost, normal `stress_cost_r<=0.25` cap | 15 | 2.07 | +5.48R | 0.32% | survivors only; not comparable |
+| All 6 360d, 2x stress cost, no effective cap | 195 | 0.57 | -67.83R | 16.96% | fails harsh costs |
+| Top4 360d, 2x stress cost, no effective cap | 139 | 0.73 | -25.96R | 6.91% | fails harsh costs |
+
+Read:
+
+- London Asia fakeout is a real second lead, not deployment-ready.
+- Breakout variants are bad; do not carry them into the engine.
+- NY fakeout is not strong enough yet; NY breakout is rejected.
+- The frequency problem is partly setup scarcity and partly cost/risk filtering:
+  without the stress-cost cap the setup fires much more often, but tight stops
+  make doubled-cost performance collapse.
+- This points to stop-distance/cost survivability and setup-quality separation,
+  not blind filter loosening.
+
+Next:
+
+1. Add missed-day/session forensics for London Asia fakeout:
+   accepted, rejected by cost, no sweep, sweep without reclaim, reclaim too late,
+   stop too tight, target unreachable.
+2. Build a cost-safe variant:
+   minimum stop distance by ATR/session range, or skip trades where stress cost
+   consumes too much R before entry.
+3. Only then test frequency expansion:
+   second reclaim per day, Asia range compression/expansion buckets, and HTF
+   direction conditioning.
