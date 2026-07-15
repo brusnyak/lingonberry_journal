@@ -5341,3 +5341,64 @@ Read:
   sweep with reclaim + displacement confirmation** where the stop naturally sits
   behind the sweep extreme and the entry happens after confirmation, not at the
   expansion close.
+
+## Phase 56 -- Sweep Reclaim Displacement setup lead (2026-07-15)
+
+Extended `path_setup_lab.py` with `sweep_reclaim_displacement`:
+
+- signal: causal `sweep_reclaim_long` or `sweep_reclaim_short`;
+- confirmation: displacement candle within `confirm_bars`;
+- long after low sweep + reclaim + bullish displacement;
+- short after high sweep + reclaim + bearish displacement;
+- stop: behind sweep candle extreme with ATR buffer;
+- target: fixed R;
+- stress filter: optional `max_stress_cost_r`.
+
+Synthetic/unit tests validate:
+
+- sweep reclaim maps to the intended direction;
+- displacement confirmation requires directional body and close location;
+- previous path setup tests still pass.
+
+### Real 6-symbol 360d results
+
+All-symbol version is not good enough:
+
+| Variant | Candidates | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|-----------:|---------:|----------:|------------:|-------:|------|
+| all6, no cost cap | 1497 | 959 | 0.58 | -319.08R | 81.00% | reject |
+| all6, stress cost <= 0.25R | 790 | 598 | 0.83 | -65.60R | 17.79% | reject |
+| all6, displacement ATR 1.25, cost cap | 318 | 270 | 0.75 | -42.16R | 11.67% | reject |
+| all6, RR2, cost cap | 790 | 558 | 0.82 | -69.09R | 17.66% | reject |
+| all6, Asia, cost cap | 153 | 139 | 0.96 | -3.72R | 3.61% | close but reject |
+
+The edge concentrates in BNB/DOGE/XRP Asia:
+
+| Window | Candidates | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|--------|-----------:|---------:|----------:|------------:|-------:|------|
+| 360d | 90 | 88 | 1.20 | +9.32R | 1.74% | best lead |
+| 180d | 36 | 35 | 1.15 | +2.58R | 1.72% | weak but positive |
+| 90d | 13 | 13 | 1.64 | +3.13R | 0.63% | positive, tiny sample |
+| 60d | 11 | 11 | 1.77 | +2.94R | 0.63% | positive, tiny sample |
+| 30d | 4 | 4 | 72.18 | +3.99R | 0.01% | meaningless sample |
+
+360d top3 Asia details:
+
+| Symbol | Trades | Stress PF | Stress avg R | Read |
+|--------|-------:|----------:|-------------:|------|
+| BNBUSDT | 22 | 2.05 | +0.40R | strong |
+| DOGEUSDT | 36 | 0.93 | -0.04R | weak |
+| XRPUSDT | 32 | 1.20 | +0.10R | useful |
+| ALL | 90 | 1.22 | +0.12R | research lead |
+
+Read:
+
+- This is the first setup candidate with decent 360d stress return, low DD, and
+  non-trivial frequency.
+- It is not deployment-ready: 180d is only mildly positive, recent samples are
+  tiny, and DOGE is weak despite helping frequency.
+- Next validation should be:
+  1. export all top3 Asia accepted trades for UI/manual review;
+  2. run rolling walk-forward by 30/60/90d windows and identify bad regimes;
+  3. test BNB+XRP only vs BNB+DOGE+XRP;
+  4. test stricter confirmation on DOGE only or remove DOGE if it remains weak.

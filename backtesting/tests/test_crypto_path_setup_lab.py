@@ -3,7 +3,13 @@ from __future__ import annotations
 import pandas as pd
 
 from backtesting.crypto.event_atlas import _atr
-from backtesting.crypto.path_setup_lab import PathSetupConfig, reversal_confirmed, select_expansion_exhaustion_calls
+from backtesting.crypto.path_setup_lab import (
+    PathSetupConfig,
+    find_displacement_confirmation,
+    reversal_confirmed,
+    select_expansion_exhaustion_calls,
+    select_sweep_reclaim_calls,
+)
 from backtesting.crypto.path_setup_lab import path_stop_target
 
 
@@ -38,6 +44,17 @@ def test_path_setup_config_defaults_to_expansion_exhaustion_fade():
     assert cfg.min_rr == 1.5
 
 
+def test_select_sweep_reclaim_calls_maps_reclaim_direction():
+    calls = pd.DataFrame({
+        "path_context": ["sweep_reclaim_long", "sweep_reclaim_short", "expansion_up"],
+    })
+
+    selected = select_sweep_reclaim_calls(calls)
+
+    assert selected["path_context"].tolist() == ["sweep_reclaim_long", "sweep_reclaim_short"]
+    assert selected["trade_direction"].tolist() == ["long", "short"]
+
+
 def test_path_extreme_stop_places_stop_behind_candle_extreme():
     bars = pd.DataFrame({
         "open": [100.0] * 20,
@@ -67,3 +84,23 @@ def test_reversal_confirmed_requires_close_against_signal_direction():
     assert reversal_confirmed(bars, 0, 2, "short") is False
     assert reversal_confirmed(bars, 0, 2, "long") is True
     assert reversal_confirmed(bars, 0, 1, "long") is False
+
+
+def test_find_displacement_confirmation_requires_directional_body():
+    bars = pd.DataFrame({
+        "open": [100.0, 100.0, 100.0],
+        "high": [101.0, 103.0, 101.0],
+        "low": [99.0, 99.5, 97.0],
+        "close": [100.0, 102.5, 97.5],
+    })
+    atr_values = _atr(bars, 1)
+
+    long_i = find_displacement_confirmation(
+        bars, 0, "long", atr_values, max_bars=2, displacement_atr=0.25, close_location=0.6
+    )
+    short_i = find_displacement_confirmation(
+        bars, 1, "short", atr_values, max_bars=1, displacement_atr=0.25, close_location=0.6
+    )
+
+    assert long_i == 1
+    assert short_i == 2

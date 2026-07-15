@@ -1,7 +1,8 @@
 """Simple setup lab for causal path-context setups.
 
-Current setup:
+Current setups:
   expansion_exhaustion_fade
+  sweep_reclaim_displacement
 
 This converts the path-context research into actual trades with structural
 stops, fixed-R targets, costs, rolling windows, and portfolio throttling.
@@ -55,6 +56,8 @@ class PathSetupConfig:
     stop_buffer_atr: float = 0.1
     confirm_bars: int = 0
     require_reversal_close: bool = False
+    displacement_atr: float = 0.75
+    displacement_close_location: float = 0.6
     run_label: str = ""
 
 
@@ -104,7 +107,7 @@ def evaluate_symbol(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
             on=["symbol", "ts"],
             how="left",
         )
-    calls = select_expansion_exhaustion_calls(calls, include_sweep_reclaim_long=cfg.include_sweep_reclaim_long)
+    calls = select_setup_calls(calls, cfg)
     if calls.empty:
         return pd.DataFrame()
 
@@ -113,7 +116,21 @@ def evaluate_symbol(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
     rows = []
     for _, call in calls.iterrows():
         signal_i = int(call["entry_i"])
-        i = signal_i + cfg.confirm_bars
+        if cfg.setup == "sweep_reclaim_displacement":
+            confirm = find_displacement_confirmation(
+                bars,
+                signal_i,
+                str(call["trade_direction"]),
+                atr_values,
+                max_bars=max(1, cfg.confirm_bars or 4),
+                displacement_atr=cfg.displacement_atr,
+                close_location=cfg.displacement_close_location,
+            )
+            if confirm is None:
+                continue
+            i = int(confirm)
+        else:
+            i = signal_i + cfg.confirm_bars
         if i >= len(bars) - 1:
             continue
         entry_ts = pd.Timestamp(call["ts"])
@@ -168,6 +185,7 @@ def evaluate_symbol(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
             "stop_model": cfg.stop_model,
             "confirm_bars": cfg.confirm_bars,
             "require_reversal_close": cfg.require_reversal_close,
+            "displacement_atr": cfg.displacement_atr,
             "gross_r": gross_r,
             "base_cost_r": base_cost_r,
             "stress_cost_r": stress_cost_r,
@@ -179,6 +197,17 @@ def evaluate_symbol(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
             "exit_kind": str(outcome.get("exit_reason", "expiry")),
         })
     return pd.DataFrame(rows)
+
+
+def select_setup_calls(calls: pd.DataFrame, cfg: PathSetupConfig) -> pd.DataFrame:
+    if cfg.setup == "expansion_exhaustion_fade":
+        return select_expansion_exhaustion_calls(
+            calls,
+            include_sweep_reclaim_long=cfg.include_sweep_reclaim_long,
+        )
+    if cfg.setup == "sweep_reclaim_displacement":
+        return select_sweep_reclaim_calls(calls)
+    raise ValueError(f"unknown path setup: {cfg.setup}")
 
 
 def reversal_confirmed(bars: pd.DataFrame, signal_i: int, entry_i: int, direction: str) -> bool:
@@ -206,6 +235,47 @@ def select_expansion_exhaustion_calls(calls: pd.DataFrame, *, include_sweep_recl
     if include_sweep_reclaim_long:
         selected.loc[selected["path_context"].eq("sweep_reclaim_long"), "trade_direction"] = "short"
     return selected.reset_index(drop=True)
+
+
+def select_sweep_reclaim_calls(calls: pd.DataFrame) -> pd.DataFrame:
+    if calls.empty:
+        return calls
+    selected = calls[calls["path_context"].isin(["sweep_reclaim_long", "sweep_reclaim_short"])].copy()
+    if selected.empty:
+        return selected
+    selected["trade_direction"] = np.where(selected["path_context"].eq("sweep_reclaim_long"), "long", "short")
+    return selected.reset_index(drop=True)
+
+
+def find_displacement_confirmation(
+    bars: pd.DataFrame,
+    signal_i: int,
+    direction: str,
+    atr_values: pd.Series,
+    *,
+    max_bars: int = 4,
+    displacement_atr: float = 0.75,
+    close_location: float = 0.6,
+) -> int | None:
+    end_i = min(signal_i + max_bars, len(bars) - 1)
+    for i in range(signal_i + 1, end_i + 1):
+        atr_now = float(atr_values.iat[i]) if i < len(atr_values) else np.nan
+        if not np.isfinite(atr_now) or atr_now <= 0:
+            continue
+        open_ = float(bars["open"].iat[i])
+        high = float(bars["high"].iat[i])
+        low = float(bars["low"].iat[i])
+        close = float(bars["close"].iat[i])
+        candle_range = high - low
+        body = abs(close - open_)
+        if candle_range <= 0 or body < displacement_atr * atr_now:
+            continue
+        close_pos = (close - low) / candle_range
+        if direction == "long" and close > open_ and close_pos >= close_location:
+            return i
+        if direction == "short" and close < open_ and close_pos <= 1.0 - close_location:
+            return i
+    return None
 
 
 def path_stop_target(
@@ -276,6 +346,8 @@ def output_suffix(cfg: PathSetupConfig) -> str:
         parts.append(f"confirm{cfg.confirm_bars}b")
     if cfg.require_reversal_close:
         parts.append("reversal-close")
+    if cfg.setup == "sweep_reclaim_displacement":
+        parts.append(f"disp{cfg.displacement_atr:g}")
     if cfg.run_label:
         parts.append(cfg.run_label)
     return "_".join(parts).replace(".", "p")
@@ -319,6 +391,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Path setup lab.")
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--days", type=int, default=360)
+    parser.add_argument("--setup", default="expansion_exhaustion_fade", choices=["expansion_exhaustion_fade", "sweep_reclaim_displacement"])
     parser.add_argument("--min-rr", type=float, default=1.5)
     parser.add_argument("--horizon-bars", type=int, default=96)
     parser.add_argument("--sessions", default="")
@@ -331,6 +404,8 @@ def main() -> int:
     parser.add_argument("--stop-buffer-atr", type=float, default=0.1)
     parser.add_argument("--confirm-bars", type=int, default=0)
     parser.add_argument("--require-reversal-close", action="store_true")
+    parser.add_argument("--displacement-atr", type=float, default=0.75)
+    parser.add_argument("--displacement-close-location", type=float, default=0.6)
     parser.add_argument("--portfolio", action="store_true")
     parser.add_argument("--risk-pct", type=float, default=0.0025)
     parser.add_argument("--max-open", type=int, default=3)
@@ -345,6 +420,7 @@ def main() -> int:
     sessions = tuple(s.strip() for s in args.sessions.split(",") if s.strip()) or None
     cfg = PathSetupConfig(
         days=args.days,
+        setup=args.setup,
         min_rr=args.min_rr,
         horizon_bars=args.horizon_bars,
         sessions=sessions,
@@ -357,6 +433,8 @@ def main() -> int:
         stop_buffer_atr=args.stop_buffer_atr,
         confirm_bars=args.confirm_bars,
         require_reversal_close=args.require_reversal_close,
+        displacement_atr=args.displacement_atr,
+        displacement_close_location=args.displacement_close_location,
         run_label=args.run_label.strip(),
     )
     trades, summary = run_path_setup_lab(symbols, config=cfg)
