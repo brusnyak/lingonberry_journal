@@ -6012,3 +6012,104 @@ Next:
    assumptions.
 3. Search for a broader non-ETH setup separately; do not force NY reversal onto
    all symbols.
+
+## Phase 67 -- Session feature diagnostics add explainability and useful filters (2026-07-15)
+
+Added session-state and indicator feature columns to
+`backtesting.crypto.session_range_setup_lab` trade rows:
+
+- reference open/close;
+- reference close location;
+- reference body and return in ATR;
+- reference bias;
+- entry VWAP, VWAP distance in ATR, VWAP alignment, VWAP slope/z-score;
+- entry EMA21/EMA55, EMA21 slope, EMA alignment, EMA stack;
+- trade-session elapsed bars;
+- first trade-hour direction and return in ATR.
+
+Added report sections:
+
+- feature-bucket summaries for reference bias;
+- VWAP alignment;
+- EMA alignment;
+- EMA stack;
+- first trade-hour direction.
+
+Added reusable feature filters:
+
+- `--reference-biases`;
+- `--entry-vwap-alignments`;
+- `--entry-ema-alignments`;
+- `--entry-ema-stacks`;
+- `--first-trade-hour-directions`.
+
+Verified:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_session_range_setup_lab.py -q
+```
+
+Result: `13 passed`.
+
+Feature read, ETH-only NY London reversal 720d:
+
+| Bucket | Trades | Stress PF | Avg R | Read |
+|--------|-------:|----------:|------:|------|
+| reference short | 10 | 3.20 | +0.57R | strongest side |
+| reference long | 9 | 1.96 | +0.30R | still positive |
+| EMA stack mixed | 15 | 3.58 | +0.53R | best simple state |
+| EMA stack bullish | 4 | 1.16 | +0.09R | weak/thin |
+| EMA aligned | 11 | 3.08 | +0.51R | useful |
+
+ETH reversal filter tests:
+
+| Variant | Window | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|--------|---------:|----------:|------------:|-------:|------|
+| baseline ETH reversal | 720d | 19 | 2.55 | +8.39R | 0.60% | lead |
+| EMA stack mixed | 720d | 15 | 3.58 | +8.02R | 0.32% | cleaner, thinner |
+| EMA stack mixed | 1080d | 19 | 1.70 | +4.58R | 0.86% | still positive |
+| EMA aligned | 720d | 11 | 3.08 | +5.57R | 0.34% | too thin |
+| EMA aligned | 1080d | 14 | 1.64 | +3.23R | 0.58% | too thin |
+
+Feature read, Top4 London Asia fakeout 360d:
+
+| Bucket | Trades | Stress PF | Avg R | Read |
+|--------|-------:|----------:|------:|------|
+| reference missing | 48 | 1.65 | +0.30R | good |
+| reference short | 14 | 2.79 | +0.49R | good but thin |
+| reference long | 31 | 1.04 | +0.02R | weak |
+| first-hour unknown | 4 | 0.00 | -1.15R | bad early entries |
+
+Fakeout filter tests:
+
+| Variant | Basket/window | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|---------------|---------:|----------:|------------:|-------:|------|
+| baseline | Top4 360d | 91 | 1.50 | +21.93R | 2.36% | lead |
+| first-hour known only | Top4 360d | 87 | 1.67 | +26.52R | 1.54% | better |
+| first-hour known only | Top4 720d | 146 | 1.29 | +22.42R | 4.48% | slight improvement |
+| reference missing/short | Top4 360d | 61 | 1.90 | +22.54R | 1.77% | cleaner but fewer trades |
+| reference missing/short | Top4 720d | 102 | 1.44 | +22.40R | 3.25% | good filter |
+| reference missing/short + first-hour known | Top4 360d | 58 | 2.21 | +26.05R | 1.24% | best 360d |
+| reference missing/short + first-hour known | Top4 720d | 98 | 1.52 | +24.53R | 3.25% | best balance |
+| first-hour known only | All6 360d | 113 | 1.49 | +27.02R | 1.83% | improves DD/return |
+| first-hour known only | All6 720d | 183 | 1.17 | +17.37R | 6.77% | still weak long history |
+
+Read:
+
+- First-hour known is a real quality filter for London Asia fakeout.
+- Reference-bias `missing/short` is a cleaner fakeout subset and survives 720d
+  on Top4, but cuts frequency.
+- Combining `reference_bias in {missing, short}` with first-hour known gives
+  the best Top4 fakeout balance so far: `98` trades over 720d, PF `1.52`,
+  +24.53R, max DD `3.25%`.
+- ETH NY reversal improves with `entry_ema_stack=mixed`, but remains too thin
+  to treat as a broad setup.
+- These are research gates, not final deployment gates. Next validation should
+  be rolling walk-forward and harsh costs on the filtered fakeout setup.
+
+Next:
+
+1. Run filtered London Asia fakeout across 180/360/720/1080 and harsh costs.
+2. Compare filtered fakeout vs baseline in one portfolio bundle.
+3. Keep ETH reversal as a separate asset-specific lead; do not mix it into the
+   broad engine until it has walk-forward validation.

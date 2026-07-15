@@ -4,11 +4,14 @@ import pandas as pd
 
 from backtesting.crypto.session_range_setup_lab import (
     SessionRangeConfig,
+    apply_feature_filter,
     candidate_passes_filters,
     output_suffix,
+    parse_csv_tuple,
     primary_session_blocker,
     reference_direction,
     session_range_signal,
+    summarize_feature_bucket,
 )
 
 
@@ -192,3 +195,41 @@ def test_primary_session_blocker_respects_custom_reference_range():
     )
 
     assert blocker == "reference_range_too_small"
+
+
+def test_summarize_feature_bucket_keeps_missing_bucket():
+    trades = pd.DataFrame(
+        {
+            "reference_bias": ["long", "", None],
+            "stress_net_r": [1.0, -1.0, 0.5],
+            "stop_pct": [1.0, 2.0, 3.0],
+        }
+    )
+
+    summary = summarize_feature_bucket(trades, "reference_bias")
+
+    assert set(summary["reference_bias"]) == {"long", "missing"}
+    missing = summary[summary["reference_bias"].eq("missing")].iloc[0]
+    assert int(missing["trades"]) == 2
+
+
+def test_apply_feature_filter_treats_blank_as_missing():
+    trades = pd.DataFrame({"reference_bias": ["long", "", None], "stress_net_r": [1.0, -1.0, 0.5]})
+
+    filtered = apply_feature_filter(trades, "reference_bias", ("missing",))
+
+    assert len(filtered) == 2
+
+
+def test_output_suffix_records_feature_filters():
+    cfg = SessionRangeConfig(reference_biases=("missing", "short"), first_trade_hour_directions=("up", "down", "flat"))
+
+    suffix = output_suffix(cfg)
+
+    assert "refbias-missing-short" in suffix
+    assert "firsthour-up-down-flat" in suffix
+
+
+def test_parse_csv_tuple_returns_none_for_empty_input():
+    assert parse_csv_tuple("") is None
+    assert parse_csv_tuple("up, down") == ("up", "down")
