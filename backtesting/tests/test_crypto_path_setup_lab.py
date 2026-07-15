@@ -5,6 +5,7 @@ import pandas as pd
 from backtesting.crypto.event_atlas import _atr
 from backtesting.crypto.path_setup_lab import (
     PathSetupConfig,
+    find_followthrough_confirmation,
     find_displacement_confirmation,
     primary_frequency_blocker,
     reversal_confirmed,
@@ -70,6 +71,21 @@ def test_output_suffix_records_displacement_close_location():
     assert "close0p75" in output_suffix(cfg)
 
 
+def test_output_suffix_records_followthrough_params():
+    cfg = PathSetupConfig(
+        setup="sweep_reclaim_followthrough",
+        followthrough_bars=3,
+        followthrough_atr=0.7,
+        followthrough_max_adverse_atr=0.2,
+    )
+
+    suffix = output_suffix(cfg)
+
+    assert "ft3b" in suffix
+    assert "move0p7" in suffix
+    assert "adv0p2" in suffix
+
+
 def test_output_suffix_records_non_default_stress_fee():
     cfg = PathSetupConfig(stress_round_trip_pct=0.004)
 
@@ -131,6 +147,26 @@ def test_find_displacement_confirmation_requires_directional_body():
 
     assert long_i == 1
     assert short_i == 2
+
+
+def test_find_followthrough_confirmation_requires_move_before_adverse_limit():
+    bars = pd.DataFrame({
+        "open": [100.0, 100.0, 100.0],
+        "high": [101.0, 101.2, 103.0],
+        "low": [99.0, 99.8, 100.5],
+        "close": [100.0, 100.3, 102.0],
+    })
+    atr_values = _atr(bars, 1)
+
+    long_i = find_followthrough_confirmation(
+        bars, 0, "long", atr_values, max_bars=2, min_move_atr=0.4, max_adverse_atr=0.2
+    )
+    blocked_i = find_followthrough_confirmation(
+        bars, 0, "long", atr_values, max_bars=2, min_move_atr=0.4, max_adverse_atr=0.05
+    )
+
+    assert long_i == 2
+    assert blocked_i is None
 
 
 def test_primary_frequency_blocker_orders_tradeable_before_signal_gaps():

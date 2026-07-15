@@ -3,6 +3,7 @@
 Current setups:
   expansion_exhaustion_fade
   sweep_reclaim_displacement
+  sweep_reclaim_followthrough
 
 This converts the path-context research into actual trades with structural
 stops, fixed-R targets, costs, rolling windows, and portfolio throttling.
@@ -58,6 +59,9 @@ class PathSetupConfig:
     require_reversal_close: bool = False
     displacement_atr: float = 0.75
     displacement_close_location: float = 0.6
+    followthrough_bars: int = 2
+    followthrough_atr: float = 0.5
+    followthrough_max_adverse_atr: float = 0.5
     run_label: str = ""
 
 
@@ -310,6 +314,16 @@ def confirmed_entry_index(call: pd.Series, bars: pd.DataFrame, atr_values: pd.Se
             max_bars=max(1, cfg.confirm_bars or 4),
             displacement_atr=cfg.displacement_atr,
             close_location=cfg.displacement_close_location,
+        )
+    if cfg.setup == "sweep_reclaim_followthrough":
+        return find_followthrough_confirmation(
+            bars,
+            signal_i,
+            direction,
+            atr_values,
+            max_bars=cfg.followthrough_bars,
+            min_move_atr=cfg.followthrough_atr,
+            max_adverse_atr=cfg.followthrough_max_adverse_atr,
         )
     entry_i = signal_i + cfg.confirm_bars
     if cfg.confirm_bars and cfg.require_reversal_close and not reversal_confirmed(bars, signal_i, entry_i, direction):
@@ -608,27 +622,14 @@ def audit_call_stage(
     cfg: PathSetupConfig,
 ) -> str:
     signal_i = int(call["entry_i"])
-    if cfg.setup == "sweep_reclaim_displacement":
-        confirm = find_displacement_confirmation(
-            bars,
-            signal_i,
-            str(call["trade_direction"]),
-            atr_values,
-            max_bars=max(1, cfg.confirm_bars or 4),
-            displacement_atr=cfg.displacement_atr,
-            close_location=cfg.displacement_close_location,
-        )
-        if confirm is None:
-            return "no_confirmation"
-        entry_i = int(confirm)
-    else:
-        entry_i = signal_i + cfg.confirm_bars
-        if cfg.confirm_bars and cfg.require_reversal_close and not reversal_confirmed(bars, signal_i, entry_i, str(call["trade_direction"])):
-            return "no_confirmation"
+    confirm = confirmed_entry_index(call, bars, atr_values, cfg)
+    if confirm is None:
+        return "no_confirmation"
+    entry_i = int(confirm)
     if entry_i >= len(bars) - 1:
         return "invalid_path"
 
-    entry_ts = pd.Timestamp(bars["ts"].iat[entry_i]) if cfg.confirm_bars else pd.Timestamp(call["ts"])
+    entry_ts = pd.Timestamp(bars["ts"].iat[entry_i]) if entry_i != signal_i else pd.Timestamp(call["ts"])
     direction = str(call["trade_direction"])
     entry = float(bars["close"].iat[entry_i])
     sl, tp = path_stop_target(
@@ -716,29 +717,14 @@ def evaluate_symbol(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
     rows = []
     for _, call in calls.iterrows():
         signal_i = int(call["entry_i"])
-        if cfg.setup == "sweep_reclaim_displacement":
-            confirm = find_displacement_confirmation(
-                bars,
-                signal_i,
-                str(call["trade_direction"]),
-                atr_values,
-                max_bars=max(1, cfg.confirm_bars or 4),
-                displacement_atr=cfg.displacement_atr,
-                close_location=cfg.displacement_close_location,
-            )
-            if confirm is None:
-                continue
-            i = int(confirm)
-        else:
-            i = signal_i + cfg.confirm_bars
+        confirm = confirmed_entry_index(call, bars, atr_values, cfg)
+        if confirm is None:
+            continue
+        i = int(confirm)
         if i >= len(bars) - 1:
             continue
-        entry_ts = pd.Timestamp(call["ts"])
         direction = str(call["trade_direction"])
-        if cfg.confirm_bars:
-            entry_ts = pd.Timestamp(bars["ts"].iat[i])
-            if cfg.require_reversal_close and not reversal_confirmed(bars, signal_i, i, direction):
-                continue
+        entry_ts = pd.Timestamp(bars["ts"].iat[i]) if i != signal_i else pd.Timestamp(call["ts"])
         entry = float(bars["close"].iat[i])
         sl, tp = path_stop_target(
             bars,
@@ -805,7 +791,7 @@ def select_setup_calls(calls: pd.DataFrame, cfg: PathSetupConfig) -> pd.DataFram
             calls,
             include_sweep_reclaim_long=cfg.include_sweep_reclaim_long,
         )
-    if cfg.setup == "sweep_reclaim_displacement":
+    if cfg.setup in {"sweep_reclaim_displacement", "sweep_reclaim_followthrough"}:
         return select_sweep_reclaim_calls(calls)
     raise ValueError(f"unknown path setup: {cfg.setup}")
 
@@ -875,6 +861,39 @@ def find_displacement_confirmation(
             return i
         if direction == "short" and close < open_ and close_pos <= 1.0 - close_location:
             return i
+    return None
+
+
+def find_followthrough_confirmation(
+    bars: pd.DataFrame,
+    signal_i: int,
+    direction: str,
+    atr_values: pd.Series,
+    *,
+    max_bars: int = 2,
+    min_move_atr: float = 0.5,
+    max_adverse_atr: float = 0.5,
+) -> int | None:
+    signal_close = float(bars["close"].iat[signal_i])
+    atr_now = _atr_at(atr_values, signal_i)
+    if not np.isfinite(atr_now) or atr_now <= 0:
+        return None
+    end_i = min(signal_i + max(1, max_bars), len(bars) - 1)
+    adverse = 0.0
+    for i in range(signal_i + 1, end_i + 1):
+        high = float(bars["high"].iat[i])
+        low = float(bars["low"].iat[i])
+        close = float(bars["close"].iat[i])
+        if direction == "long":
+            adverse = max(adverse, (signal_close - low) / atr_now)
+            move = (close - signal_close) / atr_now
+            if adverse <= max_adverse_atr and move >= min_move_atr:
+                return i
+        elif direction == "short":
+            adverse = max(adverse, (high - signal_close) / atr_now)
+            move = (signal_close - close) / atr_now
+            if adverse <= max_adverse_atr and move >= min_move_atr:
+                return i
     return None
 
 
@@ -952,9 +971,13 @@ def output_suffix(cfg: PathSetupConfig) -> str:
         parts.append(f"confirm{cfg.confirm_bars}b")
     if cfg.require_reversal_close:
         parts.append("reversal-close")
-    if cfg.setup == "sweep_reclaim_displacement":
+    if cfg.setup in {"sweep_reclaim_displacement", "sweep_reclaim_followthrough"}:
         parts.append(f"disp{cfg.displacement_atr:g}")
         parts.append(f"close{cfg.displacement_close_location:g}")
+    if cfg.setup == "sweep_reclaim_followthrough":
+        parts.append(f"ft{cfg.followthrough_bars}b")
+        parts.append(f"move{cfg.followthrough_atr:g}")
+        parts.append(f"adv{cfg.followthrough_max_adverse_atr:g}")
     if cfg.run_label:
         parts.append(cfg.run_label)
     return "_".join(parts).replace(".", "p")
@@ -1110,7 +1133,11 @@ def main() -> int:
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--days", type=int, default=360)
     parser.add_argument("--entry-tf", default="15")
-    parser.add_argument("--setup", default="expansion_exhaustion_fade", choices=["expansion_exhaustion_fade", "sweep_reclaim_displacement"])
+    parser.add_argument(
+        "--setup",
+        default="expansion_exhaustion_fade",
+        choices=["expansion_exhaustion_fade", "sweep_reclaim_displacement", "sweep_reclaim_followthrough"],
+    )
     parser.add_argument("--min-rr", type=float, default=1.5)
     parser.add_argument("--horizon-bars", type=int, default=96)
     parser.add_argument("--sessions", default="")
@@ -1127,6 +1154,9 @@ def main() -> int:
     parser.add_argument("--require-reversal-close", action="store_true")
     parser.add_argument("--displacement-atr", type=float, default=0.75)
     parser.add_argument("--displacement-close-location", type=float, default=0.6)
+    parser.add_argument("--followthrough-bars", type=int, default=2)
+    parser.add_argument("--followthrough-atr", type=float, default=0.5)
+    parser.add_argument("--followthrough-max-adverse-atr", type=float, default=0.5)
     parser.add_argument("--portfolio", action="store_true")
     parser.add_argument("--frequency-audit", action="store_true")
     parser.add_argument("--signal-forensics", action="store_true")
@@ -1161,6 +1191,9 @@ def main() -> int:
         require_reversal_close=args.require_reversal_close,
         displacement_atr=args.displacement_atr,
         displacement_close_location=args.displacement_close_location,
+        followthrough_bars=args.followthrough_bars,
+        followthrough_atr=args.followthrough_atr,
+        followthrough_max_adverse_atr=args.followthrough_max_adverse_atr,
         run_label=args.run_label.strip(),
     )
     trades, summary = run_path_setup_lab(symbols, config=cfg)

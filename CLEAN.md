@@ -5620,3 +5620,58 @@ Read:
 - Next development should use the signal-forensics CSV to classify rejected
   no-confirmation rows into subtypes, then test one explicit alternative
   confirmation rule. Do not broaden symbols/sessions blindly.
+
+## Phase 61 -- Follow-through setup falsification (2026-07-15)
+
+Added a separate lab setup: `sweep_reclaim_followthrough`.
+
+Purpose:
+
+- test the missed-signal hypothesis causally;
+- reuse sweep-reclaim calls;
+- enter only after immediate directional follow-through is actually observed;
+- do not blend it into the existing displacement setup.
+
+Config knobs:
+
+- `--followthrough-bars`
+- `--followthrough-atr`
+- `--followthrough-max-adverse-atr`
+
+Why tested:
+
+- Signal forensics showed a tempting diagnostic bucket:
+  `post_4bar_direction_move_atr > 1.5` with clean stop geometry had strong
+  signal-entry PF.
+- That diagnostic was not directly tradable because it used future movement
+  after the signal.
+- The causal version enters only when follow-through is known.
+
+BNB+XRP Asia 360d:
+
+| Variant | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|---------:|----------:|------------:|-------:|------|
+| followthrough 2 bars, 0.5 ATR move, 0.5 ATR adverse | 35 | 1.20 | +3.56R | 1.24% | weak |
+| followthrough 1 bar, 0.4 ATR move, 0.3 ATR adverse | 24 | 1.24 | +2.86R | 0.93% | weak/thin |
+| followthrough 3 bars, 0.75 ATR move, 0.4 ATR adverse | 38 | 1.42 | +7.55R | 1.23% | best followthrough, still inferior |
+| followthrough 4 bars, 1.5 ATR move, 0.5 ATR adverse | 30 | 0.92 | -1.46R | 1.20% | reject |
+| followthrough 4 bars, 1.5 ATR move, 0.3 ATR adverse | 26 | 1.04 | +0.57R | 1.20% | reject |
+| followthrough 4 bars, 1.0 ATR move, 0.3 ATR adverse | 34 | 1.20 | +3.52R | 1.11% | weak |
+
+BNB-only stress:
+
+| Window | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|--------|---------:|----------:|------------:|-------:|------|
+| 720d | 36 | 1.16 | +3.17R | 1.77% | not robust |
+| 360d | 17 | 1.64 | +4.65R | 0.85% | too thin and unstable |
+| 180d | 8 | 0.82 | -0.88R | 0.61% | reject |
+
+Read:
+
+- Follow-through does not become a promoted second setup.
+- The forensic signal-entry bucket was real but mostly consumed by late entry:
+  once follow-through is confirmed, R/R degrades and edge becomes weak.
+- Keep `sweep_reclaim_followthrough` in the lab because it is useful for
+  future comparison, but do not include it in the engine.
+- Next setup should be session-specific, not a weaker variant of Asia sweep:
+  London continuation/fakeout or NY reversal after London displacement.
