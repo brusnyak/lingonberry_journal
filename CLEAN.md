@@ -5450,3 +5450,46 @@ Read:
   2. test frequency expansion through additional high-quality symbols/sessions;
   3. add a blocked-day/candidate audit so we know why valid-looking days do not
      become trades.
+
+## Phase 58 -- Path setup frequency audit (2026-07-15)
+
+Added `--frequency-audit` to `path_setup_lab.py` so frequency is explained by
+day instead of guessed from final trades.
+
+BNB+XRP Asia sweep-reclaim-displacement, 360d:
+
+| Metric | Count |
+|--------|------:|
+| symbol-days | 722 |
+| raw path events | 3288 |
+| setup signals | 1532 |
+| no confirmation | 963 |
+| invalid path | 38 |
+| blocked by session | 397 |
+| blocked by stress cost | 80 |
+| pre-portfolio pass | 54 |
+| portfolio accepted | 53 |
+
+Primary blocker by symbol-day:
+
+| Blocker | Symbol-days | Read |
+|---------|------------:|------|
+| blocked_session | 261 | most tradeable paths happen outside Asia |
+| no_confirmation | 243 | sweep occurs but displacement does not confirm in time |
+| blocked_cost | 75 | stop is too tight/expensive after stress costs |
+| no_setup_signal | 58 | events exist but are not sweep-reclaim setup events |
+| accepted | 53 | accepted trade day |
+| invalid_path | 17 | stop/outcome geometry not tradable |
+| no_raw_event | 14 | path layer found nothing that day |
+| portfolio_throttle | 1 | risk layer blocked one otherwise valid trade |
+
+Read:
+
+- The frequency issue is not missing raw price action. Only 14/722 symbol-days
+  had no path event.
+- Asia-only is the largest bottleneck. That means the setup should be tested in
+  other sessions, but only with the same audit and stress gates.
+- Confirmation is the second bottleneck. Loosening it may add frequency, but it
+  must be tested as a setup variant, not blended into the current lead.
+- Cost remains a real execution constraint. Do not remove the stress cost gate
+  just to make frequency look better.

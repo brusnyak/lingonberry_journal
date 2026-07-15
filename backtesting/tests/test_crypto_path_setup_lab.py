@@ -6,6 +6,7 @@ from backtesting.crypto.event_atlas import _atr
 from backtesting.crypto.path_setup_lab import (
     PathSetupConfig,
     find_displacement_confirmation,
+    primary_frequency_blocker,
     reversal_confirmed,
     select_expansion_exhaustion_calls,
     select_sweep_reclaim_calls,
@@ -104,3 +105,17 @@ def test_find_displacement_confirmation_requires_directional_body():
 
     assert long_i == 1
     assert short_i == 2
+
+
+def test_primary_frequency_blocker_orders_tradeable_before_signal_gaps():
+    row = pd.Series({
+        "portfolio_accepted": 0,
+        "pre_portfolio_pass": 1,
+        "blocked_cost": 2,
+        "setup_signals": 3,
+        "raw_events": 4,
+    })
+
+    assert primary_frequency_blocker(row) == "portfolio_throttle"
+    assert primary_frequency_blocker(pd.Series({"setup_signals": 0, "raw_events": 2})) == "no_setup_signal"
+    assert primary_frequency_blocker(pd.Series({"setup_signals": 0, "raw_events": 0})) == "no_raw_event"

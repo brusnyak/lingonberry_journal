@@ -75,6 +75,217 @@ def run_path_setup_lab(
     return trades, summarize_trades(trades)
 
 
+def run_frequency_audit(
+    symbols: list[str],
+    *,
+    config: PathSetupConfig,
+    accepted: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    rows = []
+    for symbol in symbols:
+        rows.extend(audit_symbol_frequency(symbol, config).to_dict("records"))
+    daily = pd.DataFrame(rows)
+    if daily.empty:
+        return daily
+
+    if accepted is not None and not accepted.empty:
+        acc = accepted.copy()
+        acc["entry_ts"] = pd.to_datetime(acc["entry_ts"], utc=True)
+        acc["day"] = acc["entry_ts"].dt.floor("D")
+        accepted_daily = acc.groupby(["symbol", "day"]).size().rename("portfolio_accepted").reset_index()
+        daily = daily.merge(accepted_daily, on=["symbol", "day"], how="left")
+    else:
+        daily["portfolio_accepted"] = 0
+    daily["portfolio_accepted"] = daily["portfolio_accepted"].fillna(0).astype(int)
+    daily["primary_blocker"] = daily.apply(primary_frequency_blocker, axis=1)
+    return daily.sort_values(["symbol", "day"]).reset_index(drop=True)
+
+
+def audit_symbol_frequency(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
+    bars = load_crypto(symbol, tf=cfg.entry_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True)
+    if bars.empty:
+        return pd.DataFrame()
+    bars["day"] = pd.to_datetime(bars["ts"], utc=True).dt.floor("D")
+    days = bars[["day"]].drop_duplicates().copy()
+    days["symbol"] = symbol
+
+    path_cfg = PathContextConfig(
+        days=cfg.days,
+        exchange=cfg.exchange,
+        source=cfg.source,
+        entry_tf=cfg.entry_tf,
+        lookback_bars=cfg.lookback_bars,
+        expansion_atr=cfg.expansion_atr,
+        direction_mode="fade",
+    )
+    context = build_path_context(symbol, bars, path_cfg)
+    calls = sample_path_calls(context, sample_mode="events")
+    if calls.empty:
+        return _empty_frequency_days(days)
+
+    foundation = build_foundation_states(
+        symbol,
+        FoundationDirectionConfig(
+            days=cfg.days,
+            exchange=cfg.exchange,
+            source=cfg.source,
+            entry_tf=cfg.entry_tf,
+        ),
+    )
+    if not foundation.empty:
+        calls = calls.merge(
+            foundation[["symbol", "ts", "foundation_state", "direction"]].rename(columns={"direction": "foundation_direction"}),
+            on=["symbol", "ts"],
+            how="left",
+        )
+    calls["day"] = pd.to_datetime(calls["ts"], utc=True).dt.floor("D")
+    raw_daily = calls.groupby("day").size().rename("raw_events").reset_index()
+
+    selected = select_setup_calls(calls, cfg)
+    if selected.empty:
+        out = days.merge(raw_daily, on="day", how="left")
+        out["raw_events"] = out["raw_events"].fillna(0).astype(int)
+        for col in [
+            "setup_signals",
+            "no_confirmation",
+            "invalid_path",
+            "blocked_session",
+            "blocked_cost",
+            "pre_portfolio_pass",
+        ]:
+            out[col] = 0
+        return out
+
+    selected["day"] = pd.to_datetime(selected["ts"], utc=True).dt.floor("D")
+    setup_daily = selected.groupby("day").size().rename("setup_signals").reset_index()
+
+    structure = build_structure_index(bars, StructureConfig(left=2, right=2))
+    atr_values = _atr(bars, 14)
+    stage_rows = []
+    for _, call in selected.iterrows():
+        stage = audit_call_stage(call, bars, structure, atr_values, cfg)
+        stage_rows.append({
+            "day": pd.Timestamp(call["day"]),
+            "stage": stage,
+        })
+    stages = pd.DataFrame(stage_rows)
+    stage_daily = pd.DataFrame()
+    if not stages.empty:
+        stage_daily = (
+            stages.assign(value=1)
+            .pivot_table(index="day", columns="stage", values="value", aggfunc="sum", fill_value=0)
+            .reset_index()
+        )
+
+    out = days.copy()
+    for frame in (raw_daily, setup_daily, stage_daily):
+        if not frame.empty:
+            out = out.merge(frame, on="day", how="left")
+    for col in [
+        "raw_events",
+        "setup_signals",
+        "no_confirmation",
+        "invalid_path",
+        "blocked_session",
+        "blocked_cost",
+        "pre_portfolio_pass",
+    ]:
+        if col not in out:
+            out[col] = 0
+        out[col] = out[col].fillna(0).astype(int)
+    return out
+
+
+def _empty_frequency_days(days: pd.DataFrame) -> pd.DataFrame:
+    out = days.copy()
+    for col in [
+        "raw_events",
+        "setup_signals",
+        "no_confirmation",
+        "invalid_path",
+        "blocked_session",
+        "blocked_cost",
+        "pre_portfolio_pass",
+    ]:
+        out[col] = 0
+    return out
+
+
+def audit_call_stage(
+    call: pd.Series,
+    bars: pd.DataFrame,
+    structure: pd.DataFrame,
+    atr_values: pd.Series,
+    cfg: PathSetupConfig,
+) -> str:
+    signal_i = int(call["entry_i"])
+    if cfg.setup == "sweep_reclaim_displacement":
+        confirm = find_displacement_confirmation(
+            bars,
+            signal_i,
+            str(call["trade_direction"]),
+            atr_values,
+            max_bars=max(1, cfg.confirm_bars or 4),
+            displacement_atr=cfg.displacement_atr,
+            close_location=cfg.displacement_close_location,
+        )
+        if confirm is None:
+            return "no_confirmation"
+        entry_i = int(confirm)
+    else:
+        entry_i = signal_i + cfg.confirm_bars
+        if cfg.confirm_bars and cfg.require_reversal_close and not reversal_confirmed(bars, signal_i, entry_i, str(call["trade_direction"])):
+            return "no_confirmation"
+    if entry_i >= len(bars) - 1:
+        return "invalid_path"
+
+    entry_ts = pd.Timestamp(bars["ts"].iat[entry_i]) if cfg.confirm_bars else pd.Timestamp(call["ts"])
+    direction = str(call["trade_direction"])
+    entry = float(bars["close"].iat[entry_i])
+    sl, tp = path_stop_target(
+        bars,
+        signal_i if cfg.stop_model == "path_extreme" else entry_i,
+        direction,
+        entry,
+        cfg.min_rr,
+        atr_values,
+        stop_model=cfg.stop_model,
+        stop_buffer_atr=cfg.stop_buffer_atr,
+        structure=structure,
+        entry_ts=entry_ts,
+    )
+    if not np.isfinite(sl):
+        return "invalid_path"
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return "invalid_path"
+    stop_pct = risk / entry * 100.0
+    if stop_pct < cfg.min_stop_pct:
+        return "invalid_path"
+    if cfg.sessions and session_bucket(entry_ts) not in cfg.sessions:
+        return "blocked_session"
+    stress_cost_r = cfg.stress_round_trip_pct * entry / risk
+    if cfg.max_stress_cost_r is not None and stress_cost_r > cfg.max_stress_cost_r:
+        return "blocked_cost"
+    outcome = walk_structural_outcome(bars, entry_i, direction, sl, tp, horizon=cfg.horizon_bars, track_excursion=True)
+    if outcome is None:
+        return "invalid_path"
+    return "pre_portfolio_pass"
+
+
+def primary_frequency_blocker(row: pd.Series) -> str:
+    if int(row.get("portfolio_accepted", 0)) > 0:
+        return "accepted"
+    if int(row.get("pre_portfolio_pass", 0)) > 0:
+        return "portfolio_throttle"
+    for col in ["blocked_cost", "blocked_session", "invalid_path", "no_confirmation"]:
+        if int(row.get(col, 0)) > 0:
+            return col
+    if int(row.get("setup_signals", 0)) == 0 and int(row.get("raw_events", 0)) > 0:
+        return "no_setup_signal"
+    return "no_raw_event"
+
+
 def evaluate_symbol(symbol: str, cfg: PathSetupConfig) -> pd.DataFrame:
     bars = load_crypto(symbol, tf=cfg.entry_tf, days=cfg.days, exchange=cfg.exchange, source=cfg.source).reset_index(drop=True)
     if bars.empty:
@@ -374,6 +585,46 @@ def write_report(summary: pd.DataFrame, trades: pd.DataFrame, output: Path, wind
     output.write_text("\n".join(lines) + "\n")
 
 
+def write_frequency_report(daily: pd.DataFrame, output: Path) -> None:
+    lines = ["# Path Setup Frequency Audit", "", "## Summary", ""]
+    if daily.empty:
+        lines.append("_empty_")
+    else:
+        summary = daily.groupby("primary_blocker").agg(
+            symbol_days=("day", "size"),
+            raw_events=("raw_events", "sum"),
+            setup_signals=("setup_signals", "sum"),
+            no_confirmation=("no_confirmation", "sum"),
+            invalid_path=("invalid_path", "sum"),
+            blocked_session=("blocked_session", "sum"),
+            blocked_cost=("blocked_cost", "sum"),
+            pre_portfolio_pass=("pre_portfolio_pass", "sum"),
+            portfolio_accepted=("portfolio_accepted", "sum"),
+        ).reset_index().sort_values("symbol_days", ascending=False)
+        lines.extend(_markdown_table(summary))
+        lines.extend(["", "## Symbol Split", ""])
+        by_symbol = daily.groupby(["symbol", "primary_blocker"]).agg(
+            days=("day", "size"),
+            raw_events=("raw_events", "sum"),
+            setup_signals=("setup_signals", "sum"),
+            pre_portfolio_pass=("pre_portfolio_pass", "sum"),
+            portfolio_accepted=("portfolio_accepted", "sum"),
+        ).reset_index().sort_values(["symbol", "days"], ascending=[True, False])
+        lines.extend(_markdown_table(by_symbol))
+        lines.extend(["", "## Read", ""])
+        lines.extend([
+            "- `no_raw_event`: path-context event layer found no expansion/sweep event that day.",
+            "- `no_setup_signal`: events existed, but this setup did not select them.",
+            "- `no_confirmation`: setup signal fired, but confirmation did not arrive in time.",
+            "- `invalid_path`: confirmation existed, but stop/outcome geometry was not tradable.",
+            "- `blocked_session`: tradable path existed outside the configured sessions.",
+            "- `blocked_cost`: tradable path existed but stress cost in R was too high.",
+            "- `portfolio_throttle`: trade passed setup gates but portfolio risk rules skipped it.",
+        ])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines) + "\n")
+
+
 def _markdown_table(df: pd.DataFrame) -> list[str]:
     if df.empty:
         return ["_empty_"]
@@ -407,6 +658,7 @@ def main() -> int:
     parser.add_argument("--displacement-atr", type=float, default=0.75)
     parser.add_argument("--displacement-close-location", type=float, default=0.6)
     parser.add_argument("--portfolio", action="store_true")
+    parser.add_argument("--frequency-audit", action="store_true")
     parser.add_argument("--risk-pct", type=float, default=0.0025)
     parser.add_argument("--max-open", type=int, default=3)
     parser.add_argument("--max-open-per-symbol", type=int, default=1)
@@ -446,6 +698,7 @@ def main() -> int:
     summary.to_csv(out_dir / f"{suffix}_summary.csv", index=False)
     windows.to_csv(out_dir / f"{suffix}_windows.csv", index=False)
     write_report(summary, trades, out_dir / f"{suffix}_report.md", windows)
+    accepted = pd.DataFrame()
     if args.portfolio:
         accepted, portfolio_summary = run_portfolio_validation(
             trades,
@@ -461,6 +714,10 @@ def main() -> int:
         pd.DataFrame([portfolio_summary]).to_csv(out_dir / f"{portfolio_suffix}_summary.csv", index=False)
         print("\nPortfolio")
         print(pd.DataFrame([portfolio_summary]).to_string(index=False))
+    if args.frequency_audit:
+        daily = run_frequency_audit(symbols, config=cfg, accepted=accepted)
+        daily.to_csv(out_dir / f"{suffix}_frequency_daily.csv", index=False)
+        write_frequency_report(daily, out_dir / f"{suffix}_frequency_report.md")
     print(summary.to_string(index=False))
     if not windows.empty:
         print("\nRolling windows")
