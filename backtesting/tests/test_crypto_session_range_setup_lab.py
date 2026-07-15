@@ -113,6 +113,48 @@ def test_session_range_signal_continuation_uses_reference_bias():
     ) is None
 
 
+def test_session_range_signal_reversal_fades_reference_bias_after_sweep_reclaim():
+    assert session_range_signal(
+        mode="reversal",
+        close=97.0,
+        ref_high=100.0,
+        ref_low=95.0,
+        ref_mid=97.5,
+        atr=2.0,
+        swept_high=True,
+        swept_low=False,
+        breakout_buffer_atr=0.25,
+        reclaim_buffer_atr=0.0,
+        reference_bias="long",
+    ) == "short"
+    assert session_range_signal(
+        mode="reversal",
+        close=97.0,
+        ref_high=100.0,
+        ref_low=95.0,
+        ref_mid=97.5,
+        atr=2.0,
+        swept_high=False,
+        swept_low=False,
+        breakout_buffer_atr=0.25,
+        reclaim_buffer_atr=0.0,
+        reference_bias="long",
+    ) is None
+    assert session_range_signal(
+        mode="reversal",
+        close=97.0,
+        ref_high=100.0,
+        ref_low=95.0,
+        ref_mid=97.5,
+        atr=2.0,
+        swept_high=True,
+        swept_low=False,
+        breakout_buffer_atr=0.25,
+        reclaim_buffer_atr=0.0,
+        reference_bias="short",
+    ) is None
+
+
 def test_output_suffix_records_session_range_config():
     cfg = SessionRangeConfig(
         setup="ny_london_breakout",

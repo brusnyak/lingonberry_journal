@@ -56,9 +56,11 @@ SETUP_SESSIONS = {
     "london_asia_breakout": ("asia", "london", "breakout"),
     "london_asia_fakeout": ("asia", "london", "fakeout"),
     "london_asia_continuation": ("asia", "london", "continuation"),
+    "london_asia_reversal": ("asia", "london", "reversal"),
     "ny_london_breakout": ("london", "ny", "breakout"),
     "ny_london_fakeout": ("london", "ny", "fakeout"),
     "ny_london_continuation": ("london", "ny", "continuation"),
+    "ny_london_reversal": ("london", "ny", "reversal"),
 }
 
 
@@ -115,7 +117,7 @@ def evaluate_symbol(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
         if ref_range_atr < cfg.min_reference_range_atr or ref_range_atr > cfg.max_reference_range_atr:
             continue
         ref_bias = reference_direction(ref, ref_high, ref_low, atr_now, cfg)
-        if mode == "continuation" and ref_bias is None:
+        if mode in {"continuation", "reversal"} and ref_bias is None:
             continue
         day_count = 0
         swept_high = False
@@ -213,7 +215,7 @@ def audit_symbol_sessions(symbol: str, cfg: SessionRangeConfig) -> pd.DataFrame:
             continue
         ref_bias = reference_direction(ref, ref_high, ref_low, atr_now, cfg)
         row["reference_bias"] = ref_bias or ""
-        if mode == "continuation" and ref_bias is None:
+        if mode in {"continuation", "reversal"} and ref_bias is None:
             rows.append(row)
             continue
 
@@ -306,6 +308,12 @@ def session_range_signal(
             return "long"
         if reference_bias == "short" and close < ref_low - breakout_buffer_atr * atr:
             return "short"
+        return None
+    if mode == "reversal":
+        if reference_bias == "long" and swept_high and close < ref_high - reclaim_buffer_atr * atr and close <= ref_mid:
+            return "short"
+        if reference_bias == "short" and swept_low and close > ref_low + reclaim_buffer_atr * atr and close >= ref_mid:
+            return "long"
         return None
     raise ValueError(f"unknown session range mode: {mode}")
 
@@ -484,7 +492,7 @@ def output_suffix(cfg: SessionRangeConfig) -> str:
         f"tf{cfg.entry_tf}",
         f"ref{cfg.min_reference_range_atr:g}-{cfg.max_reference_range_atr:g}",
     ]
-    if cfg.setup.endswith("_continuation"):
+    if cfg.setup.endswith(("_continuation", "_reversal")):
         parts.append(f"refloc{cfg.reference_close_location_threshold:g}")
         parts.append(f"refbody{cfg.min_reference_body_atr:g}")
     if cfg.max_stress_cost_r is not None:

@@ -5929,3 +5929,86 @@ Next:
 3. Add session-state features to forensics:
    London displacement direction, London close location, distance to VWAP/EMA,
    and whether NY reverses or continues after the first NY hour.
+
+## Phase 66 -- NY London reversal finds a narrow ETH lead, broad setup rejects (2026-07-15)
+
+Added reversal mode to `backtesting.crypto.session_range_setup_lab`:
+
+- `ny_london_reversal`;
+- `london_asia_reversal`;
+- reference session must have directional body and close near the range edge;
+- trade session must sweep the displaced reference extreme and reclaim back
+  through the reference midpoint;
+- reversal trades opposite the reference bias.
+
+Why tested:
+
+- Phase 65 showed continuation after wide session expansion is bad.
+- This tests the opposite hypothesis: after London displacement, NY may fade the
+  exhausted move.
+
+Synthetic coverage:
+
+- reversal requires reference bias;
+- reversal requires sweep of the displaced extreme;
+- reversal requires reclaim into the reference range.
+
+Verified:
+
+```bash
+PYTHONPATH=. pytest backtesting/tests/test_crypto_session_range_setup_lab.py -q
+```
+
+Result: `9 passed`.
+
+NY London reversal, wide London range `6-14 ATR`, `min_rr=1.5`:
+
+| Basket / window | Accepted | Stress PF | Portfolio R | Max DD | Win rate | Read |
+|-----------------|---------:|----------:|------------:|-------:|---------:|------|
+| Top4 360d | 63 | 0.94 | -1.91R | 2.05% | 33.33% | broad reject |
+| All6 360d | 71 | 0.95 | -1.75R | 2.03% | 33.80% | broad reject |
+| Top4 720d | 123 | 0.86 | -9.79R | 3.37% | 34.15% | broad reject |
+| All6 720d | 142 | 0.88 | -9.41R | 3.86% | 34.51% | broad reject |
+
+Symbol split:
+
+| Symbol / window | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|-----------------|---------:|----------:|------------:|-------:|------|
+| ETH 360d | 13 | 2.74 | +5.27R | 0.32% | promising but thin |
+| ETH 720d | 19 | 2.55 | +8.39R | 0.60% | promising |
+| ETH 1080d | 23 | 1.56 | +4.95R | 0.86% | positive but weakens |
+| SOL 360d | 23 | 1.31 | +3.33R | 0.89% | short-window lead only |
+| SOL 720d | 52 | 0.75 | -7.78R | 3.81% | reject |
+| ETH+SOL 360d | 36 | 1.63 | +8.60R | 0.65% | positive |
+| ETH+SOL 720d | 71 | 1.02 | +0.61R | 2.72% | too weak |
+
+Diagnostics:
+
+| Variant | Window | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|---------|--------|---------:|----------:|------------:|-------:|------|
+| ETH 720d, range `4-14 ATR` | 720d | 77 | 0.63 | -18.51R | 4.67% | broadening range destroys edge |
+| ETH 720d, 2x stress cost, no cap | 720d | 19 | 1.85 | +5.78R | 0.69% | survives |
+| ETH 1080d, 2x stress cost, no cap | 1080d | 26 | 1.10 | +1.32R | 1.11% | marginal |
+| ETH 720d, RR 1.0 | 720d | 19 | 2.05 | +5.39R | 0.60% | lower return than RR 1.5 |
+| ETH 1080d, RR 1.0 | 1080d | 23 | 1.23 | +1.95R | 0.86% | weaker than RR 1.5 |
+
+Read:
+
+- NY London reversal is not a broad crypto setup.
+- ETH-only wide London reversal is a legitimate research lead:
+  positive through 1080d, survives 2x costs over 720d, but sample is thin.
+- SOL is not robust; it looks good on 360d and fails on 720d.
+- Broadening the reference range to `4-14 ATR` destroys ETH edge, so the setup
+  depends on genuinely displaced London sessions, not normal London ranges.
+- Do not promote this to deployment yet. Treat it as a candidate third setup
+  requiring more validation and state features.
+
+Next:
+
+1. Add session-state/indicator columns to reversal trades:
+   London bias, London range ATR, close location, EMA/VWAP distance, first NY
+   hour direction.
+2. Stress ETH-only reversal with rolling walk-forward windows and higher fee
+   assumptions.
+3. Search for a broader non-ETH setup separately; do not force NY reversal onto
+   all symbols.
