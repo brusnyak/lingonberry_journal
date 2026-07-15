@@ -206,6 +206,8 @@ def signal_forensic_row(
         "signal_close_location": candle_close_location(bars, signal_i),
         "post_4bar_direction_move_atr": post_direction_move_atr(bars, atr_values, signal_i, direction, bars_forward=4),
     }
+    signal_probe = signal_entry_probe(call, bars, structure, atr_values, cfg)
+    base.update(signal_probe)
 
     confirm_i = confirmed_entry_index(call, bars, atr_values, cfg)
     if confirm_i is None:
@@ -227,6 +229,7 @@ def signal_forensic_row(
             "bars_to_exit": np.nan,
             "exit_kind": "",
             "portfolio_accepted": False,
+            "missed_target_after_reject": bool(signal_probe.get("signal_entry_hit_target", False)),
         }
 
     entry_i = int(confirm_i)
@@ -254,13 +257,13 @@ def signal_forensic_row(
         "tp": tp,
     }
     if entry_i >= len(bars) - 1 or not np.isfinite(sl):
-        return {**common, **empty_outcome_fields("invalid_path")}
+        return {**common, **empty_outcome_fields("invalid_path", signal_probe)}
     risk = abs(entry - sl)
     if risk <= 0:
-        return {**common, **empty_outcome_fields("invalid_path")}
+        return {**common, **empty_outcome_fields("invalid_path", signal_probe)}
     stop_pct = risk / entry * 100.0
     if stop_pct < cfg.min_stop_pct:
-        return {**common, **empty_outcome_fields("invalid_path"), "stop_pct": stop_pct}
+        return {**common, **empty_outcome_fields("invalid_path", signal_probe), "stop_pct": stop_pct}
 
     base_cost_r = cfg.base_round_trip_pct * entry / risk
     stress_cost_r = cfg.stress_round_trip_pct * entry / risk
@@ -272,7 +275,7 @@ def signal_forensic_row(
 
     outcome = walk_structural_outcome(bars, entry_i, direction, sl, tp, horizon=cfg.horizon_bars, track_excursion=True)
     if outcome is None:
-        return {**common, **empty_outcome_fields("invalid_path"), "stop_pct": stop_pct, "stress_cost_r": stress_cost_r}
+        return {**common, **empty_outcome_fields("invalid_path", signal_probe), "stop_pct": stop_pct, "stress_cost_r": stress_cost_r}
     gross_r = float(outcome["r_multiple"])
     accepted = _trade_key(symbol, signal_ts, entry_ts, direction) in accepted_keys
     return {
@@ -291,6 +294,7 @@ def signal_forensic_row(
         "bars_to_exit": int(outcome.get("bars_to_exit", cfg.horizon_bars)),
         "exit_kind": str(outcome.get("exit_reason", "expiry")),
         "portfolio_accepted": accepted,
+        "missed_target_after_reject": (not accepted and bool(signal_probe.get("signal_entry_hit_target", False))),
     }
 
 
@@ -313,7 +317,75 @@ def confirmed_entry_index(call: pd.Series, bars: pd.DataFrame, atr_values: pd.Se
     return entry_i
 
 
-def empty_outcome_fields(stage: str) -> dict:
+def signal_entry_probe(
+    call: pd.Series,
+    bars: pd.DataFrame,
+    structure: pd.DataFrame,
+    atr_values: pd.Series,
+    cfg: PathSetupConfig,
+) -> dict:
+    signal_i = int(call["entry_i"])
+    direction = str(call["trade_direction"])
+    if signal_i >= len(bars) - 1:
+        return empty_signal_probe()
+    signal_ts = pd.Timestamp(call["ts"])
+    entry = float(bars["close"].iat[signal_i])
+    sl, tp = path_stop_target(
+        bars,
+        signal_i,
+        direction,
+        entry,
+        cfg.min_rr,
+        atr_values,
+        stop_model=cfg.stop_model,
+        stop_buffer_atr=cfg.stop_buffer_atr,
+        structure=structure,
+        entry_ts=signal_ts,
+    )
+    if not np.isfinite(sl):
+        return empty_signal_probe()
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return empty_signal_probe()
+    outcome = walk_structural_outcome(bars, signal_i, direction, sl, tp, horizon=cfg.horizon_bars, track_excursion=True)
+    if outcome is None:
+        return empty_signal_probe()
+    stress_cost_r = cfg.stress_round_trip_pct * entry / risk
+    gross_r = float(outcome["r_multiple"])
+    return {
+        "signal_entry": entry,
+        "signal_entry_sl": sl,
+        "signal_entry_tp": tp,
+        "signal_entry_stop_pct": risk / entry * 100.0,
+        "signal_entry_stress_cost_r": stress_cost_r,
+        "signal_entry_gross_r": gross_r,
+        "signal_entry_stress_net_r": gross_r - stress_cost_r,
+        "signal_entry_mfe_r": float(outcome.get("mfe_r", np.nan)),
+        "signal_entry_mae_r": float(outcome.get("mae_r", np.nan)),
+        "signal_entry_bars_to_exit": int(outcome.get("bars_to_exit", cfg.horizon_bars)),
+        "signal_entry_exit_kind": str(outcome.get("exit_reason", "expiry")),
+        "signal_entry_hit_target": str(outcome.get("exit_reason", "")) == "target",
+    }
+
+
+def empty_signal_probe() -> dict:
+    return {
+        "signal_entry": np.nan,
+        "signal_entry_sl": np.nan,
+        "signal_entry_tp": np.nan,
+        "signal_entry_stop_pct": np.nan,
+        "signal_entry_stress_cost_r": np.nan,
+        "signal_entry_gross_r": np.nan,
+        "signal_entry_stress_net_r": np.nan,
+        "signal_entry_mfe_r": np.nan,
+        "signal_entry_mae_r": np.nan,
+        "signal_entry_bars_to_exit": np.nan,
+        "signal_entry_exit_kind": "",
+        "signal_entry_hit_target": False,
+    }
+
+
+def empty_outcome_fields(stage: str, signal_probe: dict | None = None) -> dict:
     return {
         "stage": stage,
         "stop_pct": np.nan,
@@ -329,6 +401,7 @@ def empty_outcome_fields(stage: str) -> dict:
         "bars_to_exit": np.nan,
         "exit_kind": "",
         "portfolio_accepted": False,
+        "missed_target_after_reject": bool((signal_probe or {}).get("signal_entry_hit_target", False)),
     }
 
 
@@ -863,8 +936,14 @@ def apply_filters(trades: pd.DataFrame, cfg: PathSetupConfig) -> pd.DataFrame:
 
 def output_suffix(cfg: PathSetupConfig) -> str:
     parts = [cfg.setup, f"rr{cfg.min_rr:g}", cfg.stop_model, f"lb{cfg.lookback_bars}", f"exp{cfg.expansion_atr:g}"]
+    if cfg.entry_tf != "15":
+        parts.append(f"tf{cfg.entry_tf}")
     if cfg.sessions:
         parts.append("sessions-" + "-".join(cfg.sessions))
+    if cfg.base_round_trip_pct != 0.0006:
+        parts.append(f"basefee{cfg.base_round_trip_pct:g}")
+    if cfg.stress_round_trip_pct != 0.0020:
+        parts.append(f"stressfee{cfg.stress_round_trip_pct:g}")
     if cfg.max_stress_cost_r is not None:
         parts.append(f"stresscost{cfg.max_stress_cost_r:g}r")
     if cfg.include_sweep_reclaim_long:
@@ -952,7 +1031,10 @@ def write_signal_forensics_report(forensics: pd.DataFrame, output: Path) -> None
             target_rate=("exit_kind", lambda s: float((s == "target").mean())),
             stop_rate=("exit_kind", lambda s: float((s == "stop").mean())),
             expiry_rate=("exit_kind", lambda s: float((s == "expiry").mean())),
+            signal_entry_target_rate=("signal_entry_hit_target", "mean"),
+            missed_target_rate=("missed_target_after_reject", "mean"),
             avg_stress_r=("stress_net_r", "mean"),
+            avg_signal_entry_stress_r=("signal_entry_stress_net_r", "mean"),
             median_stop_pct=("stop_pct", "median"),
             median_stress_cost_r=("stress_cost_r", "median"),
             median_pre_move_atr=("pre_8bar_move_atr", "median"),
@@ -964,6 +1046,8 @@ def write_signal_forensics_report(forensics: pd.DataFrame, output: Path) -> None
         by_symbol = forensics.groupby(["symbol", "review_stage"]).agg(
             signals=("signal_ts", "count"),
             avg_stress_r=("stress_net_r", "mean"),
+            avg_signal_entry_stress_r=("signal_entry_stress_net_r", "mean"),
+            missed_target_rate=("missed_target_after_reject", "mean"),
             target_rate=("exit_kind", lambda s: float((s == "target").mean())),
             stop_rate=("exit_kind", lambda s: float((s == "stop").mean())),
         ).reset_index().sort_values(["symbol", "signals"], ascending=[True, False])
@@ -985,12 +1069,24 @@ def write_signal_forensics_report(forensics: pd.DataFrame, output: Path) -> None
             })
         lines.extend(_markdown_table(pd.DataFrame(rows)))
 
+        lines.extend(["", "## Missed Signal-Entry Probe", ""])
+        missed = forensics.groupby("review_stage").agg(
+            signals=("signal_ts", "count"),
+            signal_entry_pf=("signal_entry_stress_net_r", lambda s: profit_factor(s.dropna().to_numpy(dtype=float))),
+            signal_entry_avg_r=("signal_entry_stress_net_r", "mean"),
+            signal_entry_target_rate=("signal_entry_hit_target", "mean"),
+            median_signal_entry_mfe_r=("signal_entry_mfe_r", "median"),
+            median_signal_entry_mae_r=("signal_entry_mae_r", "median"),
+        ).reset_index().sort_values("signals", ascending=False)
+        lines.extend(_markdown_table(missed))
+
         lines.extend(["", "## Read", ""])
         lines.extend([
             "- Use the CSV to review individual rejected setup signals, not just accepted trades.",
             "- `blocked_session` rows show whether non-Asia signals had edge before promoting a wider session.",
             "- `no_confirmation` rows show whether displacement confirmation is too strict or correctly blocking chop.",
             "- `blocked_cost` rows show whether the stress-cost gate blocks winners or correctly blocks untradable tight stops.",
+            "- `signal_entry_*` columns are diagnostics only: they show what happened if the engine entered at the signal close without confirmation.",
         ])
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines) + "\n")
@@ -1013,12 +1109,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Path setup lab.")
     parser.add_argument("--symbols", default=",".join(DEFAULT_SYMBOLS))
     parser.add_argument("--days", type=int, default=360)
+    parser.add_argument("--entry-tf", default="15")
     parser.add_argument("--setup", default="expansion_exhaustion_fade", choices=["expansion_exhaustion_fade", "sweep_reclaim_displacement"])
     parser.add_argument("--min-rr", type=float, default=1.5)
     parser.add_argument("--horizon-bars", type=int, default=96)
     parser.add_argument("--sessions", default="")
     parser.add_argument("--max-stress-cost-r", type=float, default=None)
     parser.add_argument("--max-stop-pct", type=float, default=None)
+    parser.add_argument("--base-round-trip-pct", type=float, default=0.0006)
+    parser.add_argument("--stress-round-trip-pct", type=float, default=0.0020)
     parser.add_argument("--lookback-bars", type=int, default=32)
     parser.add_argument("--expansion-atr", type=float, default=1.5)
     parser.add_argument("--include-sweep-reclaim-long", action="store_true")
@@ -1044,12 +1143,15 @@ def main() -> int:
     sessions = tuple(s.strip() for s in args.sessions.split(",") if s.strip()) or None
     cfg = PathSetupConfig(
         days=args.days,
+        entry_tf=str(args.entry_tf),
         setup=args.setup,
         min_rr=args.min_rr,
         horizon_bars=args.horizon_bars,
         sessions=sessions,
         max_stress_cost_r=args.max_stress_cost_r,
         max_stop_pct=args.max_stop_pct,
+        base_round_trip_pct=args.base_round_trip_pct,
+        stress_round_trip_pct=args.stress_round_trip_pct,
         lookback_bars=args.lookback_bars,
         expansion_atr=args.expansion_atr,
         include_sweep_reclaim_long=args.include_sweep_reclaim_long,

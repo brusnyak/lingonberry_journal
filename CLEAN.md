@@ -5562,3 +5562,61 @@ Read:
   over 360d. It is better quality, not deployment-ready.
 - Next work: export the close-location 0.75 trades/signals for UI review, then
   test controlled symbol/session expansion using this stricter confirmation.
+
+## Phase 60 -- Missing-day probe and harsh-condition validation (2026-07-15)
+
+Extended `--signal-forensics` with signal-entry diagnostics:
+
+- `signal_entry_*` columns simulate diagnostic-only entry at the setup signal
+  close, using the same legacy path-extreme stop and fixed-R target.
+- `missed_target_after_reject` marks rejected signals where signal-close entry
+  would have reached target.
+- This does not change strategy execution. It measures whether rejected/missing
+  days contain real directional movement.
+
+BNB+XRP Asia 360d, close-location 0.75:
+
+| Stage | Signals | Missed target rate | Signal-entry PF | Signal-entry avg R | Confirmation-entry avg R | Read |
+|-------|--------:|-------------------:|----------------:|-------------------:|-------------------------:|------|
+| no_confirmation | 1033 | 28.17% | 0.23 | -0.85R | n/a | price sometimes moves, but blind signal entry is awful |
+| blocked_session | 346 | 57.80% | 0.78 | -0.15R | -0.33R | many targets, but still negative after losses/costs |
+| blocked_cost | 74 | 55.41% | 0.39 | -0.53R | -0.44R | cost gate blocks untradable tight-risk setups |
+| accepted | 44 | 0.00% | 5.56 | +0.79R | +0.31R | accepted signals are structurally different |
+| invalid_path | 34 | 0.00% | 0.00 | -2.11R | n/a | reject |
+
+Read:
+
+- The user's concern is partially correct: many rejected setup signals do move
+  toward target.
+- The stronger conclusion is harsher: rejected groups still lose as groups. The
+  missed winners are not enough to pay for the stops and costs.
+- The next improvement should not be "enter rejected signals." It should learn
+  what separates accepted signal-entry PF 5.56 from no-confirmation PF 0.23:
+  likely stronger close location, cleaner pre-signal compression, and avoiding
+  fast adverse MAE.
+
+Harsh validation for current best lead:
+
+| Test | Accepted | Stress PF | Portfolio R | Max DD | Read |
+|------|---------:|----------:|------------:|-------:|------|
+| BNB+XRP Asia 360d, 15m, close 0.75 | 44 | 1.77 | +13.82R | 0.82% | current best lead |
+| BNB+XRP Asia 720d | 68 | 1.30 | +10.09R | 2.01% | positive but materially weaker |
+| all 6 symbols Asia 360d | 125 | 1.04 | +2.68R | 2.71% | broad symbol expansion kills edge |
+| BNB+XRP all sessions 360d | 202 | 0.83 | -21.17R | 5.64% | all-session expansion rejects |
+| BNB+XRP Asia 360d, 2x stress cost with cap | 14 | 1.19 | +1.03R | 0.65% | survives, but almost no frequency |
+| BNB+XRP Asia 360d, 3x stress cost with cap | 4 | 3.18 | +0.98R | 0.07% | meaningless tiny sample |
+| BNB+XRP Asia 360d, 2x stress cost no cap | 115 | 0.41 | -61.88R | 15.75% | cost cap is mandatory |
+| BNB+XRP Asia 180d, 5m | 17 | 0.35 | -9.62R | 2.40% | 5m rejects |
+| BNB+XRP Asia 180d, 30m | 13 | 0.97 | -0.26R | 1.47% | 30m rejects/flat |
+
+Read:
+
+- The current setup is a narrow 15m BNB/XRP Asia sleeve, not a general crypto
+  price-action engine.
+- The stress-cost cap is not optional. Removing it under harsher costs destroys
+  the strategy.
+- 5m is too noisy for this setup; 30m loses frequency and does not preserve
+  edge.
+- Next development should use the signal-forensics CSV to classify rejected
+  no-confirmation rows into subtypes, then test one explicit alternative
+  confirmation rule. Do not broaden symbols/sessions blindly.

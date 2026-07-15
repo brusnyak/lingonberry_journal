@@ -70,6 +70,18 @@ def test_output_suffix_records_displacement_close_location():
     assert "close0p75" in output_suffix(cfg)
 
 
+def test_output_suffix_records_non_default_stress_fee():
+    cfg = PathSetupConfig(stress_round_trip_pct=0.004)
+
+    assert "stressfee0p004" in output_suffix(cfg)
+
+
+def test_output_suffix_records_non_default_entry_tf():
+    cfg = PathSetupConfig(entry_tf="5")
+
+    assert "tf5" in output_suffix(cfg)
+
+
 def test_path_extreme_stop_places_stop_behind_candle_extreme():
     bars = pd.DataFrame({
         "open": [100.0] * 20,
@@ -160,3 +172,37 @@ def test_signal_forensic_row_marks_no_confirmation_stage():
     assert row["stage"] == "no_confirmation"
     assert row["entry"] != row["entry"]
     assert row["post_4bar_direction_move_atr"] == row["post_4bar_direction_move_atr"]
+    assert "signal_entry_stress_net_r" in row
+    assert "missed_target_after_reject" in row
+
+
+def test_signal_forensic_row_flags_missed_target_without_confirmation():
+    ts = pd.date_range("2026-01-01", periods=8, freq="15min", tz="UTC")
+    bars = pd.DataFrame({
+        "ts": ts,
+        "open": [100.0, 100.0, 101.5, 103.0, 104.0, 104.0, 104.0, 104.0],
+        "high": [101.0, 102.0, 104.0, 105.0, 105.0, 105.0, 105.0, 105.0],
+        "low": [99.0, 100.0, 101.0, 102.5, 103.5, 103.5, 103.5, 103.5],
+        "close": [100.0, 101.0, 103.5, 104.0, 104.0, 104.0, 104.0, 104.0],
+    })
+    atr_values = _atr(bars, 1)
+    structure = build_structure_index(bars, StructureConfig(left=1, right=1))
+    call = pd.Series({
+        "symbol": "SYNTH",
+        "entry_i": 0,
+        "ts": ts[0],
+        "trade_direction": "long",
+        "path_context": "sweep_reclaim_long",
+    })
+    cfg = PathSetupConfig(
+        setup="sweep_reclaim_displacement",
+        confirm_bars=1,
+        displacement_atr=3.0,
+        min_rr=1.0,
+    )
+
+    row = signal_forensic_row(call, bars, structure, atr_values, cfg, set())
+
+    assert row["stage"] == "no_confirmation"
+    assert row["signal_entry_hit_target"] is True
+    assert row["missed_target_after_reject"] is True
