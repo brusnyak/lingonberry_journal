@@ -36,6 +36,36 @@ BINGX_MIN_NOTIONAL = 2.0
 DEFAULT_RISK_PCT = 0.005
 DEFAULT_LEVERAGE = 50.0
 
+_JOURNAL_ACCOUNT_NAME = "BingX Crypto (live)"
+
+
+def _journal_account_id() -> int:
+    """Get-or-create the journal account row every crypto trade logs
+    against. Reuses the existing, already-tested relational journal
+    (bot/journal/) instead of a new store -- this IS "a journal you can
+    analyze", not a placeholder for one."""
+    from bot.journal.crud import get_accounts, create_account
+    for acc in get_accounts():
+        if acc.get("name") == _JOURNAL_ACCOUNT_NAME:
+            return acc["id"]
+    return create_account(
+        name=_JOURNAL_ACCOUNT_NAME, currency="USDT", initial_balance=20.0,
+        broker="BingX", platform="ccxt", risk_per_trade_pct=DEFAULT_RISK_PCT * 100,
+    )
+
+
+def _structural_snapshot(symbol: str) -> dict:
+    """Best-effort: attach the structural read (trend/FVG/OI) at the
+    moment of execution as indicator_data, so a closed trade can later be
+    analyzed against what the setup actually looked like -- not just
+    entry/exit prices. Never blocks execution if it fails."""
+    try:
+        from webapp.crypto_watch import snapshot
+        bare_symbol = symbol.replace("/USDT:USDT", "USDT").replace("/", "")
+        return snapshot(bare_symbol)
+    except Exception as e:
+        return {"snapshot_error": f"{type(e).__name__}: {e}"}
+
 
 class ExecutionError(Exception):
     pass
@@ -172,10 +202,75 @@ def execute_trade(symbol: str, direction: str, entry: float, sl: float,
                                         params={"reduceOnly": True, "clientOrderId": tag + suffix})
         tp_orders.append({"id": tp_order.get("id"), "r_mult": r_mult, "price": tp_price, "lots": tp_lots})
 
+    trade_id = None
+    try:
+        import datetime as _dt
+        from bot.journal.crud import create_trade
+        # "strategy" column doesn't exist on the live trades table (more
+        # schema drift, found alongside the entry/sl/tp NOT NULL bug) --
+        # create_trade() silently drops unknown columns, so fold it into
+        # indicator_data too rather than lose it.
+        snapshot = _structural_snapshot(symbol)
+        snapshot["_strategy"] = "orb_wide_stop"
+        trade_id = create_trade(
+            account_id=_journal_account_id(), symbol=symbol, direction=direction.upper(),
+            entry_price=entry, position_size=lots, ts_open=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+            asset_type="crypto", sl_price=sl, tp_price=entry + sign * TP3_R * risk,
+            timeframe="5m", strategy="orb_wide_stop", external_id=order.get("id"),
+            provider="bingx", indicator_data=snapshot,
+        )
+    except Exception as e:
+        # Journal logging must never block or roll back a real order that
+        # already filled -- the trade is live either way. Surface the
+        # failure in the response instead of silently losing the record.
+        journal_error = f"{type(e).__name__}: {e}"
+    else:
+        journal_error = None
+
     return {
         "entry_order": order.get("id"), "sl_order": sl_order.get("id"),
         "tp_orders": tp_orders, "tag": tag, "sizing": sizing,
+        "journal_trade_id": trade_id, "journal_error": journal_error,
     }
+
+
+def _find_open_journal_trade(symbol: str) -> Optional[dict]:
+    """Best-effort match: the journal doesn't persist a live order-id-to-
+    trade-id map across process restarts, so this matches on symbol +
+    OPEN status within the crypto account. Fine for a single-position-per-
+    symbol assumption (which execute_trade already enforces via the
+    exchange itself); would need a real mapping if that assumption changes."""
+    try:
+        from bot.journal.crud import get_open_trades
+        bare_symbol = symbol.replace("/USDT:USDT", "USDT").replace("/", "")
+        for t in get_open_trades(account_id=_journal_account_id()):
+            if t.get("symbol") in (symbol, bare_symbol):
+                return t
+    except Exception:
+        pass
+    return None
+
+
+def _log_journal_sl_move(symbol: str, new_sl: float) -> None:
+    trade = _find_open_journal_trade(symbol)
+    if trade:
+        from bot.journal.crud import update_trade_sl_tp
+        update_trade_sl_tp(trade["id"], sl_price=new_sl, tp_price=trade.get("tp_price"))
+
+
+def _log_journal_close(symbol: str, close_order: dict) -> None:
+    trade = _find_open_journal_trade(symbol)
+    if not trade:
+        return
+    exit_price = close_order.get("average") or close_order.get("price")
+    if not exit_price:
+        return  # don't guess a fill price -- leave the trade OPEN in the journal rather than log a wrong exit
+    from bot.journal.crud import close_trade
+    # "MANUAL" matches the existing outcome vocabulary (TP/SL/MANUAL/OPEN,
+    # see bot/journal/stats.py) rather than inventing a new value other
+    # code doesn't recognize -- the actual EOD reason is in the payload.
+    close_trade(trade["id"], exit_price=float(exit_price), outcome="MANUAL",
+                event_type="eod_close", provider="bingx", payload={"reason": "eod_cutoff"})
 
 
 def manage_open_positions(client: Optional[ccxt.bingx] = None, eod_hour_utc: int = 19,
@@ -224,7 +319,8 @@ def manage_open_positions(client: Optional[ccxt.bingx] = None, eod_hour_utc: int
             for o in open_orders:
                 client.cancel_order(o["id"], symbol)
             close_side = "sell" if direction == "long" else "buy"
-            client.create_order(symbol, "market", close_side, contracts, params={"reduceOnly": True})
+            close_order = client.create_order(symbol, "market", close_side, contracts, params={"reduceOnly": True})
+            _log_journal_close(symbol, close_order)
             actions.append({"symbol": symbol, "action": "eod_close", "contracts": contracts})
             continue
 
@@ -238,6 +334,7 @@ def manage_open_positions(client: Optional[ccxt.bingx] = None, eod_hour_utc: int
                 new_sl = client.create_stop_loss_order(
                     symbol, "market", exit_side, contracts, stopLossPrice=entry_price,
                     params={"clientOrderId": sl_order.get("clientOrderId", "") or (symbol + SL_CLIENT_ID_SUFFIX)})
+                _log_journal_sl_move(symbol, entry_price)
                 actions.append({"symbol": symbol, "action": "moved_sl_to_breakeven",
                                  "new_sl_order": new_sl.get("id"), "price": entry_price})
 

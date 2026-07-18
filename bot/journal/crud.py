@@ -178,10 +178,19 @@ def create_trade(
         "asset_type": asset_type,
         "direction": direction,
         "entry_price": entry_price,
+        # Legacy columns (entry/sl/tp) still exist as NOT NULL in the live
+        # DB alongside entry_price/sl_price/tp_price -- the read side
+        # already treats them as synonyms (_normalize_trade_row), but this
+        # insert never wrote them, so create_trade() has been silently
+        # failing with an IntegrityError on any DB carrying the old schema.
+        # Found 2026-07-18 while wiring the crypto journal.
+        "entry": entry_price,
         "position_size": position_size,
         "lot_size": position_size,
         "sl_price": sl_price if sl_price is not None else entry_price,
         "tp_price": tp_price if tp_price is not None else entry_price,
+        "sl": sl_price if sl_price is not None else entry_price,
+        "tp": tp_price if tp_price is not None else entry_price,
         "ts_open": ts_open,
         "rr_ratio": compute_rr_ratio(entry_price, sl_price, tp_price),
         "session": _normalize_session_name(session or detect_session(ts_open)),

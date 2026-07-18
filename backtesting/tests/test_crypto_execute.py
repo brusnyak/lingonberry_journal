@@ -22,6 +22,20 @@ from webapp.crypto_execute import (
 )
 
 
+@pytest.fixture(autouse=True)
+def no_real_journal(monkeypatch):
+    """execute_trade/manage_open_positions write to the real trade journal
+    (bot/journal/) as a side effect. Must never let that hit the real
+    sqlite DB during tests -- patch every journal entry point these
+    functions lazy-import, at the module they're imported from."""
+    monkeypatch.setattr("bot.journal.crud.create_trade", lambda **kw: 999)
+    monkeypatch.setattr("bot.journal.crud.get_accounts", lambda: [])
+    monkeypatch.setattr("bot.journal.crud.create_account", lambda **kw: 1)
+    monkeypatch.setattr("bot.journal.crud.get_open_trades", lambda **kw: [])
+    monkeypatch.setattr("bot.journal.crud.update_trade_sl_tp", lambda *a, **kw: None)
+    monkeypatch.setattr("bot.journal.crud.close_trade", lambda *a, **kw: None)
+
+
 class FakeClient:
     """Minimal fake standing in for ccxt.bingx. Records every call so tests
     can assert on exact order parameters, not just "it didn't crash"."""
