@@ -53,7 +53,7 @@ def _save_user_accounts(data: dict[str, list[int]]) -> None:
 
 
 def _ensure_user_account(telegram_user_id: int) -> int:
-    """Return the user's account ID, creating a fresh 50k account if needed."""
+    """Return the user's account ID, claiming orphan DB accounts or creating a fresh one."""
     uid = str(telegram_user_id)
     data = _load_user_accounts()
 
@@ -65,7 +65,18 @@ def _ensure_user_account(telegram_user_id: int) -> int:
         _save_user_accounts(data)
         return owned[0]
 
-    # No valid accounts — create a fresh one
+    # Check for orphan accounts in the DB that no user owns yet
+    all_accounts = journal_db.get_accounts()
+    all_mapped: set[int] = set()
+    for ua in data.values():
+        all_mapped.update(ua)
+    orphans = [a["id"] for a in all_accounts if a["id"] not in all_mapped]
+    if orphans:
+        data[uid] = [orphans[0]]
+        _save_user_accounts(data)
+        return orphans[0]
+
+    # No valid accounts and no orphans — create a fresh one
     new_id = journal_db.create_account(
         name="Trading Account",
         currency="USD",
