@@ -68,6 +68,7 @@ class TrIct(Strategy):
         tp1_r: float = 1.0,
         tp1_frac: float = 0.4,
         tp2_frac: float = 0.35,
+        use_body_swings: bool = False,  # opt-in: True uses body-based structure pivots (2026-07-18 fix), False preserves prior wick-based behavior for existing callers/tests
     ):
         self.risk_pct = risk_pct
         self.min_rr = min_rr
@@ -94,6 +95,7 @@ class TrIct(Strategy):
         self.tp1_r = tp1_r
         self.tp1_frac = tp1_frac
         self.tp2_frac = tp2_frac
+        self.use_body_swings = use_body_swings
 
         # Set in init()
         self._df30: pd.DataFrame = None
@@ -132,7 +134,8 @@ class TrIct(Strategy):
         self._n = len(df30)
         self._df30 = df30
 
-        swings, levels = swing_points(df30, swing_length=self.swing_length, causal=True)
+        swings, levels = swing_points(df30, swing_length=self.swing_length, causal=True,
+                                       use_body=self.use_body_swings)
         labels = label_structure(df30, swings, levels)
         self._fvgs = detect_fvgs(df30)
         self._obs = detect_order_blocks(df30, labels)

@@ -16,6 +16,7 @@ def swing_points(
     ohlc: pd.DataFrame,
     swing_length: int = 3,
     causal: bool = True,
+    use_body: bool = False,
 ) -> tuple[pd.Series, pd.Series]:
     """
     Detect swing highs and swing lows using a pivot method.
@@ -43,6 +44,17 @@ def swing_points(
         On 5m data this gives a ~35 min window (7 candles total).
     causal : bool
         Shift labels forward by swing_length to eliminate look-ahead (default True).
+    use_body : bool
+        False (default): pivots are the raw high/low wicks -- this is the
+        standard convention (Williams Fractals, and ICT's own stated rule:
+        wick locates the pivot, body-close only confirms a BREAK of it,
+        which label_structure already does separately). Research + our own
+        A/B test (2026-07-18, XRPUSDT/SOLUSDT) both found body-only pivots
+        perform WORSE (PF 1.26->0.90, 1.28->0.73) and match no recognized
+        convention. Kept as an option for testing, not because it's an
+        improvement -- don't set True without a specific reason to re-test it.
+        True: pivots identified from candle BODY extremes
+        (max(open,close) / min(open,close)) instead of wicks.
 
     Returns
     -------
@@ -51,8 +63,12 @@ def swing_points(
     levels : pd.Series
         Price level of each swing point. NaN where no swing.
     """
-    high = ohlc["high"].values
-    low = ohlc["low"].values
+    if use_body:
+        high = np.maximum(ohlc["open"].values, ohlc["close"].values)
+        low = np.minimum(ohlc["open"].values, ohlc["close"].values)
+    else:
+        high = ohlc["high"].values
+        low = ohlc["low"].values
     n = len(ohlc)
 
     swings = np.full(n, np.nan)
