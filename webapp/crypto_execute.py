@@ -113,14 +113,35 @@ def size_trade(symbol: str, direction: str, entry: float, sl: float,
     }
 
 
-def execute_trade(symbol: str, direction: str, entry: float, sl: float, tp: float,
+# ORB's validated ladder (backtesting/lvl2_orb/orb_wide_stop.py _make_signal,
+# multi_target=True): 50% at 2R, 30% at 5R, remaining 20% rides to 10R.
+# Kept as named constants here so the execution layer can't silently drift
+# from what was actually backtested.
+TP1_R, TP1_FRAC = 2.0, 0.5
+TP2_R, TP2_FRAC = 5.0, 0.3
+TP3_R, TP3_FRAC = 10.0, 0.2
+
+TP1_CLIENT_ID_SUFFIX = "-tp1"
+TP2_CLIENT_ID_SUFFIX = "-tp2"
+TP3_CLIENT_ID_SUFFIX = "-tp3"
+SL_CLIENT_ID_SUFFIX = "-sl"
+
+
+def execute_trade(symbol: str, direction: str, entry: float, sl: float,
                    risk_pct: float = DEFAULT_RISK_PCT, leverage: float = DEFAULT_LEVERAGE,
                    confirm: bool = False) -> dict:
     """Places a REAL order on the connected BingX account. Only ever called
     from the explicit POST /api/crypto/execute route -- a human clicking a
     button -- never from a loop. `confirm=True` is required or this refuses
     to do anything; that flag must come from the actual button click, not
-    a default, so no code path can fire an order by accident."""
+    a default, so no code path can fire an order by accident.
+
+    Mirrors ORB's actual backtested mechanics, not a simplified version:
+    SL at the full stop distance (the strategy's own SL, e.g. the opposite
+    side of the opening range), and a 3-tier TP ladder (2R/5R/10R at
+    50/30/20%) instead of one all-or-nothing target. `tp` isn't a
+    parameter here anymore -- it's derived from `sl`'s risk distance so the
+    ladder can never drift from what was backtested."""
     if not confirm:
         raise ExecutionError("execute_trade requires confirm=True from an explicit user action")
 
@@ -129,30 +150,95 @@ def execute_trade(symbol: str, direction: str, entry: float, sl: float, tp: floa
     if not sizing["tradeable"]:
         raise ExecutionError(sizing["reject_reason"] or "position not tradeable")
 
+    lots = sizing["lots"]
+    risk = abs(entry - sl)
+    sign = 1 if direction == "long" else -1
     side = "buy" if direction == "long" else "sell"
-    client.set_leverage(leverage, symbol)
+    exit_side = "sell" if direction == "long" else "buy"
+    tag = f"{symbol.replace('/', '').replace(':', '')}-{int(entry * 1e8)}"
 
-    order = client.create_order(symbol, "market", side, sizing["lots"])
-    sl_side = "sell" if direction == "long" else "buy"
-    sl_order = client.create_stop_loss_order(symbol, "market", sl_side, sizing["lots"], stopLossPrice=sl)
-    tp_order = client.create_take_profit_order(symbol, "market", sl_side, sizing["lots"], takeProfitPrice=tp)
+    client.set_leverage(leverage, symbol)
+    order = client.create_order(symbol, "market", side, lots)
+    sl_order = client.create_stop_loss_order(symbol, "market", exit_side, lots, stopLossPrice=sl,
+                                              params={"clientOrderId": tag + SL_CLIENT_ID_SUFFIX})
+
+    tp_orders = []
+    for r_mult, frac, suffix in [(TP1_R, TP1_FRAC, TP1_CLIENT_ID_SUFFIX),
+                                   (TP2_R, TP2_FRAC, TP2_CLIENT_ID_SUFFIX),
+                                   (TP3_R, TP3_FRAC, TP3_CLIENT_ID_SUFFIX)]:
+        tp_price = entry + sign * r_mult * risk
+        tp_lots = lots * frac
+        tp_order = client.create_order(symbol, "limit", exit_side, tp_lots, tp_price,
+                                        params={"reduceOnly": True, "clientOrderId": tag + suffix})
+        tp_orders.append({"id": tp_order.get("id"), "r_mult": r_mult, "price": tp_price, "lots": tp_lots})
 
     return {
-        "entry_order": order.get("id"), "sl_order": sl_order.get("id"), "tp_order": tp_order.get("id"),
-        "sizing": sizing,
+        "entry_order": order.get("id"), "sl_order": sl_order.get("id"),
+        "tp_orders": tp_orders, "tag": tag, "sizing": sizing,
     }
 
 
-def manage_open_positions(client: Optional[ccxt.bingx] = None) -> list[dict]:
-    """Safe to automate: only tightens stops on positions a human already
-    opened, per the breakeven/structural-trail rules from position_manager.py.
-    NOT YET IMPLEMENTED -- placeholder so this gap is visible, not silently
-    assumed done. Needs: a loop that calls this on an interval, structure
-    computed on each open position's symbol, and moves SL via
-    client.edit_order / cancel+recreate the SL order once the trade has
-    moved far enough in profit or new structure confirms it."""
-    raise NotImplementedError(
-        "Live position management (breakeven/trailing on open trades) is not "
-        "built yet -- backtest-time logic exists in crypto/position_manager.py "
-        "but nothing runs it against real open positions on an interval."
-    )
+def manage_open_positions(client: Optional[ccxt.bingx] = None, eod_hour_utc: int = 19,
+                           eod_minute_utc: int = 55) -> list[dict]:
+    """Safe to automate (only reduces risk on positions a human already
+    opened, never opens anything new). Meant to be called from a polling
+    loop on a short interval (e.g. every 30-60s).
+
+    Two things, matching ORB's actual live-trade lifecycle:
+      1. TP1 filled -> move SL to breakeven for the remaining size. Detected
+         by the TP1 order (tagged '-tp1') no longer being open while the SL
+         order still sits at the original (non-breakeven) price -- avoids
+         needing a separate persistent trade database for this check.
+      2. Past EOD cutoff (15:55 America/New_York, expressed here in UTC
+         since exchange timestamps are UTC) -> cancel remaining orders and
+         market-close whatever's left. ORB never holds overnight; this is
+         the live-side enforcement of that, mirroring eod_min in
+         orb_wide_stop.py.
+
+    NOT YET LIVE-TESTED against a real open position -- the account has
+    been at $0 balance all session, so there has never been a position for
+    this to actually manage. Logic is covered by
+    backtesting/tests/test_crypto_execute.py against a mock client; that is
+    NOT the same as proving it against a real BingX fill. Treat the first
+    live run as a supervised test, not a proven-safe automation.
+    """
+    import datetime as _dt
+
+    client = client or get_client()
+    positions = client.fetch_positions()
+    open_positions = [p for p in positions if float(p.get("contracts") or 0) != 0]
+    now_utc = _dt.datetime.now(_dt.timezone.utc)
+    past_eod = (now_utc.hour, now_utc.minute) >= (eod_hour_utc, eod_minute_utc)
+
+    actions = []
+    for pos in open_positions:
+        symbol = pos["symbol"]
+        direction = "long" if pos.get("side") == "long" else "short"
+        entry_price = float(pos.get("entryPrice") or 0)
+        contracts = float(pos.get("contracts") or 0)
+        open_orders = client.fetch_open_orders(symbol)
+        tp1_open = any(o.get("clientOrderId", "").endswith(TP1_CLIENT_ID_SUFFIX) for o in open_orders)
+        sl_orders = [o for o in open_orders if o.get("clientOrderId", "").endswith(SL_CLIENT_ID_SUFFIX)]
+
+        if past_eod:
+            for o in open_orders:
+                client.cancel_order(o["id"], symbol)
+            close_side = "sell" if direction == "long" else "buy"
+            client.create_order(symbol, "market", close_side, contracts, params={"reduceOnly": True})
+            actions.append({"symbol": symbol, "action": "eod_close", "contracts": contracts})
+            continue
+
+        if not tp1_open and sl_orders:
+            sl_order = sl_orders[0]
+            sl_price = float(sl_order.get("stopPrice") or sl_order.get("price") or 0)
+            already_be = abs(sl_price - entry_price) < entry_price * 1e-6
+            if not already_be:
+                client.cancel_order(sl_order["id"], symbol)
+                exit_side = "sell" if direction == "long" else "buy"
+                new_sl = client.create_stop_loss_order(
+                    symbol, "market", exit_side, contracts, stopLossPrice=entry_price,
+                    params={"clientOrderId": sl_order.get("clientOrderId", "") or (symbol + SL_CLIENT_ID_SUFFIX)})
+                actions.append({"symbol": symbol, "action": "moved_sl_to_breakeven",
+                                 "new_sl_order": new_sl.get("id"), "price": entry_price})
+
+    return actions

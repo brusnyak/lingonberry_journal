@@ -364,7 +364,7 @@ def api_crypto_execute():
     try:
         result = execute_trade(
             symbol=body["symbol"], direction=body["direction"],
-            entry=float(body["entry"]), sl=float(body["sl"]), tp=float(body["tp"]),
+            entry=float(body["entry"]), sl=float(body["sl"]),
             risk_pct=float(body.get("risk_pct", 0.005)), confirm=True,
         )
         return jsonify(result)
