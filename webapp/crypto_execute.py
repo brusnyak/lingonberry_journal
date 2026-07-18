@@ -34,7 +34,14 @@ BINGX_TAKER_FEE = 0.0005
 BINGX_MAKER_FEE = 0.0002
 BINGX_MIN_NOTIONAL = 2.0
 DEFAULT_RISK_PCT = 0.005
-DEFAULT_LEVERAGE = 50.0
+# Was 50.0 -- rejected live against 1000BONK's real BingX leverage cap
+# (found 2026-07-18 sandbox test, code 109400). 20x confirmed working; still
+# a guess for pairs not yet checked individually. All backtests this session
+# assumed leverage=50 in CryptoCosts -- since it only acts as a position-size
+# CAP and our stops were usually wide enough that sizing rarely approached
+# it, this likely didn't change results, but that's an assumption, not
+# verified per-trade. Flagged as an open audit item, not silently ignored.
+DEFAULT_LEVERAGE = 20.0
 
 _JOURNAL_ACCOUNT_NAME = "BingX Crypto (live)"
 
@@ -72,11 +79,32 @@ class ExecutionError(Exception):
 
 
 def get_client() -> ccxt.bingx:
+    """Sandbox by default -- must explicitly set BINGX_SANDBOX=false in .env
+    to hit live trading. The more dangerous mode requires the opt-in, not
+    the safer one; found 2026-07-18 that the same API key works against
+    BingX's VST demo endpoint (open-api-vst.*, set_sandbox_mode(True)) with
+    no separate demo-specific key needed -- this had never actually been
+    tried before that point in the session, just assumed unavailable."""
     key = os.environ.get("BINGX_API_KEY")
     secret = os.environ.get("BINGX_API_SECRET")
     if not key or not secret:
         raise ExecutionError("BINGX_API_KEY / BINGX_API_SECRET not set in environment")
-    return ccxt.bingx({"apiKey": key, "secret": secret, "options": {"defaultType": "swap"}})
+    client = ccxt.bingx({"apiKey": key, "secret": secret, "options": {"defaultType": "swap"}})
+    sandbox = os.environ.get("BINGX_SANDBOX", "true").strip().lower() != "false"
+    if sandbox:
+        client.set_sandbox_mode(True)
+    return client
+
+
+def is_sandbox(client: ccxt.bingx) -> bool:
+    return "open-api-vst" in str(client.urls.get("api", ""))
+
+
+def _balance_asset(bal: dict) -> str:
+    """Live wallets settle in USDT; BingX's VST sandbox settles in VST
+    (a different asset key in the same response shape). Pick whichever is
+    actually present instead of hardcoding one."""
+    return "VST" if "VST" in bal else "USDT"
 
 
 def _market_specs(client: ccxt.bingx, symbol: str) -> dict:
@@ -93,14 +121,18 @@ def _market_specs(client: ccxt.bingx, symbol: str) -> dict:
 
 
 def account_state(client: Optional[ccxt.bingx] = None) -> dict:
-    """Read-only: current USDT balance + open positions. Safe to call anytime."""
+    """Read-only: current balance (USDT live / VST sandbox) + open positions.
+    Safe to call anytime."""
     client = client or get_client()
     bal = client.fetch_balance()
+    asset = _balance_asset(bal)
     positions = client.fetch_positions()
     open_positions = [p for p in positions if float(p.get("contracts") or 0) != 0]
     return {
-        "usdt_free": (bal.get("USDT") or {}).get("free", 0.0),
-        "usdt_total": (bal.get("USDT") or {}).get("total", 0.0),
+        "sandbox": is_sandbox(client),
+        "asset": asset,
+        "usdt_free": (bal.get(asset) or {}).get("free", 0.0),
+        "usdt_total": (bal.get(asset) or {}).get("total", 0.0),
         "open_positions": len(open_positions),
         "positions": [
             {"symbol": p["symbol"], "side": p.get("side"), "contracts": p.get("contracts"),
@@ -187,10 +219,19 @@ def execute_trade(symbol: str, direction: str, entry: float, sl: float,
     exit_side = "sell" if direction == "long" else "buy"
     tag = f"{symbol.replace('/', '').replace(':', '')}-{int(entry * 1e8)}"
 
-    client.set_leverage(leverage, symbol)
-    order = client.create_order(symbol, "market", side, lots)
-    sl_order = client.create_stop_loss_order(symbol, "market", exit_side, lots, stopLossPrice=sl,
-                                              params={"clientOrderId": tag + SL_CLIENT_ID_SUFFIX})
+    # BingX requires an explicit side (LONG/SHORT/BOTH) AND rejects a float
+    # leverage value (20.0 fails, 20 works) AND -- if the account is in
+    # Hedge mode (this one is) -- requires positionSide (LONG/SHORT) on
+    # every order, entry and exit alike, since it identifies which
+    # position bucket the order acts on, not the order's buy/sell side.
+    # All three found live in sandbox 2026-07-18, none caught by the mock.
+    leverage_side = "LONG" if direction == "long" else "SHORT"
+    position_side = leverage_side  # same value, different BingX param name
+    client.set_leverage(int(leverage), symbol, params={"side": leverage_side})
+    order = client.create_order(symbol, "market", side, lots, params={"positionSide": position_side})
+    sl_order = client.create_stop_loss_order(
+        symbol, "market", exit_side, lots, stopLossPrice=sl,
+        params={"clientOrderId": tag + SL_CLIENT_ID_SUFFIX, "positionSide": position_side})
 
     tp_orders = []
     for r_mult, frac, suffix in [(TP1_R, TP1_FRAC, TP1_CLIENT_ID_SUFFIX),
@@ -198,8 +239,13 @@ def execute_trade(symbol: str, direction: str, entry: float, sl: float,
                                    (TP3_R, TP3_FRAC, TP3_CLIENT_ID_SUFFIX)]:
         tp_price = entry + sign * r_mult * risk
         tp_lots = lots * frac
+        # reduceOnly conflicts with positionSide in Hedge mode ("the
+        # 'ReduceOnly' field can not be filled") -- positionSide alone
+        # identifies this as closing that position side, found live
+        # 2026-07-18 on the first real sandbox order.
         tp_order = client.create_order(symbol, "limit", exit_side, tp_lots, tp_price,
-                                        params={"reduceOnly": True, "clientOrderId": tag + suffix})
+                                        params={"clientOrderId": tag + suffix,
+                                                "positionSide": position_side})
         tp_orders.append({"id": tp_order.get("id"), "r_mult": r_mult, "price": tp_price, "lots": tp_lots})
 
     trade_id = None
@@ -212,9 +258,15 @@ def execute_trade(symbol: str, direction: str, entry: float, sl: float,
         # indicator_data too rather than lose it.
         snapshot = _structural_snapshot(symbol)
         snapshot["_strategy"] = "orb_wide_stop"
+        # position_size must be the dollar NOTIONAL (lots * entry), not raw
+        # contract count -- close_trade()'s PnL calc is pct_move *
+        # position_size, and for a pair like 1000BONK (millions of
+        # contracts on a tiny per-unit price) passing raw lots produced a
+        # $29,939 "profit" on a real 0.4% move. Found live 2026-07-18.
         trade_id = create_trade(
             account_id=_journal_account_id(), symbol=symbol, direction=direction.upper(),
-            entry_price=entry, position_size=lots, ts_open=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+            entry_price=entry, position_size=sizing["notional"],
+            ts_open=_dt.datetime.now(_dt.timezone.utc).isoformat(),
             asset_type="crypto", sl_price=sl, tp_price=entry + sign * TP3_R * risk,
             timeframe="5m", strategy="orb_wide_stop", external_id=order.get("id"),
             provider="bingx", indicator_data=snapshot,
@@ -315,11 +367,15 @@ def manage_open_positions(client: Optional[ccxt.bingx] = None, eod_hour_utc: int
         tp1_open = any(o.get("clientOrderId", "").endswith(TP1_CLIENT_ID_SUFFIX) for o in open_orders)
         sl_orders = [o for o in open_orders if o.get("clientOrderId", "").endswith(SL_CLIENT_ID_SUFFIX)]
 
+        position_side = "LONG" if direction == "long" else "SHORT"
         if past_eod:
             for o in open_orders:
                 client.cancel_order(o["id"], symbol)
             close_side = "sell" if direction == "long" else "buy"
-            close_order = client.create_order(symbol, "market", close_side, contracts, params={"reduceOnly": True})
+            # positionSide, not reduceOnly, closes the position in Hedge
+            # mode -- same fix as execute_trade's TP orders.
+            close_order = client.create_order(symbol, "market", close_side, contracts,
+                                               params={"positionSide": position_side})
             _log_journal_close(symbol, close_order)
             actions.append({"symbol": symbol, "action": "eod_close", "contracts": contracts})
             continue
@@ -333,7 +389,8 @@ def manage_open_positions(client: Optional[ccxt.bingx] = None, eod_hour_utc: int
                 exit_side = "sell" if direction == "long" else "buy"
                 new_sl = client.create_stop_loss_order(
                     symbol, "market", exit_side, contracts, stopLossPrice=entry_price,
-                    params={"clientOrderId": sl_order.get("clientOrderId", "") or (symbol + SL_CLIENT_ID_SUFFIX)})
+                    params={"clientOrderId": sl_order.get("clientOrderId", "") or (symbol + SL_CLIENT_ID_SUFFIX),
+                            "positionSide": position_side})
                 _log_journal_sl_move(symbol, entry_price)
                 actions.append({"symbol": symbol, "action": "moved_sl_to_breakeven",
                                  "new_sl_order": new_sl.get("id"), "price": entry_price})

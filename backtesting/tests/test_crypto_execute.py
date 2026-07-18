@@ -46,6 +46,7 @@ class FakeClient:
         self._open_orders = open_orders or []
         self._next_id = 1
         self.calls = []
+        self.urls = {"api": "https://open-api.bingx.com"}  # is_sandbox() checks this
 
     def _id(self):
         i = self._next_id
@@ -67,8 +68,13 @@ class FakeClient:
     def fetch_open_orders(self, symbol):
         return [o for o in self._open_orders if o.get("symbol", symbol) == symbol]
 
-    def set_leverage(self, leverage, symbol):
-        self.calls.append(("set_leverage", leverage, symbol))
+    def set_leverage(self, leverage, symbol, params=None):
+        # BingX requires params.side (LONG/SHORT/BOTH) -- validated here
+        # (not just recorded) after this exact call shape passed the mock
+        # while being broken against the real sandbox API on 2026-07-18.
+        if not params or params.get("side") not in ("LONG", "SHORT", "BOTH"):
+            raise ValueError(f"set_leverage requires params.side, got {params}")
+        self.calls.append(("set_leverage", leverage, symbol, params))
 
     def create_order(self, symbol, type, side, amount, price=None, params=None):
         self.calls.append(("create_order", symbol, type, side, amount, price, params))
@@ -123,11 +129,15 @@ def test_execute_trade_places_full_ladder_at_correct_prices_and_fractions(monkey
         assert tp["price"] == pytest.approx(price)
         assert tp["lots"] == pytest.approx(result["sizing"]["lots"] * frac)
 
-    tp_calls = [c for c in client.calls if c[0] == "create_order" and c[6] and c[6].get("reduceOnly")]
+    tp_calls = [c for c in client.calls if c[0] == "create_order"
+                and (c[6] or {}).get("clientOrderId", "").endswith(("-tp1", "-tp2", "-tp3"))]
     assert len(tp_calls) == 3
+    for c in tp_calls:
+        assert c[6]["positionSide"] == "LONG"  # Hedge mode -- required on every order, entry and exit
     sl_calls = [c for c in client.calls if c[0] == "create_stop_loss_order"]
     assert len(sl_calls) == 1
     assert sl_calls[0][5] == 0.0014  # SL is the strategy's own stop, unchanged from input
+    assert sl_calls[0][6]["positionSide"] == "LONG"
 
 
 def test_execute_trade_short_direction_flips_sides_correctly(monkeypatch):
@@ -136,8 +146,10 @@ def test_execute_trade_short_direction_flips_sides_correctly(monkeypatch):
     result = execute_trade("AKE/USDT:USDT", "short", entry=0.0016, sl=0.0018, confirm=True)
     # short: TP prices go DOWN from entry
     assert result["tp_orders"][0]["price"] < 0.0016
-    entry_calls = [c for c in client.calls if c[0] == "create_order" and c[3] == "sell" and c[6] is None]
+    entry_calls = [c for c in client.calls if c[0] == "create_order" and c[3] == "sell"
+                   and not (c[6] or {}).get("reduceOnly")]
     assert len(entry_calls) == 1  # market sell to open the short
+    assert entry_calls[0][6].get("positionSide") == "SHORT"
 
 
 # ── manage_open_positions ────────────────────────────────────────────────────
@@ -193,8 +205,9 @@ def test_manage_closes_and_cancels_past_eod():
     actions = manage_open_positions(client=client, eod_hour_utc=now.hour, eod_minute_utc=0)
     assert len(actions) == 1
     assert actions[0]["action"] == "eod_close"
-    close_calls = [c for c in client.calls if c[0] == "create_order" and c[6] and c[6].get("reduceOnly")]
+    close_calls = [c for c in client.calls if c[0] == "create_order" and (c[6] or {}).get("positionSide")]
     assert len(close_calls) == 1
+    assert close_calls[0][6]["positionSide"] == "LONG"
     assert close_calls[0][3] == "sell"  # closing a long -> sell
     cancel_calls = [c for c in client.calls if c[0] == "cancel_order"]
     assert len(cancel_calls) == 2  # both open orders cancelled
