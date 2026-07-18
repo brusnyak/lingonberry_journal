@@ -1,327 +1,344 @@
 # Trading Journal Bot 📊
 
-A comprehensive trading journal system with Telegram bot integration, web dashboard, and TradeLocker market data.
+A trading journal platform combining a Telegram bot, web dashboard, automated charting, market data, backtesting, and performance analytics.
+
+## Demo
+
+[![Trading Journal Bot Demo](https://img.youtube.com/vi/nYDuefVCTns/maxresdefault.jpg)](https://youtu.be/nYDuefVCTns)
+
+**Watch the demo:** [YouTube](https://youtu.be/nYDuefVCTns)
 
 ## Features
 
-- 📱 **Telegram Bot** - Conversational trade logging with guided flow
-- 🌐 **Web Dashboard** - Analytics, charts, and performance tracking
-- 📈 **Chart Generation** - Automatic candlestick charts with entry/SL/TP markers
-- 🔄 **TradeLocker Integration** - Live forex data and quotes
-- 📊 **Advanced Analytics** - Win rate, expectancy, Sharpe ratio, Monte Carlo simulation
-- 🎯 **Weekly Goals** - Track adherence to trading plans
-- 🧠 **Psychology Tracking** - Mood, stress, confidence metrics
-- 💼 **Multi-Account Support** - Manage multiple prop firm accounts
+* **Telegram trade logging** with a guided conversational flow
+* **Web dashboard** for trades, goals, reviews, and analytics
+* **Automatic charts** with entry, stop-loss, and take-profit markers
+* **TradeLocker integration** for forex and commodity market data
+* **Performance analytics** including win rate, expectancy, Sharpe ratio, and Monte Carlo simulation
+* **Trading psychology tracking** for mood, stress, and confidence
+* **Multi-account support** for personal and prop-firm accounts
+* **Backtesting tools** for ICT/SMC and systematic strategies
+* **Weekly goals and reviews** for process adherence
 
 ## Quick Start
 
-### 1. Installation
+### 1. Install
 
 ```bash
-# Clone repository
 git clone https://github.com/YOUR_USERNAME/trading-journal.git
 cd trading-journal
 
-# Create virtual environment
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Configuration
+### 2. Configure
 
 ```bash
-# Copy environment template
 cp .env.example .env
-
-# Edit .env and add your credentials:
-# - TELEGRAM_JOURAL (bot token from @BotFather)
-# - TELEGRAM_JOURNAL_CHAT (your chat ID)
-# - WEBAPP_URL (public URL for mini app)
-# - TL_* credentials (see .env.example)
 ```
+
+Add the required credentials to `.env`:
+
+```env
+TELEGRAM_JOURAL=your_bot_token
+TELEGRAM_JOURNAL_CHAT=your_chat_id
+WEBAPP_URL=https://your-public-url
+```
+
+TradeLocker credentials and additional options are documented in `.env.example`.
+
+> Verify whether `TELEGRAM_JOURAL` is intentionally named this way. If not, rename it to `TELEGRAM_JOURNAL` throughout the project.
 
 ### 3. Run
 
 ```bash
-# Start Telegram bot
-make bot
-
-# Start web app (in another terminal)
-make webapp
-
-# Run tests
-make test
+make bot       # Start Telegram bot
+make webapp    # Start web dashboard
+make test      # Run tests
 ```
 
-## TradeLocker Integration
+Run the bot and web application in separate terminals.
 
-Live forex data via TradeLocker (Goat Funded Trader).
+## Telegram Commands
 
-**What you get:**
-- ✅ Live OHLC data for forex and commodities
-- ✅ Real-time bid/ask quotes
-- ✅ Symbol resolution (.X suffix)
-- ✅ Local market data caching
+| Command               | Description                                 |
+| --------------------- | ------------------------------------------- |
+| `/start`              | Initialize the bot and configure an account |
+| `/journal`            | Log a new trade                             |
+| `/open`               | View open trades                            |
+| `/close [id] [price]` | Close a trade                               |
+| `/stats`              | View performance statistics                 |
+| `/report`             | Open the web dashboard                      |
+| `/mini`               | Open the Telegram Mini App                  |
+| `/accounts`           | List trading accounts                       |
+| `/useaccount [id]`    | Switch the active account                   |
+| `/newaccount`         | Create an account                           |
+| `/setgoal`            | Set a weekly goal                           |
 
-## Telegram Bot Commands
+## Telegram Mini App
 
-- `/start` - Initialize bot and setup account
-- `/journal` - Log a new trade
-- `/open` - View open trades
-- `/close [id] [exit_price]` - Close a trade
-- `/stats` - View performance statistics
-- `/report` - Open web dashboard
-- `/mini` - Open Telegram Mini App
-- `/accounts` - List all accounts
-- `/useaccount [id]` - Switch active account
-- `/newaccount` - Create new account
-- `/setgoal` - Set weekly goal
+Telegram Mini Apps require a public HTTPS URL.
 
-## Telegram Mini App Setup
+### ngrok
 
-To use the Telegram Mini App feature, you need a public HTTPS URL:
-
-### Option 1: ngrok (Quick Testing)
 ```bash
-# Install ngrok
-brew install ngrok  # macOS
-# or download from ngrok.com
-
-# Start tunnel
+brew install ngrok
 ngrok http 5000
-
-# Copy HTTPS URL to .env
-WEBAPP_URL=https://your-ngrok-url.ngrok.io
 ```
 
-### Option 2: Cloudflare Tunnel (Recommended)
+Add the generated URL to `.env`:
+
+```env
+WEBAPP_URL=https://your-url.ngrok.io
+```
+
+### Cloudflare Tunnel
+
 ```bash
-# Install cloudflared
 brew install cloudflare/cloudflare/cloudflared
-
-# Start tunnel
 cloudflared tunnel --url http://localhost:5000
-
-# Copy HTTPS URL to .env
 ```
 
-### Option 3: Deploy to Server
-```bash
-# Set your server IP/domain in .env
-WEBAPP_URL=https://your-domain.com
+For production, deploy the web application behind your own HTTPS domain.
 
-# Deploy using provided scripts
-make deploy
-```
+## Market Data
 
-## Data Sources
+| Source        | Markets               | Role                        |
+| ------------- | --------------------- | --------------------------- |
+| TradeLocker   | Forex and commodities | Primary live source         |
+| Broker CSV    | NAS100                | Broker-specific data        |
+| yFinance      | Stocks and crypto     | Fallback source             |
+| CSV / Parquet | All supported markets | Local cache and backtesting |
 
-| Source | Asset Class | Status |
-|--------|-------------|--------|
-| TradeLocker | Forex, Commodities | ✅ Live |
-| Broker CSV | NAS100 (USATECHIDXUSD) | ✅ Live |
-| yFinance | Stocks, Crypto | ✅ Fallback |
-| Local CSV/Parquet | All | ✅ Cached |
+TradeLocker support includes:
+
+* Live OHLC data
+* Bid and ask quotes
+* Broker symbol resolution
+* Local market-data caching
 
 ## Backtesting
 
-### Forex V1 (ICT/SMC)
-Multi-timeframe structure strategy using 4H/1H/15m/1m with sweep + MSS + FVG retest. See `backtesting/forex_v1.py`.
+### Forex ICT/SMC
 
-### NAS100 Test
-Multi-strategy backtest for NAS100 index data. Tests EMA crossover, RSI mean reversion, SMA pullback, and breakout strategies across timeframes and RR settings. See `backtesting/nas100_test.py`.
+`backtesting/forex_v1.py` implements a multi-timeframe strategy using:
+
+* 4H, 1H, 15m, and 1m structure
+* Liquidity sweeps
+* Market structure shifts
+* Fair-value-gap retests
+
+### NAS100
+
+`backtesting/nas100_test.py` tests multiple strategy families across different timeframes and risk-to-reward settings:
+
+* EMA crossover
+* RSI mean reversion
+* SMA pullback
+* Breakout strategies
 
 ```bash
-make nas100         # 30-day single run
-make nas100-sweep   # full config sweep
-make nas100-monthly # rolling monthly validation
+make nas100          # Run a 30-day test
+make nas100-sweep    # Test multiple configurations
+make nas100-monthly  # Run rolling monthly validation
 ```
 
 ## Architecture
 
-| App | Port | Role |
-|-----|------|------|
-| **trading-journal** (this) | 5000 | Trade logging, dashboard, backtesting |
-| **pine review** (`pine-review/`) | 8000 | Market structure analysis, trade review |
-| **vibe-trading** (`../vibe-trading/`) | CLI | Exchange connectors, execution |
+| Component         | Port | Purpose                                              |
+| ----------------- | ---: | ---------------------------------------------------- |
+| `trading-journal` | 5000 | Trade logging, dashboard, analytics, and backtesting |
+| `pine-review`     | 8000 | Market-structure analysis and trade review           |
+| `vibe-trading`    |  CLI | Exchange connectivity and trade execution            |
 
 ## Project Structure
 
-```
+```text
 trading-journal/
-├── backtesting/            # Strategy backtesting
-│   ├── forex_v1.py        # ICT/SMC structure strategy
-│   ├── nas100_test.py     # NAS100 multi-strategy test
-│   ├── rolling_analysis.py# Walk-forward analysis
-│   ├── visualize.py       # Interactive structure viz
-│   └── structure_lib/     # Shared ICT/SMC engine
-├── bot/                    # Telegram bot
-│   ├── journal_daemon.py  # Main bot logic
-│   ├── journal_db.py      # Database operations
-│   ├── mean_reversion_bot.py # V1 MR bot
-│   └── session_detector.py # Session detection
-├── webapp/                 # Flask web app
-│   ├── app.py             # Main app (30+ API routes)
-│   ├── templates/         # HTML templates
-│   └── static/js/         # Frontend JS
-├── infra/                  # Infrastructure
-│   ├── tradelocker_client.py  # TradeLocker client
-│   ├── market_data.py         # Market data fetching
-│   └── pine_bridge.py         # TradingView webhook
-├── core/                   # Core logic
-│   ├── exporter.py         # ML dataset export
-│   └── monte_carlo.py      # Monte Carlo simulation
-├── backtesting_config/     # GFT account rules
-├── scripts/                # Utility scripts
-├── docs/                   # Documentation
-├── data/                   # Database and market data
-└── pine-review/            # Structure analysis app
+├── backtesting/             # Strategy testing and walk-forward analysis
+│   ├── forex_v1.py
+│   ├── nas100_test.py
+│   ├── rolling_analysis.py
+│   ├── visualize.py
+│   └── structure_lib/
+├── bot/                     # Telegram bot and journal database
+│   ├── journal_daemon.py
+│   ├── journal_db.py
+│   ├── mean_reversion_bot.py
+│   └── session_detector.py
+├── webapp/                  # Flask dashboard and API
+│   ├── app.py
+│   ├── templates/
+│   └── static/js/
+├── infra/                   # Market data and external integrations
+│   ├── tradelocker_client.py
+│   ├── market_data.py
+│   └── pine_bridge.py
+├── core/                    # Analytics and data export
+│   ├── exporter.py
+│   └── monte_carlo.py
+├── backtesting_config/      # Account and prop-firm rules
+├── scripts/                 # Setup and maintenance scripts
+├── docs/                    # Additional documentation
+├── data/                    # Database, cache, and market data
+└── pine-review/             # Market-structure review application
 ```
 
-## Database Schema
+## Database
 
-- `accounts` - Trading accounts
-- `account_rules` - Risk management rules
-- `trades` - Trade records
-- `trade_psychology` - Psychology metrics
-- `trade_process` - Trade review notes
-- `weekly_reviews` - Weekly performance reviews
-- `weekly_goals` - Weekly trading goals
-- `drawings` - Chart drawings and annotations
+The journal stores:
 
-## API Endpoints
+* Trading accounts and account rules
+* Open and closed trades
+* Psychology metrics
+* Process-review notes
+* Weekly reviews and goals
+* Chart drawings and annotations
+
+The database is initialized and migrated automatically from:
+
+```text
+bot/journal_db.py:init_db()
+```
+
+## API Overview
 
 ### Accounts
-- `GET /api/accounts` - List accounts
-- `POST /api/accounts` - Create account
-- `POST /api/accounts/:id/rules` - Update rules
+
+```text
+GET  /api/accounts
+POST /api/accounts
+POST /api/accounts/:id/rules
+```
 
 ### Trades
-- `GET /api/trades` - List trades
-- `GET /api/trades/open` - Open trades
-- `POST /api/trades/:id/close` - Close trade
-- `POST /api/trades/:id/review` - Add review note
-- `GET /api/trades/:id/events` - Trade events
+
+```text
+GET  /api/trades
+GET  /api/trades/open
+POST /api/trades/:id/close
+POST /api/trades/:id/review
+GET  /api/trades/:id/events
+```
 
 ### Analytics
-- `GET /api/dashboard` - Dashboard data
-- `GET /api/analytics/monte-carlo` - Monte Carlo stats
-- `GET /api/replay/:id` - Trade replay data
 
-### Reviews
-- `GET /api/review/week` - Weekly review
-- `POST /api/review/week` - Update review
-- `GET /api/goals/week` - Weekly goals
-- `POST /api/goals/week` - Set goal
+```text
+GET /api/dashboard
+GET /api/analytics/monte-carlo
+GET /api/replay/:id
+```
+
+### Weekly Reviews
+
+```text
+GET  /api/review/week
+POST /api/review/week
+GET  /api/goals/week
+POST /api/goals/week
+```
 
 ## Development
 
-### Run Tests
 ```bash
 pytest tests/
-```
-
-### Code Style
-```bash
-# Format code
 black .
-
-# Lint
 flake8 .
-```
-
-### Database Migrations
-```bash
-# Database is auto-migrated on startup
-# Schema is in bot/journal_db.py:init_db()
 ```
 
 ## Deployment
 
 ### GitHub
-```bash
-# Initialize git
-make git-init
 
-# Deploy to GitHub
+```bash
+make git-init
 make deploy
 ```
 
-### Oracle Cloud VM
+### Linux VM
+
 ```bash
-# SSH to VM
 ssh ubuntu@YOUR_VM_IP
 
-# Clone and setup
 git clone https://github.com/YOUR_USERNAME/trading-journal.git
 cd trading-journal
+
 ./scripts/setup_daily_reminder.sh
 ```
 
 ## Troubleshooting
 
-### Bot not responding
-- Check `TELEGRAM_JOURAL` token is correct
-- Verify bot is running: `ps aux | grep journal_daemon`
-- Check logs for errors
+### Bot does not respond
 
-### Charts not generating
-- Verify market data API keys in `.env`
-- Check `data/cache/` directory permissions
-- Fallback to simple charts if data unavailable
+* Confirm the Telegram token and chat ID in `.env`
+* Verify the bot process is running
+* Review application logs for errors
 
-### TradeLocker data not loading
-- Check TL credentials in `.env`
-- Verify TradeLocker API is reachable
+```bash
+ps aux | grep journal_daemon
+```
 
-### Mini App not loading
-- Ensure `WEBAPP_URL` is public HTTPS
-- Check webapp is running: `curl $WEBAPP_URL`
-- Verify Telegram bot can access URL
+### Charts are not generated
 
-## Contributing
+* Verify market-data credentials
+* Check permissions for `data/cache/`
+* Confirm that a fallback data source is available
 
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature-name`
-3. Commit changes: `git commit -am 'Add feature'`
-4. Push to branch: `git push origin feature-name`
-5. Submit pull request
+### TradeLocker data does not load
 
-## License
+* Verify the `TL_*` credentials
+* Confirm the TradeLocker API is accessible
+* Check broker-specific symbol names
 
-MIT License - see LICENSE file for details
+### Mini App does not open
 
-## Support
+* Confirm `WEBAPP_URL` uses public HTTPS
+* Verify the web application is running
+* Confirm the URL is accessible outside your local network
 
-- 📧 Email: support@example.com
-- 💬 Telegram: @your_username
-- 🐛 Issues: GitHub Issues
+```bash
+curl "$WEBAPP_URL"
+```
 
 ## Roadmap
 
-- [x] Chart-first trade entry with drawing tools (BOS, CHoCH, Sweep)
-- [x] Pine review app with market structure analysis (swings, FVGs, OBs, liquidity)
-- [x] Backtesting engine with Monte Carlo simulation
-- [x] Multi-timeframe data fetching (TradeLocker, yFinance, Binance)
-- [ ] Connect structure analysis API from pine to trading journal UI
-- [ ] Auto-detect HH/HL/BOS/CHOCH/FVG overlays on the chart
-- [ ] Real-time WebSocket streaming for 1m scalping
-- [ ] TradeLocker data source for forex
-- [ ] Execution via vibe-trading connectors (Binance Futures + Bybit copy)
+* [x] Chart-first trade entry with drawing tools
+* [x] BOS, CHoCH, and liquidity-sweep annotations
+* [x] Market-structure analysis with swings, FVGs, order blocks, and liquidity
+* [x] Multi-timeframe market-data fetching
+* [x] Backtesting and Monte Carlo simulation
+* [ ] Connect Pine Review analysis to the main journal
+* [ ] Automatically overlay HH, HL, BOS, CHoCH, and FVG structures
+* [ ] Add real-time WebSocket streaming for scalping
+* [ ] Expand TradeLocker forex-data support
+* [ ] Add execution through Binance Futures and Bybit connectors
 
-## Credits
+## Contributing
 
-Built with:
-- [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot)
-- [Flask](https://flask.palletsprojects.com/)
-- [matplotlib](https://matplotlib.org/)
-- [yfinance](https://github.com/ranaroussi/yfinance)
-- [TradeLocker](https://tradelocker.com/)
-- [pandas](https://pandas.pydata.org/)
+1. Fork the repository.
+2. Create a feature branch.
+3. Commit your changes.
+4. Push the branch.
+5. Open a pull request.
 
----
+```bash
+git checkout -b feature/my-feature
+git commit -am "Add my feature"
+git push origin feature/my-feature
+```
 
-Made with ❤️ for traders by traders
+## Built With
+
+* [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot)
+* [Flask](https://flask.palletsprojects.com/)
+* [pandas](https://pandas.pydata.org/)
+* [matplotlib](https://matplotlib.org/)
+* [yfinance](https://github.com/ranaroussi/yfinance)
+* [TradeLocker](https://tradelocker.com/)
+
+## License
+
+Distributed under the MIT License. See `LICENSE` for details.
