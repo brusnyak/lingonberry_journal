@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Crypto Structure Watchlist</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { background:#0b0e11; color:#e8e8e8; font-family:-apple-system,Segoe UI,Roboto,sans-serif; margin:0; padding:20px; }
+  h1 { font-size:18px; font-weight:600; margin:0 0 4px; }
+  .sub { color:#888; font-size:12px; margin-bottom:16px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; color:#888; font-weight:500; padding:8px 10px; border-bottom:1px solid #222; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+  td { padding:10px; border-bottom:1px solid #1a1a1a; }
+  tr.aligned { background:rgba(0,200,120,0.05); }
+  .bullish { color:#26a69a; }
+  .bearish { color:#ef5350; }
+  .transitional { color:#888; }
+  .sym { font-weight:600; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; }
+  .badge.aligned { background:rgba(38,166,154,0.15); color:#26a69a; }
+  .badge.mixed { background:rgba(120,120,120,0.15); color:#888; }
+  .price { font-variant-numeric:tabular-nums; }
+  .err { color:#ef5350; font-size:12px; }
+  .refresh { color:#555; font-size:11px; }
+  .fvg-zone { font-variant-numeric:tabular-nums; color:#ccc; font-size:12px; }
+  .stop { color:#f0b90b; font-variant-numeric:tabular-nums; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>Crypto Structure Watchlist</h1>
+<div class="sub">Read-only structural overlay — HTF/LTF trend, nearest unmitigated FVG, structural stop reference. No auto-execution. <span class="refresh" id="refresh-status">loading…</span></div>
+<table>
+  <thead>
+    <tr>
+      <th>Pair</th><th>Price</th><th>HTF (4h)</th><th>LTF (15m)</th><th>Alignment</th>
+      <th>Nearest FVG</th><th>Structural Stop</th><th>OI (USD)</th><th>Funding</th><th>As of</th>
+    </tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+const REFRESH_MS = 30000;
+
+function trendClass(t) {
+  if (t === 'bullish') return 'bullish';
+  if (t === 'bearish') return 'bearish';
+  return 'transitional';
+}
+
+function fmtPrice(p) {
+  if (p === null || p === undefined) return '—';
+  return p < 0.001 ? p.toFixed(8) : p.toFixed(6);
+}
+
+if (location.protocol === 'file:') {
+  document.getElementById('refresh-status').innerHTML =
+    '<span style="color:#ef5350">Opened as a local file — this page only works served by Flask. ' +
+    'Go to <a href="http://localhost:5000/crypto-watch" style="color:#f0b90b">http://localhost:5000/crypto-watch</a> instead.</span>';
+  throw new Error('stop: file:// context, not served');
+}
+
+async function refresh() {
+  const status = document.getElementById('refresh-status');
+  status.textContent = 'refreshing…';
+  try {
+    const res = await fetch('/api/crypto/watchlist');
+    const data = await res.json();
+    const rows = document.getElementById('rows');
+    rows.innerHTML = '';
+    for (const p of data.pairs) {
+      const tr = document.createElement('tr');
+      if (p.error) {
+        tr.innerHTML = `<td class="sym">${p.symbol}</td><td colspan="9" class="err">${p.error}</td>`;
+        rows.appendChild(tr);
+        continue;
+      }
+      if (p.aligned) tr.classList.add('aligned');
+      const fvg = p.nearest_fvg
+        ? `${p.nearest_fvg.kind} ${fmtPrice(p.nearest_fvg.bottom)}–${fmtPrice(p.nearest_fvg.top)}`
+        : '—';
+      const stop = p.stop_ref ? `${fmtPrice(p.stop_ref)} (${p.stop_kind})` : '—';
+      const oi = p.open_interest_usd ? '$' + Math.round(p.open_interest_usd).toLocaleString() : '—';
+      const funding = p.funding_rate !== null && p.funding_rate !== undefined
+        ? (p.funding_rate * 100).toFixed(4) + '%' : '—';
+      tr.innerHTML = `
+        <td class="sym">${p.symbol}</td>
+        <td class="price">${fmtPrice(p.price)}</td>
+        <td class="${trendClass(p.htf_trend)}">${p.htf_trend}</td>
+        <td class="${trendClass(p.ltf_trend)}">${p.ltf_trend}</td>
+        <td><span class="badge ${p.aligned ? 'aligned' : 'mixed'}">${p.aligned ? 'ALIGNED' : 'mixed'}</span></td>
+        <td class="fvg-zone">${fvg}</td>
+        <td class="stop">${stop}</td>
+        <td class="refresh">${oi}</td>
+        <td class="refresh">${funding}</td>
+        <td class="refresh">${p.as_of ? p.as_of.replace('T',' ').slice(0,16) : '—'}</td>
+      `;
+      rows.appendChild(tr);
+    }
+    status.textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    status.textContent = 'refresh failed: ' + e;
+  }
+}
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

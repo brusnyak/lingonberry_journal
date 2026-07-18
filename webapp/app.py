@@ -311,6 +311,67 @@ def weekly_page():
     return render_template("weekly.html")
 
 
+@app.route("/crypto-watch")
+def crypto_watch_page():
+    """Read-only crypto structural-analysis overlay (2026-07-18) -- for
+    manual oversight, not auto-execution. See webapp/crypto_watch.py."""
+    return render_template("crypto_watch.html")
+
+
+@app.route("/api/crypto/watchlist")
+def api_crypto_watchlist():
+    from webapp.crypto_watch import watchlist_snapshot, DEFAULT_WATCHLIST
+    symbols_param = request.args.get("symbols")
+    symbols = [s.strip().upper() for s in symbols_param.split(",")] if symbols_param else None
+    return jsonify({"pairs": watchlist_snapshot(symbols), "watchlist": DEFAULT_WATCHLIST})
+
+
+@app.route("/api/crypto/account")
+def api_crypto_account():
+    """Read-only: balance + open positions. Safe to poll."""
+    from webapp.crypto_execute import account_state, ExecutionError
+    try:
+        return jsonify(account_state())
+    except ExecutionError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/crypto/size-preview", methods=["POST"])
+def api_crypto_size_preview():
+    """Read-only: preview position size for a proposed trade. No order placed."""
+    from webapp.crypto_execute import size_trade, ExecutionError
+    body = request.get_json(force=True)
+    try:
+        result = size_trade(
+            symbol=body["symbol"], direction=body["direction"],
+            entry=float(body["entry"]), sl=float(body["sl"]),
+            risk_pct=float(body.get("risk_pct", 0.005)),
+        )
+        return jsonify(result)
+    except (KeyError, ExecutionError) as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/crypto/execute", methods=["POST"])
+def api_crypto_execute():
+    """Places a REAL order. Requires body.confirm === true -- must come from
+    an explicit user-clicked button, not a default. This is the ONLY code
+    path in this app that can open a new position."""
+    from webapp.crypto_execute import execute_trade, ExecutionError
+    body = request.get_json(force=True)
+    if body.get("confirm") is not True:
+        return jsonify({"error": "confirm must be true -- this endpoint requires explicit confirmation"}), 400
+    try:
+        result = execute_trade(
+            symbol=body["symbol"], direction=body["direction"],
+            entry=float(body["entry"]), sl=float(body["sl"]), tp=float(body["tp"]),
+            risk_pct=float(body.get("risk_pct", 0.005)), confirm=True,
+        )
+        return jsonify(result)
+    except (KeyError, ExecutionError) as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @app.route("/entry")
 def entry_page():
     """Standalone Chart-First Trade Entry page"""
