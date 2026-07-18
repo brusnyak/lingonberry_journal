@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Trading Journal Telegram Bot."""
+import json
 import logging
 import os
 import sys
@@ -25,6 +26,66 @@ logger = logging.getLogger(__name__)
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://lingonberry.work.gd/mini")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_JOURNAL") or os.getenv("TELEGRAM_JOURAL")
 AUTH_ID = int(os.getenv("TELEGRAM_JOURNAL_CHAT", "0") or "0")
+
+# ── Per-user account isolation ─────────────────────────────────────────────
+# Maps Telegram user IDs to account IDs they own. Persisted as JSON so
+# isolation survives bot restarts. No database schema changes needed.
+_USER_ACCOUNTS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "telegram_owners.json",
+)
+
+
+def _load_user_accounts() -> dict[str, list[int]]:
+    if not os.path.exists(_USER_ACCOUNTS_PATH):
+        return {}
+    try:
+        with open(_USER_ACCOUNTS_PATH) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def _save_user_accounts(data: dict[str, list[int]]) -> None:
+    os.makedirs(os.path.dirname(_USER_ACCOUNTS_PATH), exist_ok=True)
+    with open(_USER_ACCOUNTS_PATH, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+
+
+def _ensure_user_account(telegram_user_id: int) -> int:
+    """Return the user's account ID, creating a fresh 50k account if needed."""
+    uid = str(telegram_user_id)
+    data = _load_user_accounts()
+
+    owned = data.get(uid, [])
+    # Clean up any deleted accounts from the mapping
+    owned = [aid for aid in owned if journal_db.get_account(aid)]
+    if owned:
+        data[uid] = owned
+        _save_user_accounts(data)
+        return owned[0]
+
+    # No valid accounts — create a fresh one
+    new_id = journal_db.create_account(
+        name="Trading Account",
+        currency="USD",
+        initial_balance=50000.0,
+        max_daily_loss_pct=5.0,
+        max_total_loss_pct=10.0,
+        profit_target_pct=10.0,
+        risk_per_trade_pct=1.0,
+        firm_name="Prop Firm",
+    )
+    data[uid] = [new_id]
+    _save_user_accounts(data)
+    return new_id
+
+
+def _get_user_account_ids(telegram_user_id: int) -> list[int]:
+    """Return account IDs owned by this Telegram user."""
+    data = _load_user_accounts()
+    owned = data.get(str(telegram_user_id), [])
+    return [aid for aid in owned if journal_db.get_account(aid)]
 
 
 def _webapp_full_url() -> str:
@@ -86,24 +147,28 @@ def _parse_float(value: str) -> Optional[float]:
         return None
 
 
-def _get_selected_account_ids(context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> list[int]:
-    """Get IDs of currently selected accounts for the bot."""
+def _get_selected_account_ids(context: Optional[ContextTypes.DEFAULT_TYPE] = None,
+                               user_id: int = 0) -> list[int]:
+    """Get IDs of currently selected accounts for this user."""
+    # First check in-memory selection from this session
     if context and "selected_account_ids" in context.user_data:
         s_ids = [aid for aid in context.user_data["selected_account_ids"] if journal_db.get_account(aid)]
         if s_ids:
             context.user_data["selected_account_ids"] = s_ids
             return s_ids
-            
-    accounts = journal_db.get_accounts()
-    if not accounts:
-        return []
-        
-    # Default to the first account if none selected
-    return [accounts[0]["id"]]
 
-def _current_account(context: Optional[ContextTypes.DEFAULT_TYPE] = None) -> Optional[Dict[str, Any]]:
-    """Legacy helper for single-account operations. Returns the first selected account."""
-    ids = _get_selected_account_ids(context)
+    # Fall back to this user's owned accounts
+    if user_id:
+        owned = _get_user_account_ids(user_id)
+        if owned:
+            return [owned[0]]
+
+    return []
+
+def _current_account(context: Optional[ContextTypes.DEFAULT_TYPE] = None,
+                     user_id: int = 0) -> Optional[Dict[str, Any]]:
+    """Return the first account for this user."""
+    ids = _get_selected_account_ids(context, user_id=user_id)
     if not ids:
         return None
     return journal_db.get_account(ids[0])
@@ -149,29 +214,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
 
-    # Auto-create default account on first run
-    accounts = journal_db.get_accounts()
-    created_account = False
-    if not accounts:
-        journal_db.create_account(
-            name="50k Challenge",
-            currency="USD",
-            initial_balance=50000.0,
-            max_daily_loss_pct=5.0,
-            max_total_loss_pct=10.0,
-            profit_target_pct=10.0,
-            risk_per_trade_pct=1.0,
-            firm_name="Prop Firm",
-        )
-        created_account = True
-        # Re-fetch so the new account is picked up
-        accounts = journal_db.get_accounts()
+    user_id = update.effective_user.id if update.effective_user else 0
+    first_time = False
+    if user_id and not _get_user_account_ids(user_id):
+        _ensure_user_account(user_id)
+        first_time = True
 
-    ids = _get_selected_account_ids(context)
+    ids = _get_selected_account_ids(context, user_id=user_id)
     active_names = []
     total_balance = 0.0
     currency = "USD"
-    
+
     for aid in ids:
         acc = journal_db.get_account(aid)
         if acc:
@@ -180,7 +233,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             total_balance += stats["balance"]
             currency = acc["currency"]
 
-    welcome = "👋 Welcome! A default 50k account has been created.\n\n" if created_account else "👋 Welcome back!\n\n"
+    welcome = "👋 Welcome! A default 50k account has been created.\n\n" if first_time else "👋 Welcome!\n\n"
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=_webapp_full_url()))],
@@ -242,7 +295,8 @@ async def import_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def _process_import(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text: str) -> None:
     context.user_data.pop("awaiting_import", None)
 
-    account_ids = _get_selected_account_ids(context)
+    user_id = update.effective_user.id if update.effective_user else 0
+    account_ids = _get_selected_account_ids(context, user_id=user_id)
     if not account_ids:
         await update.message.reply_text("❌ No account found to import into.")
         return
@@ -326,7 +380,8 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _finalize_trade(update: Update, context: ContextTypes.DEFAULT_TYPE, data: Dict[str, Any]) -> None:
-    account = _current_account(context)
+    user_id = update.effective_user.id if update.effective_user else 0
+    account = _current_account(context, user_id=user_id)
     if not account:
         await update.message.reply_text("❌ No account found. Create one from the dashboard first.")
         return
@@ -487,7 +542,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     try:
         journal_db.init_db()
-        account = _current_account(context)
+        user_id = update.effective_user.id if update.effective_user else 0
+        account = _current_account(context, user_id=user_id)
         if not account:
             await update.message.reply_text("No trading accounts found. Create one in dashboard.")
             return
@@ -513,7 +569,8 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     try:
-        current_account = _current_account(context)
+        user_id = update.effective_user.id if update.effective_user else 0
+        current_account = _current_account(context, user_id=user_id)
         open_trades = journal_db.get_open_trades(account_id=current_account["id"] if current_account else None)
         if not open_trades:
             await update.message.reply_text("📭 No open positions.")
@@ -550,7 +607,8 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     try:
-        account = _current_account(context)
+        user_id = update.effective_user.id if update.effective_user else 0
+        account = _current_account(context, user_id=user_id)
         if not account:
             await update.message.reply_text("No trading accounts found.")
             return
@@ -622,14 +680,16 @@ async def select_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _send_account_selection(update, context)
 
 async def _send_account_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, is_edit: bool = False):
-    accounts = journal_db.get_accounts()
+    user_id = update.effective_user.id if update.effective_user else 0
+    owned_ids = set(_get_user_account_ids(user_id))
+    accounts = [a for a in journal_db.get_accounts() if a["id"] in owned_ids]
     if not accounts:
         msg = "No accounts found."
         if is_edit: await update.callback_query.edit_message_text(msg)
         else: await update.message.reply_text(msg)
         return
 
-    selected_ids = _get_selected_account_ids(context)
+    selected_ids = _get_selected_account_ids(context, user_id=user_id)
     buttons = []
     for acc in accounts:
         is_selected = acc["id"] in selected_ids
@@ -649,16 +709,17 @@ async def _send_account_selection(update: Update, context: ContextTypes.DEFAULT_
 async def _handle_account_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+    user_id = update.effective_user.id if update.effective_user else 0
     
     action = query.data.split(":")[1]
     if action == "done":
-        ids = _get_selected_account_ids(context)
-        names = [journal_db.get_account(aid)["name"] for aid in ids]
+        ids = _get_selected_account_ids(context, user_id=user_id)
+        names = [journal_db.get_account(aid)["name"] for aid in ids if journal_db.get_account(aid)]
         await query.edit_message_text(f"✅ Accounts updated: {', '.join(names)}")
         return
         
     acc_id = int(action)
-    selected_ids = list(_get_selected_account_ids(context))
+    selected_ids = list(_get_selected_account_ids(context, user_id=user_id))
     if acc_id in selected_ids:
         if len(selected_ids) > 1:
             selected_ids.remove(acc_id)
