@@ -65,14 +65,15 @@ def _ensure_user_account(telegram_user_id: int) -> int:
         _save_user_accounts(data)
         return owned[0]
 
-    # Check for orphan accounts in the DB that no user owns yet
+    # Check for orphan accounts in the DB that no user owns yet.
+    # Give ALL orphans to the first user who hits /start (likely the owner).
     all_accounts = journal_db.get_accounts()
     all_mapped: set[int] = set()
     for ua in data.values():
         all_mapped.update(ua)
-    orphans = [a["id"] for a in all_accounts if a["id"] not in all_mapped]
+    orphans = sorted(a["id"] for a in all_accounts if a["id"] not in all_mapped)
     if orphans:
-        data[uid] = [orphans[0]]
+        data[uid] = orphans
         _save_user_accounts(data)
         return orphans[0]
 
