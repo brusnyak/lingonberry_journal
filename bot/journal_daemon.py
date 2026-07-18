@@ -18,9 +18,11 @@ from bot.session_detector import detect_session
 from core.raw_trade_import import parse_raw_trades
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# Silence httpx polling noise — every 10s getUpdates poll at INFO level
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-WEBAPP_URL = os.getenv("WEBAPP_URL", "http://localhost:5000/mini")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://lingonberry.work.gd/mini")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_JOURNAL") or os.getenv("TELEGRAM_JOURAL")
 AUTH_ID = int(os.getenv("TELEGRAM_JOURNAL_CHAT", "0") or "0")
 
