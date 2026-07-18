@@ -72,6 +72,8 @@ def _get_exchange(name: str):
         return ccxt.binance({"options": {"defaultType": "future"}})
     elif name == "bybit":
         return ccxt.bybit({"options": {"defaultType": "linear"}})
+    elif name == "bingx":
+        return ccxt.bingx({"options": {"defaultType": "swap"}})
     else:
         raise ValueError(f"Unknown exchange: {name}")
 
@@ -418,8 +420,9 @@ def main():
                         help="Comma-separated symbols (default: liquid 50x research universe)")
     parser.add_argument("--days", type=int, default=365,
                         help="Days of history (default: 365)")
-    parser.add_argument("--exchange", default="both", choices=["binance", "bybit", "both"],
-                        help="Exchange(s) to fetch from (default: both)")
+    parser.add_argument("--exchange", default="both", choices=["binance", "bybit", "bingx", "both"],
+                        help="Exchange(s) to fetch from (default: both = binance+bybit; bingx is separate, "
+                             "not included in 'both', per the 2026-07-12 data audit's exchange-namespace rule)")
     parser.add_argument("--tfs", default="1,3,5,15,60,240,1440",
                         help="Comma-separated timeframes (default: all)")
     parser.add_argument("--funding", action=argparse.BooleanOptionalAction, default=True,
