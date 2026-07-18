@@ -148,15 +148,23 @@ class CryptoCosts(CostModel):
     min_notional: float = 0.0
     tick_size: float = 0.0
     maintenance_margin_rate: float = 0.005
+    entry_slippage_pct: float = 0.0    # adverse fill on market/taker entries (0.0005 = 0.05%)
+    sl_slippage_pct: float = 0.0       # adverse fill on stop-loss market exits; TP exits assumed maker (no slip)
 
     def entry_fill(self, price: float, direction: str) -> float:
         # Market entry = taker; limit = maker. Use taker by default.
-        # Fill price is spot; fee applied separately via commission()
-        return price
+        # Fee applied separately via commission(). Slippage moves fill against the trader.
+        if self.entry_slippage_pct <= 0:
+            return price
+        slip = price * self.entry_slippage_pct
+        return price + slip if direction == "long" else price - slip
 
     def exit_fill(self, price: float, direction: str, is_sl: bool = False) -> float:
-        # SL hits = market order (taker); TP limits = maker
-        return price
+        # SL hits = market order (taker, slippage applies); TP limits = maker (no slippage modeled)
+        if not is_sl or self.sl_slippage_pct <= 0:
+            return price
+        slip = price * self.sl_slippage_pct
+        return price - slip if direction == "long" else price + slip
 
     def commission(self, lots: float, price: float = 1.0) -> float:
         """Round-trip fee. lots = contracts (1 lot = 1 base unit)."""
