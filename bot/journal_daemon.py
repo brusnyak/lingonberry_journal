@@ -149,6 +149,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⛔ You are not authorized to use this bot.")
         return
 
+    # Auto-create default account on first run
+    accounts = journal_db.get_accounts()
+    created_account = False
+    if not accounts:
+        journal_db.create_account(
+            name="50k Challenge",
+            currency="USD",
+            initial_balance=50000.0,
+            max_daily_loss_pct=5.0,
+            max_total_loss_pct=10.0,
+            profit_target_pct=10.0,
+            risk_per_trade_pct=1.0,
+            firm_name="Prop Firm",
+        )
+        created_account = True
+        # Re-fetch so the new account is picked up
+        accounts = journal_db.get_accounts()
+
     ids = _get_selected_account_ids(context)
     active_names = []
     total_balance = 0.0
@@ -162,12 +180,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             total_balance += stats["balance"]
             currency = acc["currency"]
 
+    welcome = "👋 Welcome! A default 50k account has been created.\n\n" if created_account else "👋 Welcome back!\n\n"
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Open Dashboard", web_app=WebAppInfo(url=_webapp_full_url()))],
         [InlineKeyboardButton("🔄 Switch / Select Accounts", callback_data="select_accounts:init")],
     ])
     await update.message.reply_text(
-        "👋 Welcome back!\n\n"
+        welcome +
         f"💼 {', '.join(active_names) if active_names else 'No account selected'}\n"
         f"💰 Total Balance: {currency} {total_balance:.2f}\n\n"
         "Commands:\n"
