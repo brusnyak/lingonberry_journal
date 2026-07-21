@@ -9,7 +9,7 @@
 
 Lingonberry Journal is a trading journal platform with Telegram trade logging, a Flask web dashboard, chart generation, market data integrations, backtesting tools, weekly reviews, and performance analytics.
 
-Demo: [Trading Journal Bot Demo](https://youtu.be/nYDuefVCTns)
+Demo: [Trading Journal Bot Demo](https://youtu.be/6RLdJGZB6RE)
 
 ## Overview
 
